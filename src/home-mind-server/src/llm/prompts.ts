@@ -62,15 +62,11 @@ When the user says "remember...", "save this...", "don't forget...", or teaches 
 - When the user teaches you something ("remember that...", "X is normal for me"), acknowledge it naturally
 - Provide contextual answers using memory for baselines (e.g., "21°C is right at your normal 20-21°C range")
 
-## Light Control Tips:
-- To set color: call_service domain="light", service="turn_on", data={rgb_color: [R,G,B]}
-- White light — ALWAYS check the entity's supported_color_modes attribute BEFORE choosing color params:
-  - "rgbw" in modes → data={rgbw_color: [0,0,0,255]} (dedicated white LED channel)
-  - Only "color_temp" in modes → data={color_temp_kelvin: 4000}
-  - "xy"/"hs"/"rgb" in modes (RGB-only, no white channel) → data={rgb_color: [255,255,255]}
-- Brightness: data={brightness: 128} (0-255 scale) or combine with color
-- If user says the color is wrong after your command, try a DIFFERENT color parameter — do not repeat the same one.
-- IMPORTANT: Use call_service directly with the entity_id if you already know it. Don't search first if you already have the entity_id from a previous tool call in this conversation.
+## Light Control:
+- Brightness: data={brightness: 128} (0-255 scale), combinable with any color param
+- If user says the color is wrong, try a DIFFERENT color parameter — do not repeat the same one
+- **For devices listed in the Device Capability Reference below**: use the exact params shown. Do NOT call search_entities or get_entities for them.
+- **For unlisted devices**: check supported_color_modes in get_state result, then pick: rgbw→rgbw_color [0,0,0,255], color_temp→color_temp_kelvin, rgb/xy/hs→rgb_color [255,255,255]
 
 ## Voice Input (Speech-to-Text) Awareness:
 - Voice input often contains transcription errors. Interpret user INTENT, not literal words.
@@ -117,10 +113,9 @@ When the user says "remember...", "save this...", "don't forget...", or teaches 
 - DO NOT answer "I don't know" - USE THE TOOLS TO FIND OUT
 
 ## Light Control:
-- White light — check supported_color_modes: "rgbw" → rgbw_color [0,0,0,255]; "color_temp" only → color_temp_kelvin; "xy"/"hs"/"rgb" → rgb_color [255,255,255]
-- Color: rgb_color [R,G,B]. Brightness: brightness 0-255
-- If user says color is wrong, try a different color parameter
-- Use call_service directly if you already have the entity_id
+- **For devices in Device Capability Reference**: use exact params shown, skip search_entities
+- **Unlisted devices**: check supported_color_modes: rgbw→rgbw_color [0,0,0,255]; color_temp→color_temp_kelvin; rgb/xy/hs→rgb_color [255,255,255]
+- Brightness: 0-255. If color is wrong, try a different param
 
 ## Voice Input (Speech-to-Text) Awareness:
 - Voice input often contains transcription errors. Interpret user INTENT, not literal words.
@@ -175,7 +170,8 @@ export type CachedSystemPrompt = Anthropic.MessageCreateParams["system"];
 export function buildSystemPrompt(
   facts: string[],
   isVoice: boolean = false,
-  customPrompt?: string
+  customPrompt?: string,
+  deviceCheatSheet?: string
 ): CachedSystemPrompt {
   const factsText =
     facts.length > 0 ? facts.map((f) => `- ${f}`).join("\n") : "No memories yet.";
@@ -191,13 +187,14 @@ export function buildSystemPrompt(
   const instructions = isVoice ? VOICE_INSTRUCTIONS : SYSTEM_INSTRUCTIONS;
 
   // Dynamic content that changes per request
+  const deviceSection = deviceCheatSheet ? `\n\n${deviceCheatSheet}` : "";
   const dynamicContent = `
 ## Current Context:
 - Date/Time: ${dateTimeStr}
 - ISO Timestamp: ${isoTimestamp}
 
 ## What You Remember About This User:
-${factsText}`;
+${factsText}${deviceSection}`;
 
   // Build content blocks: identity + instructions (cached) + dynamic
   const blocks: Anthropic.TextBlockParam[] = [
@@ -221,7 +218,8 @@ ${factsText}`;
 export function buildSystemPromptText(
   facts: string[],
   isVoice: boolean = false,
-  customPrompt?: string
+  customPrompt?: string,
+  deviceCheatSheet?: string
 ): string {
   const factsText =
     facts.length > 0 ? facts.map((f) => `- ${f}`).join("\n") : "No memories yet.";
@@ -236,6 +234,8 @@ export function buildSystemPromptText(
 
   const instructions = isVoice ? VOICE_INSTRUCTIONS : SYSTEM_INSTRUCTIONS;
 
+  const deviceSection = deviceCheatSheet ? `\n\n${deviceCheatSheet}` : "";
+
   return `${identity}${instructions}
 
 ## Current Context:
@@ -243,5 +243,5 @@ export function buildSystemPromptText(
 - ISO Timestamp: ${isoTimestamp}
 
 ## What You Remember About This User:
-${factsText}`;
+${factsText}${deviceSection}`;
 }

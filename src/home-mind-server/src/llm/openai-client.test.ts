@@ -4,6 +4,7 @@ import type { IMemoryStore } from "../memory/interface.js";
 import type { IConversationStore } from "../memory/types.js";
 import type { IFactExtractor } from "./interface.js";
 import type { HomeAssistantClient } from "../ha/client.js";
+import { DeviceScanner } from "../ha/device-scanner.js";
 
 // Async iterator helper for simulating OpenAI streams
 function makeStream(chunks: object[]) {
@@ -82,7 +83,12 @@ describe("OpenAIChatEngine", () => {
       memoryTokenLimit: 1500,
     } as Config;
 
-    engine = new OpenAIChatEngine(config, memory, conversations, extractor, ha);
+    const mockScanner = {
+      refreshIfStale: vi.fn().mockResolvedValue(undefined),
+      hasProfiles: vi.fn().mockReturnValue(false),
+      formatCheatSheet: vi.fn().mockReturnValue(""),
+    } as unknown as DeviceScanner;
+    engine = new OpenAIChatEngine(config, memory, conversations, extractor, ha, mockScanner);
   });
 
   afterEach(() => {

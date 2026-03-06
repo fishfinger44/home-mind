@@ -11,6 +11,7 @@ const { version } = require("../package.json");
 import { ShodhMemoryStore } from "./memory/shodh-client.js";
 import { createConversationStore } from "./memory/conversation-factory.js";
 import { HomeAssistantClient } from "./ha/client.js";
+import { DeviceScanner } from "./ha/device-scanner.js";
 import { createChatEngine, createFactExtractor } from "./llm/factory.js";
 import { createRouter } from "./api/routes.js";
 import { createSttService } from "./stt/stt-service.js";
@@ -48,7 +49,11 @@ console.log(`  Fact extractor: ${config.llmProvider}/${config.llmModel}`);
 const ha = new HomeAssistantClient(config);
 console.log(`  Home Assistant: ${config.haUrl}`);
 
-const llm = createChatEngine(config, memory, conversations, extractor, ha);
+const scanner = new DeviceScanner(ha);
+await scanner.scan();
+console.log(`  ✓ Device scanner: ${scanner.getProfiles().length} light profiles loaded`);
+
+const llm = createChatEngine(config, memory, conversations, extractor, ha, scanner);
 console.log(`  LLM client: ${config.llmProvider}/${config.llmModel}`);
 
 // Initialize STT (optional — only when STT_PROVIDER is set)

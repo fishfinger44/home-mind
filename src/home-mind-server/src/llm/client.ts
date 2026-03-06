@@ -3,6 +3,7 @@ import type { Config } from "../config.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { IConversationStore } from "../memory/types.js";
 import { HomeAssistantClient } from "../ha/client.js";
+import { DeviceScanner } from "../ha/device-scanner.js";
 import { buildSystemPrompt, type CachedSystemPrompt } from "./prompts.js";
 import { HA_TOOLS } from "./tools.js";
 import { handleToolCall, extractAndStoreFacts } from "./tool-handler.js";
@@ -22,6 +23,7 @@ export class LLMClient implements IChatEngine {
   private conversations: IConversationStore;
   private extractor: IFactExtractor;
   private ha: HomeAssistantClient;
+  private scanner: DeviceScanner;
   private config: Config;
 
   constructor(
@@ -29,7 +31,8 @@ export class LLMClient implements IChatEngine {
     memory: IMemoryStore,
     conversations: IConversationStore,
     extractor: IFactExtractor,
-    ha: HomeAssistantClient
+    ha: HomeAssistantClient,
+    scanner: DeviceScanner
   ) {
     this.config = config;
     this.anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
@@ -37,6 +40,7 @@ export class LLMClient implements IChatEngine {
     this.conversations = conversations;
     this.extractor = extractor;
     this.ha = ha;
+    this.scanner = scanner;
   }
 
   /**
@@ -58,8 +62,12 @@ export class LLMClient implements IChatEngine {
     );
     const factContents = facts.map((f) => f.content);
 
-    // 2. Build system prompt with memory
-    const systemPrompt = buildSystemPrompt(factContents, isVoice, customPrompt);
+    // 2. Refresh device profiles if stale, then build system prompt
+    await this.scanner.refreshIfStale();
+    const deviceCheatSheet = this.scanner.hasProfiles()
+      ? this.scanner.formatCheatSheet()
+      : undefined;
+    const systemPrompt = buildSystemPrompt(factContents, isVoice, customPrompt, deviceCheatSheet);
 
     // 3. Load conversation history if we have a conversationId
     const messages: Anthropic.MessageParam[] = [];

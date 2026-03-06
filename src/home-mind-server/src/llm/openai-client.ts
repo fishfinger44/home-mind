@@ -3,6 +3,7 @@ import type { Config } from "../config.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { IConversationStore } from "../memory/types.js";
 import { HomeAssistantClient } from "../ha/client.js";
+import { DeviceScanner } from "../ha/device-scanner.js";
 import { buildSystemPromptText } from "./prompts.js";
 import { TOOL_DEFINITIONS, toOpenAITools } from "./tool-definitions.js";
 import { handleToolCall, extractAndStoreFacts } from "./tool-handler.js";
@@ -24,6 +25,7 @@ export class OpenAIChatEngine implements IChatEngine {
   private conversations: IConversationStore;
   private extractor: IFactExtractor;
   private ha: HomeAssistantClient;
+  private scanner: DeviceScanner;
   private config: Config;
 
   constructor(
@@ -31,7 +33,8 @@ export class OpenAIChatEngine implements IChatEngine {
     memory: IMemoryStore,
     conversations: IConversationStore,
     extractor: IFactExtractor,
-    ha: HomeAssistantClient
+    ha: HomeAssistantClient,
+    scanner: DeviceScanner
   ) {
     this.config = config;
     this.client = new OpenAI({
@@ -42,6 +45,7 @@ export class OpenAIChatEngine implements IChatEngine {
     this.conversations = conversations;
     this.extractor = extractor;
     this.ha = ha;
+    this.scanner = scanner;
   }
 
   async chat(
@@ -59,8 +63,12 @@ export class OpenAIChatEngine implements IChatEngine {
     );
     const factContents = facts.map((f) => f.content);
 
-    // 2. Build system prompt as plain text
-    const systemPrompt = buildSystemPromptText(factContents, isVoice, customPrompt);
+    // 2. Refresh device profiles if stale, then build system prompt
+    await this.scanner.refreshIfStale();
+    const deviceCheatSheet = this.scanner.hasProfiles()
+      ? this.scanner.formatCheatSheet()
+      : undefined;
+    const systemPrompt = buildSystemPromptText(factContents, isVoice, customPrompt, deviceCheatSheet);
 
     // 3. Load conversation history
     const messages: OpenAI.ChatCompletionMessageParam[] = [
