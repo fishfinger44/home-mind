@@ -75,6 +75,11 @@ services:
       - STT_API_KEY=${STT_API_KEY:-}
       - STT_BASE_URL=${STT_BASE_URL:-}
       - STT_MODEL=${STT_MODEL:-}
+      - TTS_PROVIDER=${TTS_PROVIDER:-none}
+      - TTS_API_KEY=${TTS_API_KEY:-}
+      - TTS_BASE_URL=${TTS_BASE_URL:-}
+      - TTS_MODEL=${TTS_MODEL:-tts-1}
+      - TTS_VOICE=${TTS_VOICE:-alloy}
       - TZ=${TZ:-Europe/Prague}
     volumes:
       - conversation_data:/data

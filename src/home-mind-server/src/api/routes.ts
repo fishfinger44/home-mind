@@ -5,6 +5,7 @@ import type { IChatEngine } from "../llm/interface.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { IConversationStore } from "../memory/types.js";
 import type { ISttService } from "../stt/stt-service.js";
+import type { ITtsService } from "../tts/tts-service.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -36,7 +37,8 @@ export function createRouter(
   version: string = "0.0.0",
   defaultCustomPrompt?: string,
   conversations?: IConversationStore,
-  stt?: ISttService
+  stt?: ISttService,
+  tts?: ITtsService
 ): Router {
   const router = Router();
 
@@ -310,11 +312,39 @@ export function createRouter(
 
     try {
       const { buffer, mimetype, originalname } = req.file;
-      const text = await stt.transcribe(buffer, mimetype, originalname || "audio.webm");
+      const language = typeof req.body.language === "string" && req.body.language ? req.body.language : undefined;
+      const text = await stt.transcribe(buffer, mimetype, originalname || "audio.webm", language);
       res.json({ text });
     } catch (error) {
       console.error("STT error:", error);
       const message = error instanceof Error ? error.message : "Transcription failed";
+      res.status(500).json({ error: message });
+    }
+  });
+
+  /**
+   * POST /api/tts
+   * Synthesize text to speech (HomeMind App only).
+   * Accepts JSON { text, language? } and returns audio/mpeg.
+   * Returns 501 when TTS_PROVIDER is not configured.
+   */
+  router.post("/tts", async (req: Request, res: Response) => {
+    if (!tts) {
+      return res.status(501).json({ error: "TTS is not enabled on this server" });
+    }
+
+    const { text, language } = req.body;
+    if (typeof text !== "string" || !text.trim()) {
+      return res.status(400).json({ error: "text is required" });
+    }
+
+    try {
+      const audio = await tts.synthesize(text, language);
+      res.setHeader("Content-Type", "audio/mpeg");
+      res.send(audio);
+    } catch (error) {
+      console.error("TTS error:", error);
+      const message = error instanceof Error ? error.message : "Synthesis failed";
       res.status(500).json({ error: message });
     }
   });

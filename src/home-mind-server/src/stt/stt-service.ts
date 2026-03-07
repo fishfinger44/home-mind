@@ -9,7 +9,7 @@ import OpenAI from "openai";
 import type { Config } from "../config.js";
 
 export interface ISttService {
-  transcribe(audioBuffer: Buffer, mimeType: string, filename: string): Promise<string>;
+  transcribe(audioBuffer: Buffer, mimeType: string, filename: string, language?: string): Promise<string>;
 }
 
 export class OpenAISttService implements ISttService {
@@ -24,11 +24,12 @@ export class OpenAISttService implements ISttService {
     this.model = model;
   }
 
-  async transcribe(audioBuffer: Buffer, mimeType: string, filename: string): Promise<string> {
+  async transcribe(audioBuffer: Buffer, mimeType: string, filename: string, language?: string): Promise<string> {
     const file = new File([audioBuffer], filename, { type: mimeType });
     const result = await this.client.audio.transcriptions.create({
       file,
       model: this.model,
+      ...(language ? { language } : {}),
     });
     return result.text;
   }

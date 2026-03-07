@@ -51,6 +51,13 @@ const ConfigSchema = z
     sttApiKey: z.string().optional(), // Overrides openaiApiKey for STT; falls back to openaiApiKey if unset
     sttBaseUrl: z.string().url().optional(), // Custom Whisper-compatible endpoint
     sttModel: z.string().default("whisper-1"),
+
+    // Text-to-speech (for HomeMind App)
+    ttsProvider: z.enum(["openai", "none"]).default("none"),
+    ttsApiKey: z.string().optional(), // Overrides openaiApiKey for TTS; falls back to openaiApiKey if unset
+    ttsBaseUrl: z.string().url().optional(), // Custom OpenAI-compatible TTS endpoint
+    ttsModel: z.string().default("tts-1"),
+    ttsVoice: z.string().default("alloy"),
   })
   .superRefine((data, ctx) => {
     if (data.llmProvider === "anthropic" && !data.anthropicApiKey) {
@@ -102,6 +109,11 @@ export function loadConfig(): Config {
     sttApiKey: emptyToUndefined(process.env.STT_API_KEY),
     sttBaseUrl: emptyToUndefined(process.env.STT_BASE_URL),
     sttModel: emptyToUndefined(process.env.STT_MODEL),
+    ttsProvider: emptyToUndefined(process.env.TTS_PROVIDER),
+    ttsApiKey: emptyToUndefined(process.env.TTS_API_KEY),
+    ttsBaseUrl: emptyToUndefined(process.env.TTS_BASE_URL),
+    ttsModel: emptyToUndefined(process.env.TTS_MODEL),
+    ttsVoice: emptyToUndefined(process.env.TTS_VOICE),
   });
 
   if (!result.success) {
