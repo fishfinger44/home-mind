@@ -6,9 +6,12 @@ All notable changes to Home Mind are documented here.
 
 ### Added
 - **Admin conversations endpoint** — `GET /api/admin/conversations` returns all known users and their conversation summaries in one call. Useful for reviewing stored conversations without screenshots. Auth-protected via existing bearer token middleware.
+- **Device Capability Index** — server scans all `light.*` entities at startup and builds a per-entity capability cheat sheet injected into every system prompt. The LLM reads exact color control params (e.g. `rgbw_color`, `color_temp_kelvin`, `xy_color`) directly from the cheat sheet rather than re-discovering them via tool calls on each request. This eliminates repeated `search_entities`/`get_entities` calls for known devices and prevents wrong color params on first attempt.
+- **`DEVICE_OVERRIDES` env var** — JSON map of per-entity capability overrides for devices whose HA-reported modes don't match their actual wiring (e.g. Gledopto GL-C-008P wired as RGB-only but firmware always reports `color_temp+xy`). Example: `DEVICE_OVERRIDES={"light.gledopto_gl_c_008p": {"whiteMethod": "rgb_white"}}`. See README for details.
 
 ### Fixed
 - **LLM tool narration** — LLM was outputting "Let me search...", "I found...", "Done!" text between tool calls which got concatenated into messy responses. Added explicit no-narration rule to both chat and voice prompt variants.
+- **WLED RGBW white light** — scanner correctly detects `rgbw`/`rgbww` modes and tells the LLM to use `rgbw_color: [0,0,0,255]` (dedicated W channel) even when `color_temp` is also listed — WLED reports it but ignores it.
 
 ### App (home-mind-app)
 - **Markdown rendering** — assistant messages now render bold, lists, code blocks, headings etc. via `react-markdown` + `@tailwindcss/typography`. User messages stay as plain text.

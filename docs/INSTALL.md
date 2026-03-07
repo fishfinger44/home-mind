@@ -74,7 +74,14 @@ HA_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 PORT=3100                    # API port (default: 3100)
 HA_SKIP_TLS_VERIFY=true      # Set to true if HA uses HTTPS (required for self-signed certs)
 MEMORY_TOKEN_LIMIT=1500      # Max memory context tokens (default: 1500)
+
+# Per-entity device capability overrides (JSON)
+# Use when HA reports incorrect color modes for a device (e.g. Gledopto wired as RGB-only)
+# Supported fields: whiteMethod (color_temp|rgbw|rgb_white|none), colorMethod (rgb_color|xy_color|hs_color|none)
+DEVICE_OVERRIDES={"light.your_entity_id": {"whiteMethod": "rgb_white"}}
 ```
+
+**About Device Capability Index:** Home Mind automatically scans your lights at startup and tells the AI the correct color parameters for each device. If a light behaves unexpectedly (e.g. white commands are ignored), it may be reporting incorrect modes to Home Assistant. Use `DEVICE_OVERRIDES` to pin the correct behavior. See the [README](../README.md#device-capability-index) for details.
 
 ### Step 4: Deploy
 

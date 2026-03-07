@@ -22,6 +22,7 @@ Home Mind provides:
 - **Learning** from corrections and user preferences
 - **Voice control** via HA Assist (Wyoming protocol)
 - **Multi-LLM support** — Anthropic (Claude), OpenAI, or Ollama (local inference)
+- **Device Capability Index** — pre-scans your lights at startup so the AI always uses the right color params on the first try
 - **Self-hosted** and privacy-focused
 
 ## Memory in Action
@@ -165,6 +166,35 @@ If a per-request prompt is provided, it overrides the server default. If neither
 
 In those tools, the system prompt **is** the entire system prompt — you control everything. Here, your custom prompt replaces the default identity line at the top of a larger prompt that also includes smart home tool instructions, memory guidelines, and dynamic context (time, remembered facts). You're defining the persona, not replacing the whole system.
 
+## Device Capability Index
+
+On startup, Home Mind scans all `light.*` entities in Home Assistant, reads their `supported_color_modes` attributes, and builds a per-entity cheat sheet that is injected into every system prompt. This means the AI always knows the correct way to control each light without needing to call `search_entities` or `get_entities` on every request.
+
+The cheat sheet tells the AI exactly what to use per device:
+- `rgbw_color: [0,0,0,255]` for RGBW strips (WLED, etc.) — uses the dedicated white LED channel
+- `color_temp_kelvin` with the actual min/max range for lights that support it
+- `rgb_color: [255,255,255]` for RGB-only lights without a white channel
+- `xy_color: [x,y]` for lights that use CIE xy coordinates
+
+The scanner refreshes every 30 minutes automatically.
+
+### Fixing Devices with Incorrect HA-Reported Modes
+
+Some devices report capabilities that don't match their actual wiring. A common case is the **Gledopto GL-C-008P** Zigbee controller: its firmware always reports `color_temp+xy` regardless of wiring mode. When wired as RGB-only, `color_temp_kelvin` does nothing.
+
+Use `DEVICE_OVERRIDES` in your `.env` to pin the correct behavior for specific entities:
+
+```bash
+# Gledopto wired as RGB-only — use rgb_color for white instead of color_temp_kelvin
+DEVICE_OVERRIDES={"light.gledopto_gl_c_008p": {"whiteMethod": "rgb_white"}}
+```
+
+Override fields:
+- `whiteMethod`: `"color_temp"` | `"rgbw"` | `"rgb_white"` | `"none"`
+- `colorMethod`: `"rgb_color"` | `"xy_color"` | `"hs_color"` | `"none"`
+
+Only specify what needs changing — unspecified fields use auto-detected values.
+
 ## Available Tools
 
 | Tool | Description |
@@ -188,6 +218,8 @@ In those tools, the system prompt **is** the entire system prompt — you contro
 - [x] Custom system prompt (AI personality customization)
 - [x] Persistent conversation history (SQLite)
 - [x] Automatic memory cleanup (low-confidence fact pruning)
+- [x] Device Capability Index (pre-scanned light params, no per-request re-discovery)
+- [x] Per-entity device overrides (`DEVICE_OVERRIDES`) for firmware quirks
 - [ ] Multi-user support (OIDC)
 - [ ] HA Add-on packaging
 

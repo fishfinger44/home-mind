@@ -1,8 +1,8 @@
 # Home Mind Architecture
 
-**Version:** 0.11.1
-**Last Updated:** February 14, 2026
-**Status:** Voice + Text + Memory + Multi-LLM Provider Support
+**Version:** 0.13.0-dev
+**Last Updated:** March 7, 2026
+**Status:** Voice + Text + Memory + Multi-LLM Provider Support + Device Capability Index
 
 ---
 
@@ -65,7 +65,8 @@ src/home-mind-server/
 │   │   ├── openai-extractor.ts # OpenAI fact extractor
 │   │   └── types.ts          # Memory types
 │   └── ha/
-│       └── client.ts         # HA REST API client
+│       ├── client.ts         # HA REST API client
+│       └── device-scanner.ts # Device capability index (light color modes)
 └── Dockerfile
 ```
 
@@ -116,7 +117,9 @@ class HomeMindConversationAgent(ConversationEntity):
         ↓
 5. Server loads relevant memories from Shodh
         ↓
-6. Claude Haiku generates response (may call HA tools)
+5b. Device scanner injects light capability cheat sheet into system prompt
+        ↓
+6. Claude Haiku generates response (uses cheat sheet params, may call HA tools)
         ↓
 7. Tools execute: search_entities → call_service
         ↓
