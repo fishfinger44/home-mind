@@ -1,8 +1,8 @@
 # Home Mind Architecture
 
-**Version:** 0.11.1
-**Last Updated:** February 14, 2026
-**Status:** Voice + Text + Memory + Multi-LLM Provider Support
+**Version:** 0.13.0
+**Last Updated:** March 8, 2026
+**Status:** Voice + Text + Memory + Multi-LLM Provider Support + Device Capability Index + Home Layout Index + TTS
 
 ---
 
@@ -64,14 +64,22 @@ src/home-mind-server/
 │   │   ├── extractor.ts      # Anthropic fact extractor
 │   │   ├── openai-extractor.ts # OpenAI fact extractor
 │   │   └── types.ts          # Memory types
+│   ├── stt/
+│   │   └── stt-service.ts    # Whisper transcription (optional)
+│   ├── tts/
+│   │   └── tts-service.ts    # OpenAI TTS synthesis (optional)
 │   └── ha/
-│       └── client.ts         # HA REST API client
+│       ├── client.ts         # HA REST API client
+│       ├── device-scanner.ts # Device capability index (light color modes)
+│       └── topology-scanner.ts # Home layout index (floor/room/entity map)
 └── Dockerfile
 ```
 
 **Endpoints:**
 - `POST /api/chat` - Send message, get response
 - `POST /api/chat/stream` - SSE streaming response
+- `POST /api/stt` - Transcribe audio (multipart, requires `STT_PROVIDER`)
+- `POST /api/tts` - Synthesize speech (JSON `{text}`, requires `TTS_PROVIDER`)
 - `GET /api/health` - Health check
 
 ### 2. Shodh Memory
@@ -116,7 +124,11 @@ class HomeMindConversationAgent(ConversationEntity):
         ↓
 5. Server loads relevant memories from Shodh
         ↓
-6. Claude Haiku generates response (may call HA tools)
+5b. Device scanner injects light capability cheat sheet into system prompt
+        ↓
+5c. Topology scanner injects home layout (floor/room/entity map) into system prompt
+        ↓
+6. Claude Haiku generates response (uses cheat sheet + layout, may call HA tools)
         ↓
 7. Tools execute: search_entities → call_service
         ↓
@@ -246,3 +258,4 @@ services:
 | 0.6.0 | 2026-01-30 | Shodh v0.1.75, bundled ONNX, documentation cleanup |
 | 0.8.0 | 2026-02-09 | Auto-generate SHODH_API_KEY, add CHANGELOG |
 | 0.7.0 | 2026-02-08 | Multi-LLM provider support (Anthropic + OpenAI) |
+| 0.13.0 | 2026-03-08 | Device Capability Index, Home Layout Index, STT, TTS |

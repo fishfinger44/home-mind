@@ -38,6 +38,26 @@ const ConfigSchema = z
 
     // Custom prompt
     customPrompt: z.string().optional(),
+
+    // Per-entity device capability overrides (JSON, for devices with incorrect HA-reported modes)
+    deviceOverrides: z.string().optional(),
+
+    // App / API access
+    corsOrigins: z.string().optional(), // Comma-separated origins, e.g. "http://localhost:5173,https://app.example.com"
+    apiToken: z.string().optional(), // Bearer token for API auth (when unset, no auth enforced)
+
+    // Speech-to-text (for HomeMind App)
+    sttProvider: z.enum(["openai", "none"]).default("none"),
+    sttApiKey: z.string().optional(), // Overrides openaiApiKey for STT; falls back to openaiApiKey if unset
+    sttBaseUrl: z.string().url().optional(), // Custom Whisper-compatible endpoint
+    sttModel: z.string().default("whisper-1"),
+
+    // Text-to-speech (for HomeMind App)
+    ttsProvider: z.enum(["openai", "none"]).default("none"),
+    ttsApiKey: z.string().optional(), // Overrides openaiApiKey for TTS; falls back to openaiApiKey if unset
+    ttsBaseUrl: z.string().url().optional(), // Custom OpenAI-compatible TTS endpoint
+    ttsModel: z.string().default("tts-1"),
+    ttsVoice: z.string().default("alloy"),
   })
   .superRefine((data, ctx) => {
     if (data.llmProvider === "anthropic" && !data.anthropicApiKey) {
@@ -82,6 +102,18 @@ export function loadConfig(): Config {
     conversationStorage: emptyToUndefined(process.env.CONVERSATION_STORAGE),
     conversationDbPath: emptyToUndefined(process.env.CONVERSATION_DB_PATH),
     customPrompt: emptyToUndefined(process.env.CUSTOM_PROMPT),
+    deviceOverrides: emptyToUndefined(process.env.DEVICE_OVERRIDES),
+    corsOrigins: emptyToUndefined(process.env.CORS_ORIGINS),
+    apiToken: emptyToUndefined(process.env.API_TOKEN),
+    sttProvider: emptyToUndefined(process.env.STT_PROVIDER),
+    sttApiKey: emptyToUndefined(process.env.STT_API_KEY),
+    sttBaseUrl: emptyToUndefined(process.env.STT_BASE_URL),
+    sttModel: emptyToUndefined(process.env.STT_MODEL),
+    ttsProvider: emptyToUndefined(process.env.TTS_PROVIDER),
+    ttsApiKey: emptyToUndefined(process.env.TTS_API_KEY),
+    ttsBaseUrl: emptyToUndefined(process.env.TTS_BASE_URL),
+    ttsModel: emptyToUndefined(process.env.TTS_MODEL),
+    ttsVoice: emptyToUndefined(process.env.TTS_VOICE),
   });
 
   if (!result.success) {

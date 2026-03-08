@@ -4,6 +4,8 @@ import type { IMemoryStore } from "../memory/interface.js";
 import type { IConversationStore } from "../memory/types.js";
 import type { IFactExtractor } from "./interface.js";
 import type { HomeAssistantClient } from "../ha/client.js";
+import type { DeviceScanner } from "../ha/device-scanner.js";
+import type { TopologyScanner } from "../ha/topology-scanner.js";
 
 const LLMClientSpy = vi.fn();
 const OpenAIChatEngineSpy = vi.fn();
@@ -53,6 +55,8 @@ describe("createChatEngine", () => {
   const mockConversations = {} as IConversationStore;
   const mockExtractor = {} as IFactExtractor;
   const mockHa = {} as HomeAssistantClient;
+  const mockScanner = {} as DeviceScanner;
+  const mockTopology = {} as TopologyScanner;
 
   beforeEach(() => {
     LLMClientSpy.mockClear();
@@ -66,7 +70,7 @@ describe("createChatEngine", () => {
   it("returns LLMClient for anthropic provider", () => {
     const config = { llmProvider: "anthropic" } as Config;
 
-    const engine = createChatEngine(config, mockMemory, mockConversations, mockExtractor, mockHa);
+    const engine = createChatEngine(config, mockMemory, mockConversations, mockExtractor, mockHa, mockScanner, mockTopology);
 
     expect(engine).toBeInstanceOf(LLMClient);
     expect(LLMClientSpy).toHaveBeenCalledWith(
@@ -74,14 +78,16 @@ describe("createChatEngine", () => {
       mockMemory,
       mockConversations,
       mockExtractor,
-      mockHa
+      mockHa,
+      mockScanner,
+      mockTopology
     );
   });
 
   it("returns OpenAIChatEngine for openai provider", () => {
     const config = { llmProvider: "openai" } as Config;
 
-    const engine = createChatEngine(config, mockMemory, mockConversations, mockExtractor, mockHa);
+    const engine = createChatEngine(config, mockMemory, mockConversations, mockExtractor, mockHa, mockScanner, mockTopology);
 
     expect(engine).toBeInstanceOf(OpenAIChatEngine);
     expect(OpenAIChatEngineSpy).toHaveBeenCalledWith(
@@ -89,14 +95,16 @@ describe("createChatEngine", () => {
       mockMemory,
       mockConversations,
       mockExtractor,
-      mockHa
+      mockHa,
+      mockScanner,
+      mockTopology
     );
   });
 
   it("returns OpenAIChatEngine for ollama provider with default base URL", () => {
     const config = { llmProvider: "ollama", llmModel: "llama3.1" } as Config;
 
-    const engine = createChatEngine(config, mockMemory, mockConversations, mockExtractor, mockHa);
+    const engine = createChatEngine(config, mockMemory, mockConversations, mockExtractor, mockHa, mockScanner, mockTopology);
 
     expect(engine).toBeInstanceOf(OpenAIChatEngine);
     expect(OpenAIChatEngineSpy).toHaveBeenCalledWith(
@@ -107,7 +115,9 @@ describe("createChatEngine", () => {
       mockMemory,
       mockConversations,
       mockExtractor,
-      mockHa
+      mockHa,
+      mockScanner,
+      mockTopology
     );
   });
 
@@ -118,7 +128,7 @@ describe("createChatEngine", () => {
       ollamaBaseUrl: "http://192.168.1.50:11434/v1",
     } as Config;
 
-    const engine = createChatEngine(config, mockMemory, mockConversations, mockExtractor, mockHa);
+    const engine = createChatEngine(config, mockMemory, mockConversations, mockExtractor, mockHa, mockScanner, mockTopology);
 
     expect(engine).toBeInstanceOf(OpenAIChatEngine);
     expect(OpenAIChatEngineSpy).toHaveBeenCalledWith(
@@ -129,7 +139,9 @@ describe("createChatEngine", () => {
       mockMemory,
       mockConversations,
       mockExtractor,
-      mockHa
+      mockHa,
+      mockScanner,
+      mockTopology
     );
   });
 });

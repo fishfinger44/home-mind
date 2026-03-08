@@ -1,7 +1,7 @@
 # Home Mind
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Version](https://img.shields.io/badge/Version-0.12.0-brightgreen.svg)]()
+[![Version](https://img.shields.io/badge/Version-0.13.0-brightgreen.svg)]()
 [![Status](https://img.shields.io/badge/Status-Voice%20Working-success.svg)]()
 
 AI assistant for Home Assistant with cognitive memory. Adds learning capabilities, persistent memory, and voice control to your smart home.
@@ -22,6 +22,8 @@ Home Mind provides:
 - **Learning** from corrections and user preferences
 - **Voice control** via HA Assist (Wyoming protocol)
 - **Multi-LLM support** — Anthropic (Claude), OpenAI, or Ollama (local inference)
+- **Home Layout Index** — reads your HA floor/room assignments and injects them into every prompt, so the AI always knows which floor a device is on
+- **Device Capability Index** — pre-scans your lights at startup so the AI always uses the right color params on the first try
 - **Self-hosted** and privacy-focused
 
 ## Memory in Action
@@ -165,6 +167,48 @@ If a per-request prompt is provided, it overrides the server default. If neither
 
 In those tools, the system prompt **is** the entire system prompt — you control everything. Here, your custom prompt replaces the default identity line at the top of a larger prompt that also includes smart home tool instructions, memory guidelines, and dynamic context (time, remembered facts). You're defining the persona, not replacing the whole system.
 
+## Home Layout Index
+
+On startup, Home Mind queries the HA template API with Jinja2 functions (`floors()`, `floor_areas()`, `area_entities()`, etc.) and builds a compact map injected into every system prompt:
+
+```
+Ground Floor
+- Living Room: climate.living_room_radiator, light.living_room_main, ...
+First Floor
+- Bedroom: climate.bedroom_radiator, light.bedroom_main, ...
+```
+
+This gives the AI spatial awareness without tool calls. It will never assume a device is on the wrong floor. Refreshes every 30 minutes automatically. Works automatically if you've assigned your devices to rooms and floors in Home Assistant — no configuration needed. Degrades gracefully if your HA version doesn't support the registry endpoints or if rooms/floors aren't set up.
+
+## Device Capability Index
+
+On startup, Home Mind scans all `light.*` entities in Home Assistant, reads their `supported_color_modes` attributes, and builds a per-entity cheat sheet that is injected into every system prompt. This means the AI always knows the correct way to control each light without needing to call `search_entities` or `get_entities` on every request.
+
+The cheat sheet tells the AI exactly what to use per device:
+- `rgbw_color: [0,0,0,255]` for RGBW strips (WLED, etc.) — uses the dedicated white LED channel
+- `color_temp_kelvin` with the actual min/max range for lights that support it
+- `rgb_color: [255,255,255]` for RGB-only lights without a white channel
+- `xy_color: [x,y]` for lights that use CIE xy coordinates
+
+The scanner refreshes every 30 minutes automatically.
+
+### Fixing Devices with Incorrect HA-Reported Modes
+
+Some devices report capabilities that don't match their actual wiring. A common case is the **Gledopto GL-C-008P** Zigbee controller: its firmware always reports `color_temp+xy` regardless of wiring mode. When wired as RGB-only, `color_temp_kelvin` does nothing.
+
+Use `DEVICE_OVERRIDES` in your `.env` to pin the correct behavior for specific entities:
+
+```bash
+# Gledopto wired as RGB-only — use rgb_color for white instead of color_temp_kelvin
+DEVICE_OVERRIDES={"light.gledopto_gl_c_008p": {"whiteMethod": "rgb_white"}}
+```
+
+Override fields:
+- `whiteMethod`: `"color_temp"` | `"rgbw"` | `"rgb_white"` | `"none"`
+- `colorMethod`: `"rgb_color"` | `"xy_color"` | `"hs_color"` | `"none"`
+
+Only specify what needs changing — unspecified fields use auto-detected values.
+
 ## Available Tools
 
 | Tool | Description |
@@ -177,7 +221,7 @@ In those tools, the system prompt **is** the entire system prompt — you contro
 
 ## Project Status
 
-**Current Version:** v0.12.0
+**Current Version:** v0.13.0
 
 - [x] Voice control via HA Assist
 - [x] Cognitive memory with Shodh
@@ -188,6 +232,11 @@ In those tools, the system prompt **is** the entire system prompt — you contro
 - [x] Custom system prompt (AI personality customization)
 - [x] Persistent conversation history (SQLite)
 - [x] Automatic memory cleanup (low-confidence fact pruning)
+- [x] Device Capability Index (pre-scanned light params, no per-request re-discovery)
+- [x] Per-entity device overrides (`DEVICE_OVERRIDES`) for firmware quirks
+- [x] Home Layout Index (floor/room awareness via HA template API)
+- [x] Server-side STT (`POST /api/stt`, OpenAI Whisper)
+- [x] Server-side TTS (`POST /api/tts`, OpenAI TTS API)
 - [ ] Multi-user support (OIDC)
 - [ ] HA Add-on packaging
 
