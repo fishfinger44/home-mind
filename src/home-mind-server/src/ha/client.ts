@@ -86,6 +86,38 @@ export class HomeAssistantClient {
     return response.json() as Promise<T>;
   }
 
+  private async fetchText(
+    endpoint: string,
+    options: RequestInit = {}
+  ): Promise<string> {
+    const url = `${this.baseUrl}${endpoint}`;
+
+    const fetchOptions: RequestInit = {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    };
+
+    if (this.skipTlsVerify && url.startsWith("https://")) {
+      const { Agent } = await import("undici");
+      (fetchOptions as any).dispatcher = new Agent({
+        connect: { rejectUnauthorized: false },
+      });
+    }
+
+    const response = await fetch(url, fetchOptions);
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`HA API error ${response.status}: ${text}`);
+    }
+
+    return response.text();
+  }
+
   /**
    * Get all states (cached)
    */
@@ -182,25 +214,14 @@ export class HomeAssistantClient {
   }
 
   /**
-   * Fetch the entity registry (entity → area assignments).
-   * Not cached — only called by TopologyScanner on its own schedule.
+   * Render a Jinja2 template via the HA template API.
+   * Returns the rendered plain-text result (HA returns text/plain, not JSON).
    */
-  async getEntityRegistry(): Promise<unknown[]> {
-    return this.fetch<unknown[]>("/api/config/entity_registry/list");
-  }
-
-  /**
-   * Fetch the area registry (area → floor assignments).
-   */
-  async getAreaRegistry(): Promise<unknown[]> {
-    return this.fetch<unknown[]>("/api/config/area_registry/list");
-  }
-
-  /**
-   * Fetch the floor registry.
-   */
-  async getFloorRegistry(): Promise<unknown[]> {
-    return this.fetch<unknown[]>("/api/config/floor_registry/list");
+  async renderTemplate(template: string): Promise<string> {
+    return this.fetchText("/api/template", {
+      method: "POST",
+      body: JSON.stringify({ template }),
+    });
   }
 
   /**
