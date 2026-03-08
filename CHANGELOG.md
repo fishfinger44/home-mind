@@ -2,7 +2,7 @@
 
 All notable changes to Home Mind are documented here.
 
-## [Unreleased]
+## [0.13.0] - 2026-03-08
 
 ### Added
 - **Home Layout Index** — server now queries the HA template API with Jinja2 functions (`floors()`, `floor_areas()`, `area_entities()`, etc.) at startup (and every 30 min) and injects a compact floor→room→entity map into every system prompt. The LLM knows which floor and room each device belongs to without tool calls or guessing. Fixes cases where the LLM incorrectly assumed spatial location of devices (e.g. radiators on the wrong floor). Gracefully degrades if template API is unavailable (older HA) or floors/areas aren't configured.

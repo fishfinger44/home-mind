@@ -1,7 +1,7 @@
 # Home Mind
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Version](https://img.shields.io/badge/Version-0.12.0-brightgreen.svg)]()
+[![Version](https://img.shields.io/badge/Version-0.13.0-brightgreen.svg)]()
 [![Status](https://img.shields.io/badge/Status-Voice%20Working-success.svg)]()
 
 AI assistant for Home Assistant with cognitive memory. Adds learning capabilities, persistent memory, and voice control to your smart home.
@@ -221,7 +221,7 @@ Only specify what needs changing — unspecified fields use auto-detected values
 
 ## Project Status
 
-**Current Version:** v0.12.0
+**Current Version:** v0.13.0
 
 - [x] Voice control via HA Assist
 - [x] Cognitive memory with Shodh
@@ -234,7 +234,8 @@ Only specify what needs changing — unspecified fields use auto-detected values
 - [x] Automatic memory cleanup (low-confidence fact pruning)
 - [x] Device Capability Index (pre-scanned light params, no per-request re-discovery)
 - [x] Per-entity device overrides (`DEVICE_OVERRIDES`) for firmware quirks
-- [x] Home Layout Index (floor/room awareness injected from HA registries)
+- [x] Home Layout Index (floor/room awareness via HA template API)
+- [x] Server-side STT (`POST /api/stt`, OpenAI Whisper)
 - [x] Server-side TTS (`POST /api/tts`, OpenAI TTS API)
 - [ ] Multi-user support (OIDC)
 - [ ] HA Add-on packaging

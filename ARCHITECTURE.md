@@ -1,6 +1,6 @@
 # Home Mind Architecture
 
-**Version:** 0.13.0-dev
+**Version:** 0.13.0
 **Last Updated:** March 8, 2026
 **Status:** Voice + Text + Memory + Multi-LLM Provider Support + Device Capability Index + Home Layout Index + TTS
 
@@ -258,3 +258,4 @@ services:
 | 0.6.0 | 2026-01-30 | Shodh v0.1.75, bundled ONNX, documentation cleanup |
 | 0.8.0 | 2026-02-09 | Auto-generate SHODH_API_KEY, add CHANGELOG |
 | 0.7.0 | 2026-02-08 | Multi-LLM provider support (Anthropic + OpenAI) |
+| 0.13.0 | 2026-03-08 | Device Capability Index, Home Layout Index, STT, TTS |
