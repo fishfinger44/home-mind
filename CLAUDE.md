@@ -12,14 +12,11 @@ HA Assist (Voice/Text) → HA Custom Component (Python) → Home Mind Server (Ex
 
 ### Home Layout Index
 
-`TopologyScanner` (`ha/topology-scanner.ts`) runs at startup and every 30 minutes. It fetches three HA registry endpoints:
-- `/api/config/entity_registry/list` — entity → area assignments (skips disabled/hidden)
-- `/api/config/area_registry/list` — area → floor assignments
-- `/api/config/floor_registry/list` — floors with levels
+`TopologyScanner` (`ha/topology-scanner.ts`) runs at startup and every 30 minutes. It uses the HA template API (`POST /api/template`) with a single Jinja2 query that calls `floors()`, `floor_name()`, `floor_areas()`, `area_name()`, `area_entities()`, and `areas()` (available since HA 2024.4). Unassigned areas are derived by exclusion — areas not returned by any `floor_areas()` call.
 
 Builds a compact `floor → room → [entity_ids]` text section and injects it into every system prompt alongside the device cheat sheet. This gives the LLM spatial awareness without tool calls — it knows which floor and room every device belongs to before reasoning begins.
 
-If the registry endpoints fail (older HA, network error), the scanner logs a warning and injects nothing — the rest of the system works normally.
+If the template API fails (older HA, network error), the scanner logs a warning and injects nothing — the rest of the system works normally.
 
 ### Device Capability Index
 

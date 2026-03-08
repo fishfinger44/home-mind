@@ -169,7 +169,7 @@ In those tools, the system prompt **is** the entire system prompt — you contro
 
 ## Home Layout Index
 
-On startup, Home Mind reads three HA registries — entity registry (entity → room), area registry (room → floor), and floor registry — and builds a compact map injected into every system prompt:
+On startup, Home Mind queries the HA template API with Jinja2 functions (`floors()`, `floor_areas()`, `area_entities()`, etc.) and builds a compact map injected into every system prompt:
 
 ```
 Ground Floor
