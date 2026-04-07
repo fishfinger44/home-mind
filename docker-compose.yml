@@ -4,7 +4,8 @@
 services:
   # Shodh Memory - Cognitive memory backend
   shodh:
-    image: varunshodh/shodh-memory:latest
+    build:
+      context: ./docker/shodh
     container_name: home-mind-shodh
     restart: unless-stopped
     environment:
