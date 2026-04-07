@@ -19,7 +19,7 @@ RUN chmod +x /app/shodh-memory-server && ldconfig
 # Create data directory and symlink (Shodh uses /app/shodh_memory_data by default)
 RUN mkdir -p /data && ln -s /data /app/shodh_memory_data
 
-RUN useradd -r -u 1001 -g root appuser && chown -R appuser /app /data 2>/dev/null || true
+RUN useradd -r -u 1001 -g root -m -d /home/appuser appuser && chown -R appuser /app /data 2>/dev/null || true
 USER appuser
 
 # Expose port
