@@ -100,7 +100,7 @@ import { loadConfig } from "./config.js";
 
 **Shodh type mapping**: Our fact categories map to Shodh memory types (e.g., `baseline` → `Observation`, `preference` → `Preference`) in `shodh-client.ts`.
 
-**Self-signed TLS**: HA client uses undici Agent with `rejectUnauthorized: false` when `HA_SKIP_TLS_VERIFY=true`.
+**Self-signed TLS**: HA client uses undici Agent with `rejectUnauthorized: false` when `HA_SKIP_TLS_VERIFY=true`. Note: when the server runs in Docker and connects to HA over LAN, use `http://` in `HA_URL` — HA typically only serves HTTPS via add-ons or reverse proxies (e.g. Tailscale), not on the raw LAN IP. Using `https://` against a plain HTTP endpoint causes SSL handshake failures even with `HA_SKIP_TLS_VERIFY=true`.
 
 **Token estimation**: Uses `content.length / 4` as rough token count (4 chars ≈ 1 token) for fact budget limiting.
 
@@ -139,7 +139,11 @@ LLM config:
 - `OPENAI_BASE_URL` — optional, for OpenAI-compatible APIs (Azure, local proxies)
 - `OLLAMA_BASE_URL` — optional, Ollama API endpoint (default: `http://localhost:11434/v1`)
 
-Optional: `PORT` (default 3100), `HA_SKIP_TLS_VERIFY`, `MEMORY_TOKEN_LIMIT` (default 1500), `LOG_LEVEL`, `CONVERSATION_STORAGE` (`memory` | `sqlite`, default `memory`), `CONVERSATION_DB_PATH` (default `/data/conversations.db`, only used when `CONVERSATION_STORAGE=sqlite`), `CUSTOM_PROMPT` (server-level default custom system prompt), `TZ` (timezone for the Docker container, default `Europe/Prague` in docker-compose; Node.js uses this for `toLocaleString()` so the LLM sees correct local time)
+Optional: `PORT` (default 3100), `API_TOKEN` (bearer token for auth — when set, all endpoints except health require it), `HA_SKIP_TLS_VERIFY`, `MEMORY_TOKEN_LIMIT` (default 1500), `LOG_LEVEL`, `CONVERSATION_STORAGE` (`memory` | `sqlite`, default `memory`), `CONVERSATION_DB_PATH` (default `/data/conversations.db`, only used when `CONVERSATION_STORAGE=sqlite`), `CUSTOM_PROMPT` (server-level default custom system prompt), `TZ` (timezone for the Docker container, default `Europe/Prague` in docker-compose; Node.js uses this for `toLocaleString()` so the LLM sees correct local time)
+
+### Cloud Proxy Compatibility
+
+The server is fully compatible with the Home Mind Cloud metering proxy. When deployed in cloud mode, the provisioner sets `LLM_PROVIDER=openai` + `OPENAI_BASE_URL=<proxy>/v1` + `OPENAI_API_KEY=<proxy_key>`. The server doesn't know it's talking to a proxy — it just sees an OpenAI-compatible API. This is by design: zero coupling between the OSS server and the closed-source proxy.
 
 STT (optional): `STT_PROVIDER` (`openai` | `none`, default `none`), `STT_API_KEY` (overrides `OPENAI_API_KEY`), `STT_BASE_URL` (custom Whisper-compatible endpoint), `STT_MODEL` (default `whisper-1`)
 
@@ -147,13 +151,21 @@ TTS (optional): `TTS_PROVIDER` (`openai` | `none`, default `none`), `TTS_API_KEY
 
 Integration tests: `SHODH_TEST_URL`, `SHODH_TEST_API_KEY`
 
+## Authentication
+
+Optional bearer token auth via `API_TOKEN` env var. When set, all endpoints except `/api/health` require `Authorization: Bearer <token>`. When unset, all requests pass through (backward compat with existing HA integrations).
+
+- **Health endpoint** (`/api/health`) is always public, even when auth is enabled
+- **Timing-safe comparison** prevents timing attacks on the token
+- **HACS config flow** validates tokens against `/api/memory/{userId}` (not `/api/health`, since health bypasses auth)
+
 ## API Endpoints
 
 - `POST /api/chat` — Full response (uses streaming internally). Body: `{ message, userId?, conversationId?, isVoice?, customPrompt? }`
 - `POST /api/chat/stream` — SSE streaming (`event: chunk` then `event: done`). Same body as `/api/chat`
 - `POST /api/stt` — Transcribe audio. Multipart `audio` field. Returns `{ text }`. 501 if `STT_PROVIDER=none`.
 - `POST /api/tts` — Synthesize speech. Body `{ text, language? }`. Returns `audio/mpeg`. 501 if `TTS_PROVIDER=none`.
-- `GET /api/health` — Health check
+- `GET /api/health` — Health check (always public, bypasses auth)
 - `GET /api/memory/:userId` — List user's facts
 - `POST /api/memory/:userId/facts` — Add fact manually
 - `DELETE /api/memory/:userId` — Clear all facts
@@ -167,7 +179,7 @@ Integration tests: `SHODH_TEST_URL`, `SHODH_TEST_API_KEY`
 
 Docker Compose (root `docker-compose.yml`) runs two services: `shodh` (memory backend, port 3030) and `server` (API, port 3100). Server depends on Shodh healthcheck.
 
-**Shodh Docker**: Uses Ubuntu 24.04 (not Alpine) because the pre-compiled binary requires GLIBC 2.38+. Both `shodh-memory-server` binary and `libonnxruntime.so` must be in `docker/shodh/` before build. `deploy.sh` auto-generates `SHODH_API_KEY` via `openssl rand -hex 32` if not set.
+**Shodh Docker**: Thin wrapper around the official `varunshodh/shodh-memory:latest` image. The wrapper (`docker/shodh/Dockerfile`) adds a custom entrypoint for volume permission migration. No more manual binary/library copying needed. `deploy.sh` auto-generates `SHODH_API_KEY` via `openssl rand -hex 32` if not set.
 
 HA custom component installed via HACS from `https://github.com/hoornet/home-mind-hacs` or manually copied to `/config/custom_components/home_mind/`.
 
