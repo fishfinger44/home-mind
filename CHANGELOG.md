@@ -2,6 +2,20 @@
 
 All notable changes to Home Mind are documented here.
 
+## [0.14.0] - 2026-04-11
+
+### Added
+- **Auto-detect user language** — server detects the language of the user's message and responds in the same language without any configuration. Works across all LLM providers.
+- **OpenRouter attribution headers** — when routing through OpenRouter, requests include `HTTP-Referer` and `X-Title` headers for proper attribution and usage tracking in the OpenRouter dashboard.
+
+### Changed
+- **Shodh Memory updated to v0.1.91** — switched to the official `varunshodh/shodh-memory:latest` Docker image (0.1.80 → 0.1.91). Includes SHA-256 content deduplication, improved graph memory, and stability fixes.
+- **Official Shodh Docker image** — the custom Shodh Dockerfile is now a thin wrapper around the official image with a migration entrypoint for volume permissions. No more manual binary/library management.
+
+### Fixed
+- **Non-root container volume paths** — corrected volume mount paths so the server runs correctly as a non-root user inside Docker.
+- **Docker security hardening** — containers run with restricted capabilities, read-only root filesystem where possible, and tightened auth token comparison.
+
 ## [0.13.0] - 2026-03-08
 
 ### Added
