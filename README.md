@@ -219,16 +219,27 @@ Only specify what needs changing — unspecified fields use auto-detected values
 | `call_service` | Control devices (turn_on, turn_off, etc.) |
 | `get_history` | Get historical state data |
 
+## Easy Install: HomeMind PRO Add-on
+
+If you're running Home Assistant and want a **one-click setup**, check out the **[HomeMind PRO add-on](https://github.com/hoornet/homemind-pro-addon)**.
+
+It bundles everything (server + Shodh Memory) into a single HA add-on — no Docker, no manual config, no terminal. Add the repository in HA Supervisor, install, and you're done. Supports both cloud mode (managed API key) and BYOK (bring your own key).
+
+The self-hosted Docker Compose setup below is for advanced users who want full control or are running Home Mind outside of Home Assistant.
+
+---
+
 ## Project Status
 
-**Current Version:** v0.13.0
+**Current Version:** v0.14.0
 
 - [x] Voice control via HA Assist
 - [x] Cognitive memory with Shodh
 - [x] Streaming responses
 - [x] HACS integration
-- [x] Multi-LLM provider support (Anthropic, OpenAI, Ollama)
+- [x] Multi-LLM provider support (Anthropic, OpenAI, OpenRouter, Ollama)
 - [x] Local inference via Ollama (no API key needed)
+- [x] Auto-detect and respond in user's language
 - [x] Custom system prompt (AI personality customization)
 - [x] Persistent conversation history (SQLite)
 - [x] Automatic memory cleanup (low-confidence fact pruning)
@@ -237,8 +248,8 @@ Only specify what needs changing — unspecified fields use auto-detected values
 - [x] Home Layout Index (floor/room awareness via HA template API)
 - [x] Server-side STT (`POST /api/stt`, OpenAI Whisper)
 - [x] Server-side TTS (`POST /api/tts`, OpenAI TTS API)
+- [x] HomeMind PRO HA Add-on (one-click install, cloud + BYOK)
 - [ ] Multi-user support (OIDC)
-- [ ] HA Add-on packaging
 
 ## Documentation
 
