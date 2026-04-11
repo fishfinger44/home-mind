@@ -1,30 +1,5 @@
 # Shodh Memory Container
 
-This container runs the Shodh Memory server.
+Thin wrapper around the official `varunshodh/shodh-memory` image. Adds an entrypoint script that fixes data volume ownership on first run, so upgrades from older root-based containers work seamlessly.
 
-## Building
-
-Before building, you need to place the `shodh-memory-server` binary in this directory.
-
-### Option 1: Copy from existing installation
-```bash
-cp ~/shodh-memory-server ./shodh-memory-server
-```
-
-### Option 2: Download release
-Check https://github.com/varun29ankuS/shodh-memory for releases.
-
-### Build
-```bash
-docker build -t home-mind-shodh .
-```
-
-## Running standalone
-```bash
-docker run -d \
-  --name shodh \
-  -p 3030:3030 \
-  -e SHODH_DEV_API_KEY=your-api-key \
-  -v shodh_data:/data \
-  home-mind-shodh
-```
+No binary downloads needed — the official image provides everything.
