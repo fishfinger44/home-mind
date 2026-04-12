@@ -65,6 +65,9 @@ export function createRouter(
       res.json(response);
     } catch (error) {
       console.error("Chat error:", error);
+      if ((error as any)?.status === 402) {
+        return res.status(402).json({ error: "usage_limit_reached" });
+      }
       const message = error instanceof Error ? error.message : "Unknown error";
       res.status(500).json({ error: message });
     }
@@ -104,6 +107,11 @@ export function createRouter(
       res.end();
     } catch (error) {
       console.error("Chat stream error:", error);
+      if ((error as any)?.status === 402) {
+        res.write(`event: error\ndata: ${JSON.stringify({ error: "usage_limit_reached" })}\n\n`);
+        res.end();
+        return;
+      }
       const message = error instanceof Error ? error.message : "Unknown error";
       res.write(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`);
       res.end();
