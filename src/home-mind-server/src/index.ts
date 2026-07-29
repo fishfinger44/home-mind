@@ -15,6 +15,9 @@ import { DeviceScanner } from "./ha/device-scanner.js";
 import { TopologyScanner } from "./ha/topology-scanner.js";
 import { createChatEngine, createFactExtractor } from "./llm/factory.js";
 import { createRouter } from "./api/routes.js";
+import type { IChatEngine } from "./llm/interface.js";
+import { loadLlmOverride, saveLlmOverride } from "./llm/runtime-config.js";
+import { createLlmConfigRouter } from "./api/llm-config-routes.js";
 import { createSttService } from "./stt/stt-service.js";
 import { createTtsService } from "./tts/tts-service.js";
 import { MemoryCleanupJob } from "./jobs/memory-cleanup.js";
@@ -45,8 +48,15 @@ console.log("  ✓ Memory store: Shodh Memory (cognitive, semantic search)");
 const conversations = createConversationStore(config);
 console.log(`  ✓ Conversation store: ${config.conversationStorage}`);
 
-const extractor = createFactExtractor(config);
-console.log(`  Fact extractor: ${config.llmProvider}/${config.llmModel}`);
+// Apply any persisted runtime LLM override (set via the HA integration) on top
+// of the .env config. The provider's API key still comes from .env.
+const llmOverride = loadLlmOverride();
+let activeConfig = llmOverride
+  ? { ...config, llmProvider: llmOverride.provider, llmModel: llmOverride.model }
+  : config;
+if (llmOverride) {
+  console.log(`  LLM override: ${llmOverride.provider}/${llmOverride.model} (runtime config)`);
+}
 
 const ha = new HomeAssistantClient(config);
 console.log(`  Home Assistant: ${config.haUrl}`);
@@ -65,8 +75,27 @@ await Promise.all([scanner.scan(), topology.scan()]);
 console.log(`  ✓ Device scanner: ${scanner.getProfiles().length} light profiles loaded`);
 console.log(`  ✓ Topology scanner: home layout ${topology.hasLayout() ? "loaded" : "unavailable"}`);
 
-const llm = createChatEngine(config, memory, conversations, extractor, ha, scanner, topology);
-console.log(`  LLM client: ${config.llmProvider}/${config.llmModel}`);
+let currentExtractor = createFactExtractor(activeConfig);
+let currentEngine = createChatEngine(
+  activeConfig, memory, conversations, currentExtractor, ha, scanner, topology
+);
+console.log(`  LLM client: ${activeConfig.llmProvider}/${activeConfig.llmModel}`);
+
+// Stable proxy so the mounted router keeps working after a runtime switch.
+const llm: IChatEngine = {
+  chat: (request, onChunk) => currentEngine.chat(request, onChunk),
+};
+
+// Switch provider/model at runtime (called by POST /api/config/llm) and persist.
+function applyLlm(provider: "anthropic" | "openai" | "ollama", model: string): void {
+  activeConfig = { ...config, llmProvider: provider, llmModel: model };
+  currentExtractor = createFactExtractor(activeConfig);
+  currentEngine = createChatEngine(
+    activeConfig, memory, conversations, currentExtractor, ha, scanner, topology
+  );
+  saveLlmOverride({ provider, model });
+  console.log(`  LLM switched -> ${provider}/${model}`);
+}
 
 // Initialize STT (optional — only when STT_PROVIDER is set)
 const stt = createSttService(config);
@@ -109,6 +138,15 @@ app.use((req, res, next) => {
   });
   next();
 });
+
+// LLM provider/model switching (used by the HA integration options flow)
+app.use(
+  "/api",
+  createLlmConfigRouter({
+    getCurrent: () => ({ provider: activeConfig.llmProvider, model: activeConfig.llmModel }),
+    apply: applyLlm,
+  })
+);
 
 // Mount API routes
 app.use("/api", createRouter(llm, memory, "shodh", version, config.customPrompt, conversations, stt ?? undefined, tts ?? undefined));

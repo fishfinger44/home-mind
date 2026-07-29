@@ -57,7 +57,7 @@ export class TopologyScanner {
   private ha: HomeAssistantClient;
   private lastScanTime: number = 0;
   private readonly scanIntervalMs: number;
-  private layoutText: string = "";
+  private layoutData: LayoutData | null = null;
 
   constructor(ha: HomeAssistantClient, scanIntervalMs = 30 * 60 * 1000) {
     this.ha = ha;
@@ -68,7 +68,7 @@ export class TopologyScanner {
     try {
       const raw = await this.ha.renderTemplate(LAYOUT_TEMPLATE);
       const data = JSON.parse(raw.trim()) as LayoutData;
-      this.layoutText = this.buildLayout(data);
+      this.layoutData = data;
       this.lastScanTime = Date.now();
 
       const floorCount = data.floors.length;
@@ -88,14 +88,21 @@ export class TopologyScanner {
   }
 
   hasLayout(): boolean {
-    return this.layoutText.length > 0;
+    return this.layoutData !== null;
   }
 
-  formatSection(): string {
-    return this.layoutText;
+  /**
+   * Render the layout. When *exposed* is given, only entities in that set are
+   * shown — so the LLM prompt carries only the entities the user exposed to
+   * Assist in Home Assistant, not every entity in the home.
+   */
+  formatSection(exposed?: Set<string>): string {
+    return this.layoutData ? this.buildLayout(this.layoutData, exposed) : "";
   }
 
-  private buildLayout(data: LayoutData): string {
+  private buildLayout(data: LayoutData, exposed?: Set<string>): string {
+    const entitiesOf = (area: AreaData): string[] =>
+      exposed ? area.entities.filter((e) => exposed.has(e)) : area.entities;
     // Check if there's anything useful to show
     const hasFloors = data.floors.some((f) => f.areas.length > 0);
     const hasOrphans = data.unassigned.length > 0;
@@ -112,9 +119,9 @@ export class TopologyScanner {
       if (floor.areas.length === 0) continue;
       lines.push(`**${floor.name}**`);
       for (const area of floor.areas.sort((a, b) => a.name.localeCompare(b.name))) {
-        if (area.entities.length === 0) continue;
-        const entityList = area.entities.sort().join(", ");
-        lines.push(`- ${area.name}: ${entityList}`);
+        const ents = entitiesOf(area);
+        if (ents.length === 0) continue;
+        lines.push(`- ${area.name}: ${ents.sort().join(", ")}`);
       }
       lines.push("");
     }
@@ -122,9 +129,9 @@ export class TopologyScanner {
     if (data.unassigned.length > 0) {
       lines.push("**Other rooms (no floor assigned)**");
       for (const area of data.unassigned.sort((a, b) => a.name.localeCompare(b.name))) {
-        if (area.entities.length === 0) continue;
-        const entityList = area.entities.sort().join(", ");
-        lines.push(`- ${area.name}: ${entityList}`);
+        const ents = entitiesOf(area);
+        if (ents.length === 0) continue;
+        lines.push(`- ${area.name}: ${ents.sort().join(", ")}`);
       }
       lines.push("");
     }

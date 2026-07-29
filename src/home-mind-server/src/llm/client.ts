@@ -81,10 +81,15 @@ export class LLMClient implements IChatEngine {
 
     // 2. Refresh device profiles and home layout if stale, then build system prompt
     await Promise.all([this.scanner.refreshIfStale(), this.topology.refreshIfStale()]);
-    const deviceCheatSheet = this.scanner.hasProfiles()
-      ? this.scanner.formatCheatSheet()
+    const exposed = request.exposedEntities?.length
+      ? new Set(request.exposedEntities)
       : undefined;
-    const homeLayout = this.topology.hasLayout() ? this.topology.formatSection() : undefined;
+    const deviceCheatSheet = this.scanner.hasProfiles()
+      ? this.scanner.formatCheatSheet(exposed)
+      : undefined;
+    const homeLayout = this.topology.hasLayout()
+      ? this.topology.formatSection(exposed)
+      : undefined;
     const systemPrompt = buildSystemPrompt(factContents, isVoice, customPrompt, deviceCheatSheet, homeLayout);
 
     // 3. Load conversation history if we have a conversationId

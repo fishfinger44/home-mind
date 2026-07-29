@@ -111,9 +111,9 @@ export class DeviceScanner {
    * The LLM should use these pre-computed values instead of calling get_entities
    * or reasoning from raw supported_color_modes attributes.
    */
-  formatCheatSheet(): string {
+  formatCheatSheet(exposed?: Set<string>): string {
     const lights = Array.from(this.profiles.values()).filter(
-      (p) => p.domain === "light"
+      (p) => p.domain === "light" && (!exposed || exposed.has(p.entityId))
     );
 
     if (lights.length === 0) return "";

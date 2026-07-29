@@ -1,5 +1,5 @@
-# Home Mind - Docker Compose
-# AI assistant for Home Assistant with cognitive memory
+# Home Mind & Home Generative Agent DB - Docker Compose
+# AI assistant configuration with cognitive memory backends
 
 services:
   # Shodh Memory - Cognitive memory backend
@@ -13,33 +13,22 @@ services:
       - SHODH_PORT=3030
       - SHODH_DEV_API_KEY=${SHODH_API_KEY}
     volumes:
-      - ${SHODH_DATA_PATH:-shodh_data}:/data
-    ports:
-      - "3030:3030"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3030/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 5s
-    networks:
-      - home-mind
+      - shodh_data:/data
+    network_mode: host
 
-  # Home Mind App - PWA frontend (optional; source lives in a separate repo)
-  # Enabled only when the `app` profile is active, e.g. COMPOSE_PROFILES=app
-  app:
-    profiles: ["app"]
-    build:
-      context: ../home-mind-app
-      args:
-        VITE_DEFAULT_SERVER_URL: ${VITE_DEFAULT_SERVER_URL:-}
-        VITE_DEFAULT_API_TOKEN: ${VITE_DEFAULT_API_TOKEN:-}
-    container_name: home-mind-app
+  # Piper - Lokalny syntezator mowy
+  piper:
+    image: rhasspy/wyoming-piper:latest
+    container_name: wyoming-piper
     restart: unless-stopped
-    ports:
-      - "${APP_PORT:-4174}:80"
-    networks:
-      - home-mind
+    volumes:
+      - ./data-piper:/data
+    network_mode: host
+    command: [
+      "--voice", "pl_PL-darkman-medium",
+      "--data-dir", "/data",
+      "--download-dir", "/data"
+    ]
 
   # Home Mind Server - API server
   server:
@@ -47,13 +36,13 @@ services:
       context: ./src/home-mind-server
     container_name: home-mind-server
     restart: unless-stopped
-    ports:
-      - "${PORT:-3100}:3100"
+    network_mode: host
     environment:
       - PORT=3100
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
       - LLM_MODEL=${LLM_MODEL:-}
+      - ANTHROPIC_PROMPT_CACHING=${ANTHROPIC_PROMPT_CACHING:-true}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
@@ -61,9 +50,9 @@ services:
       - HA_URL=${HA_URL}
       - HA_TOKEN=${HA_TOKEN}
       - HA_SKIP_TLS_VERIFY=${HA_SKIP_TLS_VERIFY:-false}
-      - SHODH_URL=http://shodh:3030
+      - SHODH_URL=http://127.0.0.1:3030
       - SHODH_API_KEY=${SHODH_API_KEY}
-      - MEMORY_TOKEN_LIMIT=${MEMORY_TOKEN_LIMIT:-1500}
+      - MEMORY_TOKEN_LIMIT=${MEMORY_TOKEN_LIMIT:-6000}
       - CONVERSATION_STORAGE=${CONVERSATION_STORAGE:-memory}
       - CONVERSATION_DB_PATH=/data/conversations.db
       - CUSTOM_PROMPT=${CUSTOM_PROMPT:-}
@@ -79,27 +68,31 @@ services:
       - TTS_BASE_URL=${TTS_BASE_URL:-}
       - TTS_MODEL=${TTS_MODEL:-tts-1}
       - TTS_VOICE=${TTS_VOICE:-alloy}
-      - TZ=${TZ:-Europe/Prague}
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
+      - TZ=Europe/Warsaw
     volumes:
       - conversation_data:/data
-    depends_on:
-      shodh:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3100/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    networks:
-      - home-mind
+
+  # Baza danych dla Home Generative Agent
+  hga-db:
+    image: ankane/pgvector:latest
+    container_name: hga-postgres-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: home_assistant_ai
+      POSTGRES_USER: hga_admin
+      POSTGRES_PASSWORD: MojeBezpieczneHaslo123!
+    network_mode: host
+    volumes:
+      - hga_db_data:/var/lib/postgresql/data
+
 
 volumes:
   shodh_data:
     driver: local
   conversation_data:
     driver: local
+  hga_db_data:
+    driver: local
 
-networks:
-  home-mind:
-    driver: bridge
+

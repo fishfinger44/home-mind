@@ -235,9 +235,16 @@ export function buildSystemPrompt(
 
   const instructions = isVoice ? VOICE_INSTRUCTIONS : SYSTEM_INSTRUCTIONS;
 
-  // Dynamic content that changes per request
+  // Static content: identity + instructions + home layout + device cheat sheet.
+  // Layout and the cheat sheet only refresh every ~30 min, so they belong in
+  // the CACHED block — keeping them out of it (as before) meant the biggest
+  // part of the prompt was re-charged at full price on every request.
   const layoutSection = homeLayout ? `\n\n${homeLayout}` : "";
   const deviceSection = deviceCheatSheet ? `\n\n${deviceCheatSheet}` : "";
+  const staticContent = `${identity}${instructions}${layoutSection}${deviceSection}`;
+
+  // Volatile content: per-request date/time + per-query recalled facts. Kept
+  // out of the cached block so it doesn't bust the cache each turn.
   const dynamicContent = `
 ## Current Context:
 - Date/Time: ${dateTimeStr}
@@ -245,13 +252,15 @@ export function buildSystemPrompt(
 - Local midnight today (UTC): ${localMidnightIso}  ← use this as start_time for "today" history queries, NOT 00:00:00Z
 
 ## What You Remember About This User:
-${factsText}${layoutSection}${deviceSection}`;
+${factsText}`;
 
-  // Build content blocks: identity + instructions (cached) + dynamic
+  // The cache_control marker caches everything up to and including its block,
+  // so the whole static prefix (identity + instructions + layout + devices) is
+  // cached; only the small volatile block below is charged at full price.
   const blocks: Anthropic.TextBlockParam[] = [
     {
       type: "text" as const,
-      text: identity + instructions,
+      text: staticContent,
       cache_control: { type: "ephemeral" as const },
     },
     {
@@ -289,7 +298,12 @@ export function buildSystemPromptText(
   const layoutSection = homeLayout ? `\n\n${homeLayout}` : "";
   const deviceSection = deviceCheatSheet ? `\n\n${deviceCheatSheet}` : "";
 
-  return `${identity}${instructions}
+  // Order matters for prefix caching (e.g. Gemini implicit cache): put the
+  // large, STABLE content first (identity + instructions + home layout +
+  // device cheat sheet — these only change every ~30 min) so it forms a
+  // cacheable prefix, and keep the VOLATILE bits (date/time, per-query recalled
+  // facts) at the very end where they don't bust the cache.
+  return `${identity}${instructions}${layoutSection}${deviceSection}
 
 ## Current Context:
 - Date/Time: ${dateTimeStr}
@@ -297,5 +311,5 @@ export function buildSystemPromptText(
 - Local midnight today (UTC): ${localMidnightIso}  ← use this as start_time for "today" history queries, NOT 00:00:00Z
 
 ## What You Remember About This User:
-${factsText}${layoutSection}${deviceSection}`;
+${factsText}`;
 }

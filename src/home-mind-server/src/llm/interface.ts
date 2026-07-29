@@ -14,6 +14,10 @@ export interface ChatRequest {
   conversationId?: string;
   isVoice?: boolean;
   customPrompt?: string;
+  /** Entity IDs exposed to Assist in HA; when set, the home layout + device
+   *  cheat sheet are restricted to these (keeps unselected entities out of the
+   *  prompt). */
+  exposedEntities?: string[];
 }
 
 /**

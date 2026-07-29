@@ -92,7 +92,61 @@ export async function handleToolCall(
         result = truncateHistory(history);
         break;
       }
+      case "web_search": {
+        const query = input.query as string;
+        const maxResults = (input.max_results as number | undefined) ?? 5;
 
+        if (!process.env.TAVILY_API_KEY) {
+          result = { error: "TAVILY_API_KEY is not set in the server environment" };
+          break;
+        }
+
+        try {
+          const response = await fetch("https://api.tavily.com/search", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${process.env.TAVILY_API_KEY}`,
+            },
+            body: JSON.stringify({
+              query,
+              max_results: maxResults,
+              include_answer: true,
+              include_links: true,
+              include_raw_content: false,
+            }),
+          });
+
+          if (!response.ok) {
+            const text = await response.text();
+            console.log(`[tool] web_search Tavily error: ${response.status} ${text}`);
+            result = { error: `Tavily API error: ${response.status}` };
+            break;
+          }
+
+          const data = await response.json() as any;
+
+          const answer = data.answer ?? "";
+          const results = Array.isArray(data.results)
+            ? data.results.map((r: any) => ({
+                title: r.title,
+                url: r.url,
+                snippet: r.snippet,
+              }))
+            : [];
+
+          result = {
+            answer,
+            results,
+          };
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          console.log(`[tool] web_search failed: ${message}`);
+          result = { error: message };
+        }
+
+        break;
+      }
       default:
         result = { error: `Unknown tool: ${toolName}` };
     }

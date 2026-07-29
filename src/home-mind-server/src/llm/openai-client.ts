@@ -89,11 +89,24 @@ export class OpenAIChatEngine implements IChatEngine {
 
     // 2. Refresh device profiles and home layout if stale, then build system prompt
     await Promise.all([this.scanner.refreshIfStale(), this.topology.refreshIfStale()]);
-    const deviceCheatSheet = this.scanner.hasProfiles()
-      ? this.scanner.formatCheatSheet()
+    const exposed = request.exposedEntities?.length
+      ? new Set(request.exposedEntities)
       : undefined;
-    const homeLayout = this.topology.hasLayout() ? this.topology.formatSection() : undefined;
+    const deviceCheatSheet = this.scanner.hasProfiles()
+      ? this.scanner.formatCheatSheet(exposed)
+      : undefined;
+    const homeLayout = this.topology.hasLayout()
+      ? this.topology.formatSection(exposed)
+      : undefined;
     const systemPrompt = buildSystemPromptText(factContents, isVoice, customPrompt, deviceCheatSheet, homeLayout);
+
+    // Prompt-size telemetry (sections that dominate the input tokens).
+    const approxTok = (s?: string) => Math.ceil((s?.length ?? 0) / 4);
+    console.log(
+      `[prompt] system~${approxTok(systemPrompt)}tok layout~${approxTok(homeLayout)}tok ` +
+      `devices~${approxTok(deviceCheatSheet)}tok facts=${factContents.length} ` +
+      `exposed=${request.exposedEntities?.length ?? "none"}`
+    );
 
     // 3. Load conversation history
     const messages: OpenAI.ChatCompletionMessageParam[] = [
@@ -256,18 +269,28 @@ export class OpenAIChatEngine implements IChatEngine {
       // stop the model from issuing more calls.
       ...(disableTools ? { tool_choice: "none" as const } : {}),
       stream: true,
+      stream_options: { include_usage: true },
     });
 
     let text = "";
     let finishReason: string | null = null;
+    let usage: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      total_tokens?: number;
+      prompt_tokens_details?: { cached_tokens?: number };
+    } | null = null;
 
-    // Accumulate tool calls from streamed deltas, indexed by position
+    // Accumulate tool calls from streamed deltas, indexed by position.
+    // extraContent carries provider-specific data (e.g. Gemini's
+    // thought_signature) that must be echoed back on the follow-up request.
     const toolCallAccumulator = new Map<
       number,
-      { id: string; name: string; arguments: string }
+      { id: string; name: string; arguments: string; extraContent?: unknown }
     >();
 
     for await (const chunk of stream) {
+      if (chunk.usage) usage = chunk.usage;
       const choice = chunk.choices[0];
       if (!choice) continue;
 
@@ -282,18 +305,21 @@ export class OpenAIChatEngine implements IChatEngine {
       // Accumulate tool call deltas
       if (choice.delta?.tool_calls) {
         for (const tc of choice.delta.tool_calls) {
+          const extra = (tc as { extra_content?: unknown }).extra_content;
           const existing = toolCallAccumulator.get(tc.index);
           if (existing) {
             // Append to existing tool call's arguments
             if (tc.function?.arguments) {
               existing.arguments += tc.function.arguments;
             }
+            if (extra !== undefined) existing.extraContent = extra;
           } else {
             // New tool call at this index
             toolCallAccumulator.set(tc.index, {
               id: tc.id ?? "",
               name: tc.function?.name ?? "",
               arguments: tc.function?.arguments ?? "",
+              extraContent: extra,
             });
           }
         }
@@ -302,6 +328,13 @@ export class OpenAIChatEngine implements IChatEngine {
       if (choice.finish_reason) {
         finishReason = choice.finish_reason;
       }
+    }
+
+    if (usage) {
+      const cached = usage.prompt_tokens_details?.cached_tokens ?? 0;
+      console.log(
+        `[usage] prompt=${usage.prompt_tokens} (cached=${cached}) completion=${usage.completion_tokens} total=${usage.total_tokens}`
+      );
     }
 
     // Convert accumulated tool calls to the expected format
@@ -316,7 +349,19 @@ export class OpenAIChatEngine implements IChatEngine {
           name: tc.name,
           arguments: tc.arguments,
         },
-      });
+        // Echo provider-specific data (Gemini thought_signature) back so the
+        // follow-up request passes validation. Ignored by other providers.
+        ...(tc.extraContent !== undefined
+          ? { extra_content: tc.extraContent }
+          : {}),
+      } as FunctionToolCall);
+    }
+
+    // Some OpenAI-compatible providers (notably Google Gemini's compat endpoint)
+    // stream tool calls but report finish_reason "stop" instead of "tool_calls".
+    // Normalize so the tool loop below still fires when tool calls were emitted.
+    if (toolCalls.length > 0) {
+      finishReason = "tool_calls";
     }
 
     return { text, finishReason, toolCalls };

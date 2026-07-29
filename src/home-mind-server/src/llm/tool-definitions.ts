@@ -113,6 +113,27 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ["entity_id"],
     },
   },
+  {
+    name: "web_search",
+    description:
+      "Perform a web search using Tavily to get up-to-date information from the internet. Use this when Home Assistant data and your own knowledge are not enough.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Search query in natural language (e.g., 'weather in Wrocław tomorrow', 'who is the president of the USA', 'latest news about Home Assistant').",
+        },
+        max_results: {
+          type: "number",
+          description:
+            "Optional maximum number of results to return (default: 5, reasonable range: 1–10).",
+        },
+      },
+      required: ["query"],
+    },
+  },
 ];
 
 export function toAnthropicTools(tools: ToolDefinition[]): Anthropic.Tool[] {
