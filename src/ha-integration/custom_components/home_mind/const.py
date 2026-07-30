@@ -31,6 +31,14 @@ DEFAULT_TIMEOUT = 120  # Claude with tool use can take 60+ seconds
 
 API_CHAT_ENDPOINT = "/api/chat"
 API_HEALTH_ENDPOINT = "/api/health"
+API_SEARCH_USAGE_ENDPOINT = "/api/search/usage"
+
+# Search backends the server reports usage for, with the names shown in HA.
+SEARCH_BACKEND_LABELS = {
+    "gemini_micro": "Google Search",
+    "tavily": "Tavily",
+    "brave": "Brave",
+}
 
 CLOUD_SIGNUP_URL = "https://homemind.veganostr.com"
 
