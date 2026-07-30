@@ -20,6 +20,8 @@ const ChatRequestSchema = z.object({
   exposedEntities: z.array(z.string()).optional(),
   webSearchLimit: z.number().int().min(0).max(5).optional(),
   memoryTokenLimit: z.number().int().min(0).max(8000).optional(),
+  userName: z.string().trim().min(1).max(100).optional(),
+  identityConfidence: z.enum(["certain", "asserted", "inferred", "unknown"]).optional(),
   webSearchMode: z
     .enum(["grounding", "gemini_micro", "tavily", "searxng", "brave"])
     .optional(),

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
-import { buildSystemPrompt, buildSystemPromptText } from "./prompts.js";
+import { speakerSection, buildSystemPrompt, buildSystemPromptText } from "./prompts.js";
 
 type TextBlock = Anthropic.TextBlockParam;
 
@@ -95,5 +95,30 @@ describe("buildSystemPromptText (OpenAI)", () => {
     const text = buildSystemPromptText([]);
 
     expect(text).toContain("No memories yet.");
+  });
+});
+
+describe("speakerSection", () => {
+  it("names a speaker we are sure of and hands them their own memories", () => {
+    const text = speakerSection("Lech");
+
+    expect(text).toContain("Lech");
+    expect(text).toContain("Lech's own");
+  });
+
+  it("refuses to guess when nothing identifies the speaker", () => {
+    const text = speakerSection(undefined);
+
+    // The shared-device case: an automation, a tablet and a guest look alike.
+    expect(text).toContain("Unknown");
+    expect(text).toMatch(/do NOT guess/i);
+    expect(text).toContain("shared default profile");
+  });
+
+  it("marks a guessed speaker as a guess and withholds personal memory", () => {
+    const text = speakerSection("Ania", false);
+
+    expect(text).toContain("Possibly Ania");
+    expect(text).toContain("NO personal memories");
   });
 });

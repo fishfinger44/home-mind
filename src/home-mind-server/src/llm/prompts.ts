@@ -253,13 +253,38 @@ export type CachedSystemPrompt = Anthropic.MessageCreateParams["system"];
  * Build system prompt with caching support.
  * Returns an array of content blocks where the static part is marked for caching.
  */
+/**
+ * Tell the assistant who is on the other end.
+ *
+ * The name arrives resolved — today from the Home Assistant user behind the
+ * request, later potentially from voice or face recognition — so this only has
+ * to decide what the model does with it. Without a name the honest position is
+ * "I do not know", never a guess: a shared tablet, an automation and a guest all
+ * arrive looking the same, and the recalled memories then belong to the shared
+ * default profile rather than to any particular person.
+ */
+export function speakerSection(speaker?: string, trusted: boolean = true): string {
+  if (speaker && !trusted) {
+    return `## Who You Are Talking To:
+Possibly ${speaker} — this is a guess from a weak signal, not an identification. Greet them as ${speaker} if it fits, but be ready to be corrected, and say who you think they are rather than acting as if you knew. You have NO personal memories in this prompt, because they might not be theirs; do not claim to remember anything about them personally.`;
+  }
+  if (!speaker) {
+    return `## Who You Are Talking To:
+Unknown — this request carries no profile. It may be a shared device, an automation, or a guest. Do NOT guess which member of the household it is and do not address anyone by name; ask who you are speaking with if it matters for the answer. The memories below belong to the shared default profile, not to a specific person.`;
+  }
+  return `## Who You Are Talking To:
+${speaker}. Use their name naturally — when greeting them, or when it makes an answer clearer — but not in every sentence. The memories below are ${speaker}'s own.`;
+}
+
 export function buildSystemPrompt(
   facts: string[],
   isVoice: boolean = false,
   customPrompt?: string,
   deviceCheatSheet?: string,
   homeLayout?: string,
-  webSearchLimit?: number
+  webSearchLimit?: number,
+  speaker?: string,
+  trusted: boolean = true
 ): CachedSystemPrompt {
   const factsText =
     facts.length > 0 ? facts.map((f) => `- ${f}`).join("\n") : "No memories yet.";
@@ -286,12 +311,14 @@ export function buildSystemPrompt(
   // Volatile content: per-request date/time + per-query recalled facts. Kept
   // out of the cached block so it doesn't bust the cache each turn.
   const dynamicContent = `
+${speakerSection(speaker, trusted)}
+
 ## Current Context:
 - Date/Time: ${dateTimeStr}
 - ISO Timestamp (now, UTC): ${isoTimestamp}
 - Local midnight today (UTC): ${localMidnightIso}  ← use this as start_time for "today" history queries, NOT 00:00:00Z
 
-## What You Remember About This User:
+## What You Remember:
 ${factsText}`;
 
   // The cache_control marker caches everything up to and including its block,
@@ -321,7 +348,9 @@ export function buildSystemPromptText(
   customPrompt?: string,
   deviceCheatSheet?: string,
   homeLayout?: string,
-  webSearchLimit?: number
+  webSearchLimit?: number,
+  speaker?: string,
+  trusted: boolean = true
 ): string {
   const factsText =
     facts.length > 0 ? facts.map((f) => `- ${f}`).join("\n") : "No memories yet.";
@@ -347,11 +376,13 @@ export function buildSystemPromptText(
   // facts) at the very end where they don't bust the cache.
   return `${identity}${instructions}${searchRule}${layoutSection}${deviceSection}
 
+${speakerSection(speaker, trusted)}
+
 ## Current Context:
 - Date/Time: ${dateTimeStr}
 - ISO Timestamp (now, UTC): ${isoTimestamp}
 - Local midnight today (UTC): ${localMidnightIso}  ← use this as start_time for "today" history queries, NOT 00:00:00Z
 
-## What You Remember About This User:
+## What You Remember:
 ${factsText}`;
 }

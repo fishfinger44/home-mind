@@ -8,6 +8,7 @@ import { TopologyScanner } from "../ha/topology-scanner.js";
 import { buildSystemPrompt, type CachedSystemPrompt } from "./prompts.js";
 import { HA_TOOLS } from "./tools.js";
 import { handleToolCall, extractAndStoreFacts, recallFacts } from "./tool-handler.js";
+import { trustsProfile } from "./interface.js";
 import type { WebSearchSettings } from "./tool-handler.js";
 import type {
   ChatRequest,
@@ -67,13 +68,18 @@ export class LLMClient implements IChatEngine {
     const toolsUsed: string[] = [];
 
     // 1. Load user's memory (pass current message as context for Shodh's proactive retrieval)
-    const factContents = await recallFacts(
-      this.memory,
-      userId,
-      message,
-      request.memoryTokenLimit,
-      this.config.memoryTokenLimit
-    );
+    // Personal memory is only for a speaker we are sure of: a guess that turns
+    // out wrong would otherwise read one person's memories out to another.
+    const trustedIdentity = trustsProfile(request.identityConfidence ?? "certain");
+    const factContents = trustedIdentity
+      ? await recallFacts(
+          this.memory,
+          userId,
+          message,
+          request.memoryTokenLimit,
+          this.config.memoryTokenLimit
+        )
+      : [];
     if (this.config.logLevel === "debug") {
       const approxTokens = Math.ceil(factContents.join(" ").length / 4);
       console.debug(
@@ -92,7 +98,7 @@ export class LLMClient implements IChatEngine {
     const homeLayout = this.topology.hasLayout()
       ? this.topology.formatSection(exposed)
       : undefined;
-    const systemPrompt = buildSystemPrompt(factContents, isVoice, customPrompt, deviceCheatSheet, homeLayout, request.webSearchLimit);
+    const systemPrompt = buildSystemPrompt(factContents, isVoice, customPrompt, deviceCheatSheet, homeLayout, request.webSearchLimit, request.userName, trustedIdentity);
 
     // 3. Load conversation history if we have a conversationId
     const messages: Anthropic.MessageParam[] = [];
@@ -184,13 +190,18 @@ export class LLMClient implements IChatEngine {
     }
 
     // 7. Extract and store new facts (async, don't block response)
-    extractAndStoreFacts(
-      this.memory,
-      this.extractor,
-      userId,
-      message,
-      responseText
-    ).catch((err) => console.error("Fact extraction failed:", err));
+    // Only a speaker we are sure of gets facts written to their profile. A
+    // misattributed fact cannot be untangled later: it simply becomes something
+    // the assistant "knows" about the wrong person.
+    if (trustedIdentity) {
+      extractAndStoreFacts(
+        this.memory,
+        this.extractor,
+        userId,
+        message,
+        responseText
+      ).catch((err) => console.error("Fact extraction failed:", err));
+    }
 
     // Count facts learned (we don't wait for extraction, so return 0 for now)
     return {

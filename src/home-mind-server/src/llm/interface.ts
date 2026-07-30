@@ -37,6 +37,29 @@ export const WEB_SEARCH_MODES: readonly WebSearchMode[] = [
   "brave",
 ] as const;
 
+/**
+ * How firmly the speaker has been established.
+ *
+ * - `certain`  a logged-in Home Assistant user made the request
+ * - `asserted` someone said who they are ("this is Ania") — trusted, but only
+ *              as far as an unverified claim goes
+ * - `inferred` a guess from a weak signal: who is home, or later a voice/face
+ *              match below its confidence bar
+ * - `unknown`  no signal at all — an automation, a shared device, a guest
+ *
+ * The split exists because a wrong guess has two very different costs. Reading
+ * the wrong person's memory leaks it; writing to the wrong person's memory
+ * corrupts it, and nothing untangles that afterwards. So personal memory is
+ * read only when the speaker is `certain` or `asserted`, and written only then
+ * too — a guess gets a name to greet, never a profile to rummage through.
+ */
+export type IdentityConfidence = "certain" | "asserted" | "inferred" | "unknown";
+
+/** Whether this identity is firm enough to touch a personal memory profile. */
+export function trustsProfile(confidence?: IdentityConfidence): boolean {
+  return confidence === "certain" || confidence === "asserted";
+}
+
 // Chat types (LLM-agnostic)
 export interface ChatRequest {
   message: string;
@@ -58,6 +81,14 @@ export interface ChatRequest {
   memoryTokenLimit?: number;
   /** How the assistant reaches the internet (HA option). See WebSearchMode. */
   webSearchMode?: WebSearchMode;
+  /** How sure the caller is about who is speaking. Governs whether personal
+   *  memory may be read and whether anything may be written to that profile. */
+  identityConfidence?: IdentityConfidence;
+  /** Display name of whoever is speaking, when the caller could establish it.
+   *  Today it comes from the Home Assistant user behind the request; a voice or
+   *  face recogniser could supply it instead. Absent = unidentified, which the
+   *  assistant is told to treat as the shared profile rather than guess. */
+  userName?: string;
 }
 
 /**

@@ -92,8 +92,10 @@ class HomeMindConversationAgent(ConversationEntity):
 
         # Get user ID from context if available, otherwise use default
         user_id = self._default_user_id
+        user_name: str | None = None
         if user_input.context and user_input.context.user_id:
             user_id = str(user_input.context.user_id)
+            user_name = await self._resolve_user_name(user_id)
 
         # Determine if this is a voice request
         is_voice = user_input.agent_id is not None
@@ -115,6 +117,7 @@ class HomeMindConversationAgent(ConversationEntity):
                 user_id=user_id,
                 conversation_id=conversation_id,
                 is_voice=is_voice,
+                user_name=user_name,
             )
             _LOGGER.debug(
                 "Got response: %s", response_text[:100] if response_text else "None"
@@ -177,6 +180,23 @@ class HomeMindConversationAgent(ConversationEntity):
         )
         return None
 
+    async def _resolve_user_name(self, user_id: str) -> str | None:
+        """Name of the Home Assistant user behind this request, if there is one.
+
+        Lets the assistant greet whoever is speaking instead of addressing the
+        house. Requests without a user — automations, scripts, a shared device —
+        stay nameless on purpose: the server is told to treat those as the shared
+        profile rather than assume a person.
+        """
+        try:
+            user = await self.hass.auth.async_get_user(user_id)
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.debug("Could not resolve user %s: %s", user_id, err)
+            return None
+        if user is None or user.system_generated:
+            return None
+        return user.name or None
+
     def _exposed_entities(self) -> list[str] | None:
         """Entity IDs the user exposed to Assist in HA. None = could not determine."""
         try:
@@ -195,6 +215,7 @@ class HomeMindConversationAgent(ConversationEntity):
         user_id: str,
         conversation_id: str,
         is_voice: bool = False,
+        user_name: str | None = None,
     ) -> str:
         """Call the Home Mind API."""
         url = f"{self._api_url}{API_CHAT_ENDPOINT}"
@@ -205,6 +226,13 @@ class HomeMindConversationAgent(ConversationEntity):
             "conversationId": conversation_id,
             "isVoice": is_voice,
         }
+
+        if user_name:
+            payload["userName"] = user_name
+            # A logged-in Home Assistant user is as firm as identification gets
+            # here. Anything without one stays unset, and the server treats it
+            # as unknown: shared profile, no personal memory read or written.
+            payload["identityConfidence"] = "certain"
 
         exposed = self._exposed_entities()
         if exposed is not None:
