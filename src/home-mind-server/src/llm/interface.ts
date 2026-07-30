@@ -22,13 +22,18 @@ import type { ExtractedFact, Fact } from "../memory/types.js";
  * - `tavily` / `brave` — our own `web_search` tool backed by a third-party
  *   search API. Google sees nothing, not even the query; results are raw
  *   snippets rather than a synthesized answer.
+ * - `searxng` — the same tool, answered by a SearXNG instance we host
+ *   ourselves. No key, no account, no allowance to run out of; the public
+ *   engines behind it can rate-limit the house IP, so it works best as the
+ *   fallback the metered backends drop into.
  */
-export type WebSearchMode = "grounding" | "gemini_micro" | "tavily" | "brave";
+export type WebSearchMode = "grounding" | "gemini_micro" | "tavily" | "searxng" | "brave";
 
 export const WEB_SEARCH_MODES: readonly WebSearchMode[] = [
   "grounding",
   "gemini_micro",
   "tavily",
+  "searxng",
   "brave",
 ] as const;
 

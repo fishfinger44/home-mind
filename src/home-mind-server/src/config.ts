@@ -40,7 +40,7 @@ const ConfigSchema = z
     // `grounding` needs a BILLED Google project; on the free tier Search
     // grounding is "Not available" and requests come back 429.
     webSearchMode: z
-      .enum(["grounding", "gemini_micro", "tavily", "brave"])
+      .enum(["grounding", "gemini_micro", "tavily", "searxng", "brave"])
       .default("grounding"),
     // Key of a billed Google project, used only for `gemini_micro` search
     // requests — lets the conversation itself run on a different (free) key.

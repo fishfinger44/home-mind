@@ -1,0 +1,31 @@
+# SearXNG configuration for Home Mind's self-hosted web search.
+#
+# Only the settings that matter here are set; everything else comes from
+# SearXNG's own defaults, so upgrading the image does not mean re-deciding
+# hundreds of options.
+
+use_default_settings: true
+
+general:
+  instance_name: "Home Mind Search"
+  # Nobody browses this instance; it exists for one API caller on localhost.
+  enable_metrics: false
+
+server:
+  # Replaced at startup by the SEARXNG_SECRET environment variable. It signs
+  # session data for the web UI, which this instance does not serve to anyone.
+  secret_key: "ultrasecretkey"
+  limiter: false
+  image_proxy: false
+
+search:
+  # The JSON format is what makes this usable as an API — it is off by default.
+  formats:
+    - html
+    - json
+  # Poland-first results for a household in Poland; the assistant asks in Polish.
+  default_lang: "pl"
+  safe_search: 0
+
+ui:
+  static_use_hash: true

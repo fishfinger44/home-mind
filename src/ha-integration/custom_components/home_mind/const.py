@@ -15,7 +15,9 @@ CONF_WEB_SEARCH_MODE = "web_search_mode"
 #   gemini_micro - our web_search tool answered by a small grounded request
 #                  on a SECOND, billed key (free chat + paid search)
 #   tavily/brave - our web_search tool backed by a third-party search API
-WEB_SEARCH_MODES = ["grounding", "gemini_micro", "tavily", "brave"]
+#   searxng      - our web_search tool answered by a SearXNG instance we host
+#                  ourselves: no key, no account, no monthly allowance
+WEB_SEARCH_MODES = ["grounding", "gemini_micro", "tavily", "searxng", "brave"]
 CONF_MEMORY_TOKEN_LIMIT = "memory_token_limit"
 # Token budget for facts recalled from memory and attached to every request.
 # 0 = send no memory at all (the server also skips the memory lookup).

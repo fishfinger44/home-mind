@@ -12,29 +12,54 @@
 //
 // Published free allowances at the time of writing (2026-07):
 //   tavily        1000 credits/month, no card required
-//   brave         the free tier was withdrawn in Feb 2026; new accounts get $5
-//                 of monthly credit (~1000 queries) and are then BILLED
-//   gemini_micro  5000 grounded prompts/month included on a BILLED project,
-//                 then $14 per 1000
+//   brave         the free tier was withdrawn in Feb 2026; an account gets 5 USD
+//                 of credit each month, renewed, and is BILLED past it
+//   gemini_micro  5000 grounded prompts/month on a BILLED project, then $14/1000
+//   searxng       self-hosted metasearch: unmetered, and free by construction
 // Override any of them with the *_MONTHLY_QUOTA env vars.
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { envNumber, envOrUndefined } from "../env.js";
 import { dirname } from "node:path";
 
-export type SearchBackend = "gemini_micro" | "tavily" | "brave";
+export type SearchBackend = "gemini_micro" | "tavily" | "searxng" | "brave";
 
-export const SEARCH_BACKENDS: readonly SearchBackend[] = ["gemini_micro", "tavily", "brave"];
+// Fallback order when the preferred backend cannot answer. The self-hosted
+// metasearch instance sits ahead of Brave deliberately: it costs nothing and
+// asks nobody's permission, so it is the right place to land when the metered
+// backends are spent.
+export const SEARCH_BACKENDS: readonly SearchBackend[] = [
+  "gemini_micro",
+  "tavily",
+  "searxng",
+  "brave",
+];
 
 const USAGE_PATH = envOrUndefined("SEARCH_USAGE_PATH") ?? "/data/search-usage.json";
 
 /** Fraction of the monthly quota at which we stop choosing a backend. */
 const THRESHOLD = envNumber("SEARCH_QUOTA_THRESHOLD", 0.9);
 
+/**
+ * Brave publishes no allowance in queries — it grants a renewable 5 USD of
+ * credit each month and bills per thousand requests. So derive the number of
+ * queries that credit buys, and treat that as the monthly quota. It is an
+ * estimate (the rate depends on the plan), which is why an actual 402/429 still
+ * overrides it.
+ */
+function braveQuotaFromCredit(): number {
+  const credit = envNumber("BRAVE_FREE_CREDIT_USD", 5);
+  const pricePerThousand = envNumber("BRAVE_PRICE_PER_1K_USD", 5);
+  if (pricePerThousand <= 0) return 0;
+  return Math.floor((credit / pricePerThousand) * 1000);
+}
+
 const DEFAULT_QUOTAS: Record<SearchBackend, number> = {
   tavily: envNumber("TAVILY_MONTHLY_QUOTA", 1000),
-  brave: envNumber("BRAVE_MONTHLY_QUOTA", 2000),
+  brave: envNumber("BRAVE_MONTHLY_QUOTA", braveQuotaFromCredit()),
   gemini_micro: envNumber("GEMINI_SEARCH_MONTHLY_QUOTA", 5000),
+  // Self-hosted: no account, no allowance, nothing to run out of.
+  searxng: 0,
 };
 
 /**
@@ -146,14 +171,16 @@ export function usedThisMonth(backend: SearchBackend): number {
 }
 
 /**
- * What one more search here would cost. `unknown` is the honest answer when a
- * provider reports no monthly allowance at all: Brave's free tier was withdrawn
- * in Feb 2026, so a key with no stated cap may simply be billing per query.
+ * What one more search here would cost. `unknown` is reserved for a provider
+ * that reports figures we cannot interpret; a backend we have no figures for at
+ * all falls back to its published allowance.
  */
 export function costStance(backend: SearchBackend): CostStance {
+  // Our own instance on our own machine — the one backend that can never bill.
+  if (backend === "searxng") return "free";
   const remote = remoteQuota(backend);
   if (remote) return remote.stance;
-  return backend === "brave" ? "unknown" : "free_until_quota";
+  return "free_until_quota";
 }
 
 export function isExhausted(backend: SearchBackend): boolean {

@@ -42,7 +42,7 @@
           "web_search_limit": "Every search is another full LLM round-trip carrying the whole prompt, which makes it the most expensive tool. 0 = internet off (the agent says so instead of guessing), 1 = frugal (recommended), higher = more thorough but pricier.",
           "memory_token_limit": "Token budget for facts about you and your home, recalled from the memory store and attached to EVERY request. More memory = the assistant knows you better and asks less, but each request costs more and is slower. 1500 is roughly 50-60 facts. 0 = no memory: the assistant knows nothing from earlier conversations and the server skips the memory lookup entirely (cheapest).",
           "custom_prompt": "Replaces the default personality line. Leave empty to keep the default.",
-          "web_search_mode": "grounding — the model searches inside its own request: one API call, cheapest and fastest, but it needs a Google project WITH billing (the free tier rejects it). gemini_micro — search runs as a small separate request on a second, billed key, so the conversation itself can stay on a free key; costs one extra round-trip. tavily / brave — a third-party search API; Google sees nothing, but you get raw snippets instead of a written answer. Whichever you pick, the server counts usage per backend and switches to one that still has monthly quota when yours runs out."
+          "web_search_mode": "grounding — the model searches inside its own request: one API call, cheapest and fastest, but it needs a Google project WITH billing (the free tier rejects it). gemini_micro — search runs as a small separate request on a second, billed key, so the conversation itself can stay on a free key; costs one extra round-trip. searxng — a metasearch instance running on your own server: no key, no account and nothing to run out of, though the public engines behind it can rate-limit your connection. tavily / brave — a third-party search API; Google sees nothing, but you get raw snippets instead of a written answer. Whichever you pick, the server tracks what is left on each backend and moves to another one that still has free allowance; when none does, it stops searching rather than spending money."
         }
       },
       "model": {
@@ -75,7 +75,8 @@
         "grounding": "Integrated Google Search (paid Gemini key, cheapest)",
         "gemini_micro": "Micro-call to Google Search (second, billed key)",
         "tavily": "Tavily",
-        "brave": "Brave Search"
+        "brave": "Brave Search",
+        "searxng": "Own server (SearXNG, free, no key)"
       }
     }
   }

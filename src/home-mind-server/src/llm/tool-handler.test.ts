@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { handleToolCall, extractAndStoreFacts, filterExtractedFacts, normalizeTimestamp, truncateHistory, recallFacts, resolveSearchMode, groundedGeminiSearch, readBraveQuotaHeaders, QuotaError } from "./tool-handler.js";
 import type { HomeAssistantClient } from "../ha/client.js";
 import type { IMemoryStore } from "../memory/interface.js";
@@ -650,34 +653,54 @@ describe("groundedGeminiSearch", () => {
 });
 
 describe("readBraveQuotaHeaders", () => {
-  // "50, 2000" is per-second then per-month; only the second figure is a
-  // monthly allowance, and a monthly limit of 0 states no allowance at all.
-  it("reads the monthly allowance out of Brave's rate-limit headers", async () => {
-    const { remoteQuota, resetUsageCache } = await import("./search-usage.js");
-    resetUsageCache();
+  // Both modules are imported fresh against a throwaway usage file: the counters
+  // live on disk, so without this the first case's numbers leak into the second.
+  async function freshModules() {
+    vi.resetModules();
+    const dir = mkdtempSync(join(tmpdir(), "brave-headers-"));
+    process.env.SEARCH_USAGE_PATH = join(dir, "usage.json");
+    return {
+      dir,
+      handler: await import("./tool-handler.js"),
+      usage: await import("./search-usage.js"),
+    };
+  }
 
-    readBraveQuotaHeaders(
+  afterEach(() => {
+    delete process.env.SEARCH_USAGE_PATH;
+  });
+
+  // "50, 2000" is per-second then per-month; only the second figure is a
+  // monthly allowance.
+  it("reads the monthly allowance out of Brave's rate-limit headers", async () => {
+    const { handler, usage, dir } = await freshModules();
+
+    handler.readBraveQuotaHeaders(
       new Headers({
         "x-ratelimit-limit": "50, 2000",
         "x-ratelimit-remaining": "49, 1993",
       })
     );
 
-    expect(remoteQuota("brave")).toMatchObject({
+    expect(usage.remoteQuota("brave")).toMatchObject({
       used: 7,
       quota: 2000,
       stance: "free_until_quota",
     });
+    rmSync(dir, { recursive: true, force: true });
   });
 
-  it("treats a plan with no stated monthly allowance as an unknown cost", async () => {
-    const { remoteQuota, resetUsageCache } = await import("./search-usage.js");
-    resetUsageCache();
+  it("ignores a credit-based plan that states no allowance in queries", async () => {
+    const { handler, usage, dir } = await freshModules();
 
-    readBraveQuotaHeaders(
+    handler.readBraveQuotaHeaders(
       new Headers({ "x-ratelimit-limit": "50, 0", "x-ratelimit-remaining": "49, 0" })
     );
 
-    expect(remoteQuota("brave")?.stance).toBe("unknown");
+    // A monthly limit of 0 says the cap is in dollars, not queries. Recording
+    // it as a quota of zero would read as "nothing left" and block the backend
+    // for the month; the allowance derived from the credit stays in charge.
+    expect(usage.remoteQuota("brave")).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
   });
 });

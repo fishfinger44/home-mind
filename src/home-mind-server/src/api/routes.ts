@@ -20,7 +20,9 @@ const ChatRequestSchema = z.object({
   exposedEntities: z.array(z.string()).optional(),
   webSearchLimit: z.number().int().min(0).max(5).optional(),
   memoryTokenLimit: z.number().int().min(0).max(8000).optional(),
-  webSearchMode: z.enum(["grounding", "gemini_micro", "tavily", "brave"]).optional(),
+  webSearchMode: z
+    .enum(["grounding", "gemini_micro", "tavily", "searxng", "brave"])
+    .optional(),
 });
 
 const AddFactSchema = z.object({

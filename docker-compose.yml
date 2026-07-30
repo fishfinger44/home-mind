@@ -76,9 +76,34 @@ services:
       # Key of a BILLED Google project, used only by gemini_micro search
       - GEMINI_SEARCH_API_KEY=${GEMINI_SEARCH_API_KEY:-}
       - GEMINI_SEARCH_MODEL=${GEMINI_SEARCH_MODEL:-}
+      # Self-hosted search (see the searxng service below). Unset = not available.
+      - SEARXNG_URL=${SEARXNG_URL:-http://127.0.0.1:8888}
+      - SEARCH_ALLOW_PAID=${SEARCH_ALLOW_PAID:-false}
       - TZ=Europe/Warsaw
     volumes:
       - conversation_data:/data
+
+  # SearXNG - self-hosted metasearch, so the assistant can reach the internet
+  # without an API key, an account, or a monthly allowance to run out of.
+  # Published on loopback only: it is an internal API, not a public instance.
+  # Port 8888 because 8080 belongs to Kodi's JSON-RPC on this machine.
+  searxng:
+    image: searxng/searxng:latest
+    container_name: home-mind-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8888:8080"
+    volumes:
+      - ./docker/searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://127.0.0.1:8888/
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-}
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
 
   # Baza danych dla Home Generative Agent
   hga-db:

@@ -27,6 +27,8 @@ afterEach(() => {
   delete process.env.BRAVE_MONTHLY_QUOTA;
   delete process.env.GEMINI_SEARCH_MONTHLY_QUOTA;
   delete process.env.SEARCH_ALLOW_PAID;
+  delete process.env.BRAVE_FREE_CREDIT_USD;
+  delete process.env.BRAVE_PRICE_PER_1K_USD;
 });
 
 describe("not spending money", () => {
@@ -56,6 +58,26 @@ describe("not spending money", () => {
     expect(m.searchChain("tavily", (b) => b === "tavily")).toEqual(["tavily"]);
   });
 
+  it("falls back to the self-hosted instance once the metered ones are spent", async () => {
+    const m = await freshModule();
+    m.markExhausted("gemini_micro", "HTTP 429");
+    m.markExhausted("tavily", "HTTP 432");
+
+    // Nothing to run out of on our own machine, so the assistant keeps working.
+    const chain = m.searchChain("gemini_micro", (b) => b !== "brave");
+
+    expect(chain).toEqual(["searxng"]);
+    expect(m.isExhausted("searxng")).toBe(false);
+    expect(m.costStance("searxng")).toBe("free");
+  });
+
+  it("derives Brave's allowance from the renewable credit it grants", async () => {
+    // $5 of credit at $5 per 1000 queries — Brave states no query cap itself.
+    const m = await freshModule({ BRAVE_MONTHLY_QUOTA: "", BRAVE_FREE_CREDIT_USD: "5" });
+
+    expect(m.quotaFor("brave")).toBe(1000);
+  });
+
   it("never slides onto a backend whose cost it cannot establish", async () => {
     const m = await freshModule();
     // Brave with no stated monthly allowance: possibly billed per query.
@@ -67,7 +89,7 @@ describe("not spending money", () => {
     });
 
     // As a fallback it is skipped...
-    expect(m.searchChain("tavily", () => true)).toEqual(["tavily", "gemini_micro"]);
+    expect(m.searchChain("tavily", () => true)).toEqual(["tavily", "gemini_micro", "searxng"]);
     // ...but choosing it explicitly is the user's own decision to make.
     expect(m.searchChain("brave", () => true)[0]).toBe("brave");
   });
@@ -138,9 +160,12 @@ describe("searchChain", () => {
   it("puts the preferred backend first and keeps the others as fallback", async () => {
     const m = await freshModule();
 
-    // Brave is missing on purpose: with nothing known about its plan it counts
-    // as an unknown cost, which is not something to fall onto by accident.
-    expect(m.searchChain("tavily", () => true)).toEqual(["tavily", "gemini_micro"]);
+    expect(m.searchChain("tavily", () => true)).toEqual([
+      "tavily",
+      "gemini_micro",
+      "searxng",
+      "brave",
+    ]);
   });
 
   it("drops backends whose key is not configured", async () => {
@@ -149,6 +174,7 @@ describe("searchChain", () => {
     expect(m.searchChain("tavily", (b) => b !== "brave")).toEqual([
       "tavily",
       "gemini_micro",
+      "searxng",
     ]);
   });
 
@@ -156,9 +182,9 @@ describe("searchChain", () => {
     const m = await freshModule();
     m.markExhausted("tavily", "HTTP 429");
 
-    // Past its allowance Tavily bills, so it is gone for the month — only a
-    // backend with free allowance left is offered.
-    expect(m.searchChain("tavily", () => true)).toEqual(["gemini_micro"]);
+    // Past its allowance Tavily bills, so it is gone for the month — only
+    // backends with free allowance left are offered.
+    expect(m.searchChain("tavily", () => true)).toEqual(["gemini_micro", "searxng", "brave"]);
   });
 
   it("returns nothing when no backend is configured at all", async () => {

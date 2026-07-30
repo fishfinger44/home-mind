@@ -82,7 +82,7 @@ export function resolveSearchMode(
   hasSearchKey: boolean
 ): Exclude<WebSearchMode, "grounding"> {
   const mode = (requested ?? "grounding").toLowerCase() as WebSearchMode;
-  if (mode === "tavily" || mode === "brave") return mode;
+  if (mode === "tavily" || mode === "brave" || mode === "searxng") return mode;
   if (hasSearchKey) return "gemini_micro";
   if (mode === "gemini_micro") {
     console.warn(
@@ -227,10 +227,11 @@ export async function refreshTavilyQuota(): Promise<void> {
 
 /**
  * Brave states its limits on every response: `x-ratelimit-limit: 50, 2000` is
- * per-second and per-month, with `x-ratelimit-remaining` alongside. A monthly
- * limit of 0 means the plan has no stated allowance — which since the free tier
- * was withdrawn is more likely "billed per query" than "unlimited", so it is
- * recorded as an unknown cost rather than a comfortable zero.
+ * per-second and per-month, with `x-ratelimit-remaining` alongside.
+ *
+ * A monthly limit of 0 is what a credit-based plan reports: there is no cap in
+ * queries because the cap is in dollars (5 USD of renewable credit). Nothing
+ * useful to record then — the derived quota and our local count stay in charge.
  */
 export function readBraveQuotaHeaders(headers: Headers): void {
   const monthly = (name: string): number | undefined => {
@@ -242,12 +243,12 @@ export function readBraveQuotaHeaders(headers: Headers): void {
 
   const limit = monthly("x-ratelimit-limit");
   const remaining = monthly("x-ratelimit-remaining");
-  if (limit === undefined) return;
+  if (limit === undefined || limit <= 0) return;
 
   setRemoteQuota("brave", {
     used: remaining === undefined ? 0 : Math.max(limit - remaining, 0),
     quota: limit,
-    stance: limit > 0 ? "free_until_quota" : "unknown",
+    stance: "free_until_quota",
     checkedAt: new Date().toISOString(),
   });
 }
@@ -322,10 +323,57 @@ async function searchBrave(query: string, maxResults: number): Promise<SearchRes
   };
 }
 
+/**
+ * Search our own SearXNG instance.
+ *
+ * A metasearch front-end to the public engines, running on the same machine as
+ * the assistant: no key, no account, no monthly allowance, and the query never
+ * reaches a search API as a paying customer. It returns links and snippets
+ * rather than a written answer — the model reads them, exactly as it does with
+ * Brave. The engines can rate-limit the house IP, so this is a good fallback
+ * and a poor sole dependency, which is why it sits in a chain.
+ */
+async function searchSearxng(query: string, maxResults: number): Promise<SearchResult> {
+  const base = (envOrUndefined("SEARXNG_URL") ?? "http://127.0.0.1:8888").replace(/\/$/, "");
+  const url = new URL(`${base}/search`);
+  url.searchParams.set("q", query);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("safesearch", "0");
+
+  const response = await fetch(url, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(20_000),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    console.log(`[tool] web_search SearXNG error: ${response.status} ${text.slice(0, 200)}`);
+    throw new Error(`SearXNG error ${response.status}`);
+  }
+
+  const data = (await response.json()) as any;
+  const results = Array.isArray(data?.results)
+    ? data.results.slice(0, maxResults).map((r: any) => ({
+        title: r.title,
+        url: r.url,
+        snippet: r.content,
+      }))
+    : [];
+
+  return {
+    // SearXNG surfaces an engine's direct answer (calculators, definitions)
+    // when there is one; otherwise the snippets carry the information.
+    answer: Array.isArray(data?.answers) && data.answers.length ? String(data.answers[0]) : "",
+    results,
+  };
+}
+
 /** Whether a backend can be used at all (its key is configured). */
 function backendAvailable(backend: SearchBackend, searchKey: string): boolean {
   if (backend === "gemini_micro") return Boolean(searchKey);
   if (backend === "tavily") return Boolean(process.env.TAVILY_API_KEY);
+  // Self-hosted and keyless: available as soon as an instance is pointed at.
+  if (backend === "searxng") return Boolean(envOrUndefined("SEARXNG_URL"));
   return Boolean(process.env.BRAVE_API_KEY);
 }
 
@@ -385,7 +433,9 @@ export async function runWebSearch(
           ? await groundedGeminiSearch(query, searchKey)
           : backend === "brave"
             ? await searchBrave(query, maxResults)
-            : await searchTavily(query, maxResults);
+            : backend === "searxng"
+              ? await searchSearxng(query, maxResults)
+              : await searchTavily(query, maxResults);
 
       recordSearch(backend);
       const used = usedThisMonth(backend);
