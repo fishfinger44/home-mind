@@ -37,7 +37,10 @@ vi.mock("openai", () => {
   };
 });
 
-vi.mock("./tool-handler.js", () => ({
+vi.mock("./tool-handler.js", async (importOriginal) => ({
+  // Keep the real helpers (recallFacts and friends) and mock only what these
+  // tests assert on, so new exports don't come back undefined.
+  ...(await importOriginal<typeof import("./tool-handler.js")>()),
   handleToolCall: vi.fn().mockResolvedValue({ state: "on" }),
   extractAndStoreFacts: vi.fn().mockResolvedValue(1),
 }));
@@ -188,9 +191,13 @@ describe("OpenAIChatEngine", () => {
 
     const result = await engine.chat({ message: "Is the light on?", userId: "user-1" });
 
-    expect(handleToolCall).toHaveBeenCalledWith(ha, "get_state", {
-      entity_id: "light.kitchen",
-    });
+    expect(handleToolCall).toHaveBeenCalledWith(
+      ha,
+      "get_state",
+      { entity_id: "light.kitchen" },
+      // 4th arg: per-request web-search settings (mode + billed search key).
+      expect.any(Object)
+    );
     expect(result.response).toBe("The light is on");
     expect(result.toolsUsed).toEqual(["get_state"]);
   });

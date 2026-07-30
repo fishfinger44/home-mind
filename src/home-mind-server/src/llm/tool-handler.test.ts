@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { handleToolCall, extractAndStoreFacts, filterExtractedFacts, normalizeTimestamp, truncateHistory } from "./tool-handler.js";
+import { handleToolCall, extractAndStoreFacts, filterExtractedFacts, normalizeTimestamp, truncateHistory, recallFacts, resolveSearchMode, groundedGeminiSearch, QuotaError } from "./tool-handler.js";
 import type { HomeAssistantClient } from "../ha/client.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { IFactExtractor } from "./interface.js";
@@ -489,5 +489,145 @@ describe("truncateHistory", () => {
 
   it("returns empty array for empty input", () => {
     expect(truncateHistory([])).toEqual([]);
+  });
+});
+
+describe("recallFacts", () => {
+  const makeMemory = () =>
+    ({
+      getFactsWithinTokenLimit: vi.fn().mockResolvedValue([
+        { content: "user likes warm white" },
+        { content: "Denon is the living room amp" },
+      ]),
+    }) as unknown as IMemoryStore;
+
+  it("uses the per-request budget when the caller sets one", async () => {
+    const memory = makeMemory();
+
+    const facts = await recallFacts(memory, "user-1", "msg", 500, 1500);
+
+    expect(memory.getFactsWithinTokenLimit).toHaveBeenCalledWith("user-1", 500, "msg");
+    expect(facts).toEqual(["user likes warm white", "Denon is the living room amp"]);
+  });
+
+  it("falls back to the server default when the request omits it", async () => {
+    const memory = makeMemory();
+
+    await recallFacts(memory, "user-1", "msg", undefined, 1500);
+
+    expect(memory.getFactsWithinTokenLimit).toHaveBeenCalledWith("user-1", 1500, "msg");
+  });
+
+  it("skips the recall round-trip entirely at 0", async () => {
+    const memory = makeMemory();
+
+    const facts = await recallFacts(memory, "user-1", "msg", 0, 1500);
+
+    expect(facts).toEqual([]);
+    expect(memory.getFactsWithinTokenLimit).not.toHaveBeenCalled();
+  });
+
+  it("treats a server default of 0 as memory disabled", async () => {
+    const memory = makeMemory();
+
+    expect(await recallFacts(memory, "user-1", "msg", undefined, 0)).toEqual([]);
+    expect(memory.getFactsWithinTokenLimit).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveSearchMode", () => {
+  it("routes grounding to the billed micro-call when a search key exists", () => {
+    // `grounding` only reaches the tool when the engine could not ground itself.
+    expect(resolveSearchMode("grounding", true)).toBe("gemini_micro");
+  });
+
+  it("falls back to Tavily when grounding is impossible and no search key is set", () => {
+    expect(resolveSearchMode("grounding", false)).toBe("tavily");
+  });
+
+  it("degrades gemini_micro to Tavily when its key is missing", () => {
+    expect(resolveSearchMode("gemini_micro", false)).toBe("tavily");
+  });
+
+  it("keeps gemini_micro when the key is there", () => {
+    expect(resolveSearchMode("gemini_micro", true)).toBe("gemini_micro");
+  });
+
+  it("passes third-party providers through untouched", () => {
+    expect(resolveSearchMode("tavily", true)).toBe("tavily");
+    expect(resolveSearchMode("brave", true)).toBe("brave");
+  });
+
+  it("treats an unset mode like grounding", () => {
+    expect(resolveSearchMode(undefined, true)).toBe("gemini_micro");
+    expect(resolveSearchMode(undefined, false)).toBe("tavily");
+  });
+});
+
+describe("groundedGeminiSearch", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the answer, its sources and the queries the model ran", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [
+          {
+            content: { parts: [{ text: "Canberra" }, { text: " is the capital." }] },
+            groundingMetadata: {
+              webSearchQueries: ["capital of Australia"],
+              groundingChunks: [
+                { web: { title: "Wikipedia", uri: "https://example.org/canberra" } },
+                { web: { title: "no url" } },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = await groundedGeminiSearch("capital of Australia", "test-key");
+
+    expect(out.answer).toBe("Canberra is the capital.");
+    expect(out.queries).toEqual(["capital of Australia"]);
+    // Chunks without a URL are dropped rather than passed on as empty citations.
+    expect(out.results).toEqual([
+      { title: "Wikipedia", url: "https://example.org/canberra" },
+    ]);
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body);
+    expect(body.tools).toEqual([{ googleSearch: {} }]);
+    expect(body.toolConfig).toEqual({ includeServerSideToolInvocations: true });
+    // The whole point of the micro-call: only the query travels, not the prompt.
+    expect(JSON.stringify(body.contents)).toContain("capital of Australia");
+    expect(init.headers["x-goog-api-key"]).toBe("test-key");
+  });
+
+  it("raises QuotaError on 429 so the chain moves to another backend", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 429, text: async () => "quota" })
+    );
+
+    // 429 on a grounded call means the project cannot ground (free tier) or the
+    // monthly allowance is gone — either way, stop using this backend.
+    await expect(groundedGeminiSearch("anything", "test-key")).rejects.toBeInstanceOf(
+      QuotaError
+    );
+  });
+
+  it("throws a plain error on other failures, leaving the backend in rotation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => "boom" })
+    );
+
+    const err = await groundedGeminiSearch("anything", "test-key").catch((e) => e);
+    expect(err).not.toBeInstanceOf(QuotaError);
+    expect(String(err)).toContain("Gemini search error 500");
   });
 });

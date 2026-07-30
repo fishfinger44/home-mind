@@ -88,7 +88,9 @@ import { loadConfig } from "./config.js";
 
 **Zod validation** for all config and request schemas. Config loads from env vars via `loadConfig()` in `config.ts` — exits process on validation failure. Uses `emptyToUndefined()` helper because Docker Compose sets empty strings (not `undefined`) for unset env vars.
 
-**HA tool definitions** are provider-neutral `ToolDefinition[]` in `llm/tool-definitions.ts`, converted to provider format via `toAnthropicTools()` / `toOpenAITools()`. Five tools: `get_state`, `get_entities`, `search_entities`, `call_service`, `get_history`. Shared execution logic in `llm/tool-handler.ts`.
+**HA tool definitions** are provider-neutral `ToolDefinition[]` in `llm/tool-definitions.ts`, converted to provider format via `toAnthropicTools()` / `toOpenAITools()` / `toGeminiTools()`. Six tools: `get_state`, `get_entities`, `search_entities`, `call_service`, `get_history`, `web_search`. Shared execution logic in `llm/tool-handler.ts`.
+
+**Web search** has four modes (`WEB_SEARCH_MODE`, overridable per request from HA): `grounding` (the model searches server-side inside the same request — one API call, cheapest, but needs a Google project *with billing*: the free tier rejects grounding with 429), `gemini_micro` (our own `web_search` tool answered by a small grounded request against a separate billed key, so the conversation itself can run on a free key), `tavily`, `brave`. `search-usage.ts` counts searches per backend per month in `/data/search-usage.json`; a backend that hits its quota — or answers 429/402 — is moved to the back of the chain and the next configured one answers instead. `GET /api/search/usage` reports what is left.
 
 **Prompt caching**: System prompt split into static (cached) + dynamic (facts/datetime) blocks in `llm/prompts.ts`. Two variants: regular and voice (shorter). Custom prompt replaces the default identity line (opening sentence) rather than appending — this gives it maximum authority over persona. Dynamic block includes both human-readable datetime with UTC offset (e.g., `10:15 PM CET (UTC+1)`) and a raw ISO timestamp for unambiguous tool use.
 
@@ -161,11 +163,13 @@ Optional bearer token auth via `API_TOKEN` env var. When set, all endpoints exce
 
 ## API Endpoints
 
-- `POST /api/chat` — Full response (uses streaming internally). Body: `{ message, userId?, conversationId?, isVoice?, customPrompt? }`
+- `POST /api/chat` — Full response (uses streaming internally). Body: `{ message, userId?, conversationId?, isVoice?, customPrompt?, exposedEntities?, webSearchLimit?, webSearchMode?, memoryTokenLimit? }`. The last four come from the HA integration's options and override the server defaults for that request.
 - `POST /api/chat/stream` — SSE streaming (`event: chunk` then `event: done`). Same body as `/api/chat`
 - `POST /api/stt` — Transcribe audio. Multipart `audio` field. Returns `{ text }`. 501 if `STT_PROVIDER=none`.
 - `POST /api/tts` — Synthesize speech. Body `{ text, language? }`. Returns `audio/mpeg`. 501 if `TTS_PROVIDER=none`.
 - `GET /api/health` — Health check (always public, bypasses auth)
+- `GET /api/search/usage` — Monthly web-search usage per backend (used/quota/remaining/exhausted). No API keys exposed.
+- `GET|POST /api/config/llm` — Read/switch the active provider + model at runtime (also `apiKey`, `baseUrl`, `searchApiKey`). GET never returns a key, only `hasApiKey`/`hasSearchApiKey`.
 - `GET /api/memory/:userId` — List user's facts
 - `POST /api/memory/:userId/facts` — Add fact manually
 - `DELETE /api/memory/:userId` — Clear all facts

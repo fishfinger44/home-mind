@@ -7,7 +7,8 @@ import { DeviceScanner } from "../ha/device-scanner.js";
 import { TopologyScanner } from "../ha/topology-scanner.js";
 import { buildSystemPromptText } from "./prompts.js";
 import { TOOL_DEFINITIONS, toOpenAITools } from "./tool-definitions.js";
-import { handleToolCall, extractAndStoreFacts } from "./tool-handler.js";
+import { handleToolCall, extractAndStoreFacts, recallFacts } from "./tool-handler.js";
+import type { WebSearchSettings } from "./tool-handler.js";
 import type {
   ChatRequest,
   ChatResponse,
@@ -134,12 +135,13 @@ export class OpenAIChatEngine implements IChatEngine {
     const toolsUsed: string[] = [];
 
     // 1. Load user's memory
-    const facts = await this.memory.getFactsWithinTokenLimit(
+    const factContents = await recallFacts(
+      this.memory,
       userId,
-      this.config.memoryTokenLimit,
-      message
+      message,
+      request.memoryTokenLimit,
+      this.config.memoryTokenLimit
     );
-    const factContents = facts.map((f) => f.content);
     if (this.config.logLevel === "debug") {
       const approxTokens = Math.ceil(factContents.join(" ").length / 4);
       console.debug(
@@ -226,7 +228,10 @@ export class OpenAIChatEngine implements IChatEngine {
           };
         }
 
-        const toolResult = await handleToolCall(this.ha, tc.function.name, args);
+        const toolResult = await handleToolCall(this.ha, tc.function.name, args, {
+          mode: request.webSearchMode ?? this.config.webSearchMode,
+          searchApiKey: this.config.geminiSearchApiKey,
+        } satisfies WebSearchSettings);
         return {
           role: "tool" as const,
           tool_call_id: tc.id,

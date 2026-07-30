@@ -7,7 +7,8 @@ import { DeviceScanner } from "../ha/device-scanner.js";
 import { TopologyScanner } from "../ha/topology-scanner.js";
 import { buildSystemPrompt, type CachedSystemPrompt } from "./prompts.js";
 import { HA_TOOLS } from "./tools.js";
-import { handleToolCall, extractAndStoreFacts } from "./tool-handler.js";
+import { handleToolCall, extractAndStoreFacts, recallFacts } from "./tool-handler.js";
+import type { WebSearchSettings } from "./tool-handler.js";
 import type {
   ChatRequest,
   ChatResponse,
@@ -66,12 +67,13 @@ export class LLMClient implements IChatEngine {
     const toolsUsed: string[] = [];
 
     // 1. Load user's memory (pass current message as context for Shodh's proactive retrieval)
-    const facts = await this.memory.getFactsWithinTokenLimit(
+    const factContents = await recallFacts(
+      this.memory,
       userId,
-      this.config.memoryTokenLimit,
-      message
+      message,
+      request.memoryTokenLimit,
+      this.config.memoryTokenLimit
     );
-    const factContents = facts.map((f) => f.content);
     if (this.config.logLevel === "debug") {
       const approxTokens = Math.ceil(factContents.join(" ").length / 4);
       console.debug(
@@ -136,7 +138,11 @@ export class LLMClient implements IChatEngine {
         const result = await handleToolCall(
           this.ha,
           block.name,
-          block.input as Record<string, unknown>
+          block.input as Record<string, unknown>,
+          {
+            mode: request.webSearchMode ?? this.config.webSearchMode,
+            searchApiKey: this.config.geminiSearchApiKey,
+          } satisfies WebSearchSettings
         );
         return {
           type: "tool_result" as const,

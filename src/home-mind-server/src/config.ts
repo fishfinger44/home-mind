@@ -36,6 +36,16 @@ const ConfigSchema = z
     shodhUrl: z.string().url("SHODH_URL is required"),
     shodhApiKey: z.string().min(1, "SHODH_API_KEY is required"),
 
+    // Web search: how the assistant reaches the internet. See WebSearchMode.
+    // `grounding` needs a BILLED Google project; on the free tier Search
+    // grounding is "Not available" and requests come back 429.
+    webSearchMode: z
+      .enum(["grounding", "gemini_micro", "tavily", "brave"])
+      .default("grounding"),
+    // Key of a billed Google project, used only for `gemini_micro` search
+    // requests — lets the conversation itself run on a different (free) key.
+    geminiSearchApiKey: z.string().optional(),
+
     // Memory settings
     memoryTokenLimit: z.coerce.number().default(3000),
     memoryCleanupIntervalHours: z.coerce.number().min(0).default(6),
@@ -114,6 +124,12 @@ export function loadConfig(): Config {
     haSkipTlsVerify: process.env.HA_SKIP_TLS_VERIFY,
     shodhUrl: process.env.SHODH_URL,
     shodhApiKey: process.env.SHODH_API_KEY,
+    // WEB_SEARCH_PROVIDER is the older name and only ever held tavily|brave,
+    // both of which are valid modes — so it keeps working as a fallback.
+    webSearchMode:
+      emptyToUndefined(process.env.WEB_SEARCH_MODE) ??
+      emptyToUndefined(process.env.WEB_SEARCH_PROVIDER),
+    geminiSearchApiKey: emptyToUndefined(process.env.GEMINI_SEARCH_API_KEY),
     memoryTokenLimit: process.env.MEMORY_TOKEN_LIMIT,
     memoryCleanupIntervalHours: emptyToUndefined(process.env.MEMORY_CLEANUP_INTERVAL_HOURS),
     conversationStorage: emptyToUndefined(process.env.CONVERSATION_STORAGE),

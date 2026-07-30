@@ -9,12 +9,15 @@ export interface LlmController {
     model: string;
     baseUrl?: string;
     hasApiKey?: boolean;
+    /** Whether a separate billed key for `gemini_micro` web search is stored. */
+    hasSearchApiKey?: boolean;
   };
   apply: (
     provider: "anthropic" | "openai" | "ollama" | "gemini",
     model: string,
     apiKey?: string,
-    baseUrl?: string
+    baseUrl?: string,
+    searchApiKey?: string
   ) => void;
 }
 
@@ -28,7 +31,7 @@ export function createLlmConfigRouter(controller: LlmController): Router {
   });
 
   router.post("/config/llm", (req: Request, res: Response) => {
-    const { provider, model, apiKey, baseUrl } = req.body ?? {};
+    const { provider, model, apiKey, baseUrl, searchApiKey } = req.body ?? {};
     if (
       (provider !== "anthropic" &&
         provider !== "openai" &&
@@ -39,13 +42,16 @@ export function createLlmConfigRouter(controller: LlmController): Router {
     ) {
       return res.status(400).json({
         error:
-          "Body must be { provider: 'anthropic'|'openai'|'ollama'|'gemini', model: string, apiKey?, baseUrl? }",
+          "Body must be { provider: 'anthropic'|'openai'|'ollama'|'gemini', model: string, apiKey?, baseUrl?, searchApiKey? }",
       });
     }
     const key = typeof apiKey === "string" && apiKey.trim() ? apiKey.trim() : undefined;
     const url = typeof baseUrl === "string" && baseUrl.trim() ? baseUrl.trim() : undefined;
+    // Separate key for the billed Google project used by `gemini_micro` search.
+    const searchKey =
+      typeof searchApiKey === "string" && searchApiKey.trim() ? searchApiKey.trim() : undefined;
     try {
-      controller.apply(provider, model.trim(), key, url);
+      controller.apply(provider, model.trim(), key, url, searchKey);
     } catch (err) {
       return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }

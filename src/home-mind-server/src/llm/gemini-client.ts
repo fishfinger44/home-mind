@@ -17,7 +17,8 @@ import { DeviceScanner } from "../ha/device-scanner.js";
 import { TopologyScanner } from "../ha/topology-scanner.js";
 import { buildSystemPromptText } from "./prompts.js";
 import { TOOL_DEFINITIONS, toGeminiTools } from "./tool-definitions.js";
-import { handleToolCall, extractAndStoreFacts } from "./tool-handler.js";
+import { handleToolCall, extractAndStoreFacts, recallFacts } from "./tool-handler.js";
+import type { WebSearchSettings } from "./tool-handler.js";
 import type {
   ChatRequest,
   ChatResponse,
@@ -32,11 +33,13 @@ const NATIVE_BASE =
 
 const MAX_TOOL_ITERATIONS = 8;
 
-// Grounding replaces our own web_search tool, so exclude web_search from the
-// function declarations — the model uses googleSearch (server-side) instead.
+// With grounding, the model searches server-side via googleSearch, so our own
+// web_search tool is redundant and is left out. In every other search mode
+// (micro-call / Tavily / Brave) it is the only way to the internet, so it stays.
 const HA_FUNCTION_TOOLS = toGeminiTools(
   TOOL_DEFINITIONS.filter((t) => t.name !== "web_search")
 );
+const HA_FUNCTION_TOOLS_WITH_SEARCH = toGeminiTools(TOOL_DEFINITIONS);
 
 interface GeminiPart {
   text?: string;
@@ -62,6 +65,32 @@ interface GeminiResponse {
     cachedContentTokenCount?: number;
   };
 }
+
+/**
+ * How long to wait before retrying a 429.
+ *
+ * Google returns a RetryInfo with a `retryDelay` like "27s" for per-minute rate
+ * limits; when it does, honour it — guessing shorter just burns another request
+ * against the same window. Without it, back off 2s / 6s / 15s: enough to clear a
+ * 10-requests-per-minute free-tier window on the second or third try while
+ * staying well inside the HA integration's 120s timeout.
+ */
+export function retryDelayMs(attempt: number, retryAfterSeconds?: number): number {
+  if (retryAfterSeconds && retryAfterSeconds > 0) {
+    return Math.min(retryAfterSeconds, 30) * 1000;
+  }
+  return [2000, 6000, 15000][Math.min(attempt - 1, 2)];
+}
+
+/** Seconds from a Gemini error body's RetryInfo, when it carries one. */
+export function parseRetryDelay(body: string): number | undefined {
+  const m = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(body);
+  return m ? Number(m[1]) : undefined;
+}
+
+const MAX_429_ATTEMPTS = 3;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class GeminiChatEngine implements IChatEngine {
   private config: Config;
@@ -95,12 +124,13 @@ export class GeminiChatEngine implements IChatEngine {
     const toolsUsed: string[] = [];
 
     // 1. Recall facts
-    const facts = await this.memory.getFactsWithinTokenLimit(
+    const factContents = await recallFacts(
+      this.memory,
       userId,
-      this.config.memoryTokenLimit,
-      message
+      message,
+      request.memoryTokenLimit,
+      this.config.memoryTokenLimit
     );
-    const factContents = facts.map((f) => f.content);
 
     // 2. Refresh device/topology, build system prompt
     await Promise.all([this.scanner.refreshIfStale(), this.topology.refreshIfStale()]);
@@ -123,11 +153,19 @@ export class GeminiChatEngine implements IChatEngine {
     );
 
     const webSearchEnabled = (request.webSearchLimit ?? 1) > 0;
+    const searchMode = request.webSearchMode ?? this.config.webSearchMode ?? "grounding";
+    // Grounding is the only mode handled inside the model's own request; the rest
+    // are answered by our web_search tool in the tool loop.
+    let useGrounding = webSearchEnabled && searchMode === "grounding";
+    const searchSettings: WebSearchSettings = {
+      mode: searchMode,
+      searchApiKey: this.config.geminiSearchApiKey,
+    };
 
     console.log(
       `[prompt] system~${Math.ceil(systemPromptText.length / 4)}tok ` +
         `facts=${factContents.length} exposed=${request.exposedEntities?.length ?? "none"} ` +
-        `grounding=${webSearchEnabled ? "on" : "off"}`
+        `search=${webSearchEnabled ? (useGrounding ? "grounding" : searchMode) : "off"}`
     );
 
     // 3. Assemble conversation contents
@@ -145,8 +183,13 @@ export class GeminiChatEngine implements IChatEngine {
     contents.push({ role: "user", parts: [{ text: message }] });
 
     const systemInstruction = { parts: [{ text: systemPromptText }] };
-    const tools: unknown[] = [HA_FUNCTION_TOOLS];
-    if (webSearchEnabled) tools.push({ googleSearch: {} });
+    const buildTools = (): unknown[] => {
+      const set = webSearchEnabled && !useGrounding
+        ? HA_FUNCTION_TOOLS_WITH_SEARCH
+        : HA_FUNCTION_TOOLS;
+      return useGrounding ? [set, { googleSearch: {} }] : [set];
+    };
+    let tools = buildTools();
 
     // 4. Tool loop
     let responseText = "";
@@ -155,12 +198,31 @@ export class GeminiChatEngine implements IChatEngine {
     let forceAnswer = false;
 
     while (true) {
-      const data = await this.generate(
-        systemInstruction,
-        contents,
-        forceAnswer ? undefined : tools,
-        isVoice
-      );
+      let data: GeminiResponse;
+      try {
+        data = await this.generate(
+          systemInstruction,
+          contents,
+          forceAnswer ? undefined : tools,
+          isVoice,
+          !useGrounding
+        );
+      } catch (err) {
+        // A key whose Google project has no Search grounding (the free tier lists
+        // it as "Not available") rejects the whole request with 429 — including the
+        // Home Assistant part of it. Rather than fail the turn, drop grounding and
+        // retry with our own web_search tool, which any mode can serve.
+        if (useGrounding && /Gemini API error 429/.test(String(err))) {
+          console.warn(
+            "[gemini] grounding rejected with 429 — this key's project has no Google Search " +
+              "grounding. Retrying without it; set the search mode to gemini_micro, tavily or brave."
+          );
+          useGrounding = false;
+          tools = buildTools();
+          continue;
+        }
+        throw err;
+      }
 
       const cand = data.candidates?.[0];
       const parts = cand?.content?.parts ?? [];
@@ -197,7 +259,7 @@ export class GeminiChatEngine implements IChatEngine {
       for (const p of functionCalls) {
         const fc = p.functionCall!;
         toolsUsed.push(fc.name);
-        const result = await handleToolCall(this.ha, fc.name, fc.args ?? {});
+        const result = await handleToolCall(this.ha, fc.name, fc.args ?? {}, searchSettings);
         responseParts.push({
           functionResponse: {
             name: fc.name,
@@ -247,7 +309,11 @@ export class GeminiChatEngine implements IChatEngine {
     systemInstruction: { parts: { text: string }[] },
     contents: GeminiContent[],
     tools: unknown[] | undefined,
-    isVoice: boolean
+    isVoice: boolean,
+    // Retrying a grounding 429 is pointless — that quota is 0 for the whole
+    // month, not for the next few seconds — so the caller disables it there and
+    // falls back to a search tool instead.
+    allowRetryOn429 = true
   ): Promise<GeminiResponse> {
     const apiKey = this.config.openaiApiKey; // the Gemini API key (reused)
     if (!apiKey) throw new Error("Gemini API key is not set (OPENAI_API_KEY)");
@@ -263,16 +329,31 @@ export class GeminiChatEngine implements IChatEngine {
     }
 
     const url = `${NATIVE_BASE}/models/${this.config.llmModel}:generateContent`;
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
 
-    if (!resp.ok) {
+    for (let attempt = 1; ; attempt++) {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (resp.ok) return (await resp.json()) as GeminiResponse;
+
       const text = await resp.text();
+      // 429 on a free-tier key is usually the 10-requests-per-minute window, and
+      // a single voice command can spend three requests in as many seconds — so
+      // waiting is the difference between "works" and "unusable".
+      if (resp.status === 429 && allowRetryOn429 && attempt < MAX_429_ATTEMPTS) {
+        const wait = retryDelayMs(attempt, parseRetryDelay(text));
+        console.warn(
+          `[gemini] 429 rate limited — retrying in ${wait / 1000}s ` +
+            `(attempt ${attempt}/${MAX_429_ATTEMPTS})`
+        );
+        await sleep(wait);
+        continue;
+      }
+
       throw new Error(`Gemini API error ${resp.status}: ${text.slice(0, 500)}`);
     }
-    return (await resp.json()) as GeminiResponse;
   }
 }

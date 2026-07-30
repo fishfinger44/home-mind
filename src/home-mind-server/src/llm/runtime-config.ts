@@ -15,6 +15,10 @@ export interface LlmOverride {
   apiKey?: string;
   /** Base URL override (OpenAI-compatible endpoints, e.g. Gemini). */
   baseUrl?: string;
+  /** Key of a BILLED Google project, used only for `gemini_micro` web search.
+   *  Kept separate from `apiKey` so the conversation can run on a free-tier key
+   *  while search — which the free tier does not offer — runs on a paid one. */
+  searchApiKey?: string;
 }
 
 export function loadLlmOverride(): LlmOverride | null {
@@ -27,6 +31,9 @@ export function loadLlmOverride(): LlmOverride | null {
         model: data.model,
         ...(typeof data.apiKey === "string" && data.apiKey ? { apiKey: data.apiKey } : {}),
         ...(typeof data.baseUrl === "string" && data.baseUrl ? { baseUrl: data.baseUrl } : {}),
+        ...(typeof data.searchApiKey === "string" && data.searchApiKey
+          ? { searchApiKey: data.searchApiKey }
+          : {}),
       };
     }
   } catch (err) {
@@ -55,12 +62,19 @@ export const AVAILABLE_MODELS: Record<string, string[]> = {
   openai: [
     "gemini-3.6-flash",
     "gemini-3.5-flash",
+    // Flash-Lite has its own, far larger free-tier daily allowance than Flash
+    // (the quota is per model), and still calls functions reliably — so it is
+    // the practical choice for a free-tier household assistant.
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
     "gemini-2.5-flash",
   ],
   // Native Gemini API + Google Search grounding (same models, native endpoint).
   gemini: [
     "gemini-3.6-flash",
     "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
     "gemini-2.5-flash",
   ],
 };

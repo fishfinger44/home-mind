@@ -1,8 +1,16 @@
 import type { HomeAssistantClient, HistoryEntry } from "../ha/client.js";
 import type { IMemoryStore } from "../memory/interface.js";
-import type { IFactExtractor } from "./interface.js";
+import type { IFactExtractor, WebSearchMode } from "./interface.js";
 import type { ExtractedFact } from "../memory/types.js";
 import { filterFacts } from "../memory/fact-patterns.js";
+import {
+  type SearchBackend,
+  markExhausted,
+  quotaFor,
+  recordSearch,
+  searchChain,
+  usedThisMonth,
+} from "./search-usage.js";
 
 /** Max history entries to return to the LLM to avoid blowing context window */
 const MAX_HISTORY_ENTRIES = 200;
@@ -48,10 +56,261 @@ export function truncateHistory(
   return sampled;
 }
 
+/** Per-request web-search settings, resolved from the HA options + server config. */
+export interface WebSearchSettings {
+  mode?: WebSearchMode;
+  /** Key of a billed Google project, used by the `gemini_micro` mode. */
+  searchApiKey?: string;
+}
+
+/**
+ * Decide which backend actually answers a `web_search` tool call.
+ *
+ * `grounding` never lands here in the normal flow — in that mode the model
+ * searches server-side and the tool is not even offered. It does land here when
+ * the engine cannot ground (a non-Gemini provider, or a key whose project has
+ * no grounding), so we degrade instead of failing: the billed micro-call when a
+ * search key exists, Tavily otherwise. `gemini_micro` without a key degrades the
+ * same way, since the alternative is an error the user cannot act on mid-sentence.
+ */
+export function resolveSearchMode(
+  requested: WebSearchMode | undefined,
+  hasSearchKey: boolean
+): Exclude<WebSearchMode, "grounding"> {
+  const mode = (requested ?? "grounding").toLowerCase() as WebSearchMode;
+  if (mode === "tavily" || mode === "brave") return mode;
+  if (hasSearchKey) return "gemini_micro";
+  if (mode === "gemini_micro") {
+    console.warn(
+      "[tool] web_search mode is gemini_micro but no search API key is set — falling back to Tavily"
+    );
+  }
+  return "tavily";
+}
+
+/**
+ * Answer a search with one small grounded Gemini request on a separate key.
+ *
+ * The prompt is just the query, so this costs a fraction of inline grounding in
+ * tokens — the expensive part of this mode is that the *conversation* needs a
+ * second full-prompt round-trip to use the result.
+ */
+export async function groundedGeminiSearch(
+  query: string,
+  apiKey: string
+): Promise<{ answer: string; results: { title: string; url: string }[]; queries: string[] }> {
+  const model = process.env.GEMINI_SEARCH_MODEL ?? "gemini-3.6-flash";
+  const base = process.env.GEMINI_NATIVE_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta";
+
+  const response = await fetch(`${base}/models/${model}:generateContent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text:
+                "Search the web and answer concisely, in the language of the question. " +
+                `Question: ${query}`,
+            },
+          ],
+        },
+      ],
+      tools: [{ googleSearch: {} }],
+      toolConfig: { includeServerSideToolInvocations: true },
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    console.log(`[tool] web_search grounded micro-call error: ${response.status} ${text.slice(0, 200)}`);
+    // 429 here means either the monthly grounding allowance is gone or the
+    // project cannot ground at all (free tier) — both are "stop using this
+    // backend", not "retry in a second".
+    if (response.status === 429 || response.status === 402) {
+      throw new QuotaError("gemini_micro", `HTTP ${response.status}`);
+    }
+    throw new Error(`Gemini search error ${response.status}`);
+  }
+
+  const data = (await response.json()) as any;
+  const cand = data?.candidates?.[0];
+  const answer = (cand?.content?.parts ?? [])
+    .map((p: any) => p?.text ?? "")
+    .join("")
+    .trim();
+  const meta = cand?.groundingMetadata ?? {};
+  const results = (meta.groundingChunks ?? [])
+    .map((c: any) => ({ title: c?.web?.title ?? "", url: c?.web?.uri ?? "" }))
+    .filter((r: { url: string }) => r.url);
+  const queries: string[] = meta.webSearchQueries ?? [];
+
+  console.log(
+    `[search] grounded micro-call: queries=${JSON.stringify(queries)} sources=${results.length}`
+  );
+  return { answer, results, queries };
+}
+
+/** Thrown when a search backend says it is out of quota (HTTP 429/402). */
+export class QuotaError extends Error {
+  constructor(
+    readonly backend: SearchBackend,
+    reason: string
+  ) {
+    super(`${backend} out of quota (${reason})`);
+    this.name = "QuotaError";
+  }
+}
+
+export interface SearchResult {
+  answer: string;
+  results: { title: string; url: string; snippet?: string }[];
+  /** Which backend actually answered — surfaced so the model can cite it. */
+  provider?: SearchBackend;
+  queries?: string[];
+}
+
+async function searchTavily(query: string, maxResults: number): Promise<SearchResult> {
+  const response = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.TAVILY_API_KEY}`,
+    },
+    body: JSON.stringify({
+      query,
+      max_results: maxResults,
+      include_answer: true,
+      include_links: true,
+      include_raw_content: false,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    console.log(`[tool] web_search Tavily error: ${response.status} ${text.slice(0, 200)}`);
+    if (response.status === 429 || response.status === 402) {
+      throw new QuotaError("tavily", `HTTP ${response.status}`);
+    }
+    throw new Error(`Tavily API error: ${response.status}`);
+  }
+
+  const data = (await response.json()) as any;
+  return {
+    answer: data.answer ?? "",
+    results: Array.isArray(data.results)
+      ? data.results.map((r: any) => ({ title: r.title, url: r.url, snippet: r.snippet }))
+      : [],
+  };
+}
+
+async function searchBrave(query: string, maxResults: number): Promise<SearchResult> {
+  const url = new URL("https://api.search.brave.com/res/v1/web/search");
+  url.searchParams.set("q", query);
+  url.searchParams.set("count", String(Math.min(maxResults, 20)));
+
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+      "X-Subscription-Token": process.env.BRAVE_API_KEY as string,
+    },
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    console.log(`[tool] web_search Brave error: ${response.status} ${text.slice(0, 200)}`);
+    if (response.status === 429 || response.status === 402) {
+      throw new QuotaError("brave", `HTTP ${response.status}`);
+    }
+    throw new Error(`Brave API error: ${response.status}`);
+  }
+
+  const data = (await response.json()) as any;
+  return {
+    // Brave has no synthesized answer field — only snippets.
+    answer: "",
+    results: Array.isArray(data?.web?.results)
+      ? data.web.results
+          .slice(0, maxResults)
+          .map((r: any) => ({ title: r.title, url: r.url, snippet: r.description }))
+      : [],
+  };
+}
+
+/** Whether a backend can be used at all (its key is configured). */
+function backendAvailable(backend: SearchBackend, searchKey: string): boolean {
+  if (backend === "gemini_micro") return Boolean(searchKey);
+  if (backend === "tavily") return Boolean(process.env.TAVILY_API_KEY);
+  return Boolean(process.env.BRAVE_API_KEY);
+}
+
+/**
+ * Run one web search, moving down the backend chain when a backend is out of
+ * quota. The preferred backend comes from the HA option; the rest are fallbacks
+ * ordered by how much monthly allowance they have left, so a search still
+ * succeeds after the primary provider's free tier runs out.
+ */
+export async function runWebSearch(
+  query: string,
+  maxResults: number,
+  search?: WebSearchSettings
+): Promise<SearchResult | { error: string }> {
+  const searchKey = search?.searchApiKey || process.env.GEMINI_SEARCH_API_KEY || "";
+  const preferred = resolveSearchMode(
+    search?.mode ??
+      (process.env.WEB_SEARCH_MODE as WebSearchMode | undefined) ??
+      (process.env.WEB_SEARCH_PROVIDER as WebSearchMode | undefined),
+    Boolean(searchKey)
+  );
+
+  const chain = searchChain(preferred, (b) => backendAvailable(b, searchKey));
+  if (chain.length === 0) {
+    return {
+      error:
+        "No web search backend is configured — set TAVILY_API_KEY, BRAVE_API_KEY, " +
+        "or a search API key for grounded micro-calls",
+    };
+  }
+
+  let lastError = "";
+  for (const backend of chain) {
+    try {
+      const out =
+        backend === "gemini_micro"
+          ? await groundedGeminiSearch(query, searchKey)
+          : backend === "brave"
+            ? await searchBrave(query, maxResults)
+            : await searchTavily(query, maxResults);
+
+      recordSearch(backend);
+      const used = usedThisMonth(backend);
+      const quota = quotaFor(backend);
+      console.log(
+        `[search] ${backend} answered${backend !== preferred ? ` (fallback from ${preferred})` : ""}` +
+          ` — ${used}${quota > 0 ? `/${quota}` : ""} this month`
+      );
+      return { ...out, provider: backend };
+    } catch (e) {
+      if (e instanceof QuotaError) {
+        markExhausted(e.backend, e.message);
+        lastError = e.message;
+        continue; // try the next backend in the chain
+      }
+      lastError = e instanceof Error ? e.message : String(e);
+      console.log(`[search] ${backend} failed: ${lastError} — trying the next backend`);
+    }
+  }
+
+  return { error: `All web search backends failed. Last error: ${lastError}` };
+}
+
 export async function handleToolCall(
   ha: HomeAssistantClient,
   toolName: string,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  search?: WebSearchSettings
 ): Promise<unknown> {
   const start = Date.now();
   console.log(`[tool] ${toolName} called with: ${JSON.stringify(input)}`);
@@ -94,94 +353,11 @@ export async function handleToolCall(
         break;
       }
       case "web_search": {
-        const query = input.query as string;
-        const maxResults = (input.max_results as number | undefined) ?? 3;
-        // Provider is chosen via WEB_SEARCH_PROVIDER (default: tavily). "brave"
-        // reuses the same Brave Search key configured in HA's "Tools for Assist".
-        const provider = (process.env.WEB_SEARCH_PROVIDER ?? "tavily").toLowerCase();
-
-        try {
-          if (provider === "brave") {
-            if (!process.env.BRAVE_API_KEY) {
-              result = { error: "BRAVE_API_KEY is not set in the server environment" };
-              break;
-            }
-            const url = new URL("https://api.search.brave.com/res/v1/web/search");
-            url.searchParams.set("q", query);
-            url.searchParams.set("count", String(Math.min(maxResults, 20)));
-            const response = await fetch(url, {
-              headers: {
-                Accept: "application/json",
-                "X-Subscription-Token": process.env.BRAVE_API_KEY,
-              },
-            });
-            if (!response.ok) {
-              const text = await response.text();
-              console.log(`[tool] web_search Brave error: ${response.status} ${text}`);
-              result = { error: `Brave API error: ${response.status}` };
-              break;
-            }
-            const data = (await response.json()) as any;
-            const results = Array.isArray(data?.web?.results)
-              ? data.web.results.slice(0, maxResults).map((r: any) => ({
-                  title: r.title,
-                  url: r.url,
-                  snippet: r.description,
-                }))
-              : [];
-            // Brave web search has no synthesized answer field; leave it empty.
-            result = { answer: "", results };
-            break;
-          }
-
-          // Default: Tavily
-          if (!process.env.TAVILY_API_KEY) {
-            result = { error: "TAVILY_API_KEY is not set in the server environment" };
-            break;
-          }
-          const response = await fetch("https://api.tavily.com/search", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${process.env.TAVILY_API_KEY}`,
-            },
-            body: JSON.stringify({
-              query,
-              max_results: maxResults,
-              include_answer: true,
-              include_links: true,
-              include_raw_content: false,
-            }),
-          });
-
-          if (!response.ok) {
-            const text = await response.text();
-            console.log(`[tool] web_search Tavily error: ${response.status} ${text}`);
-            result = { error: `Tavily API error: ${response.status}` };
-            break;
-          }
-
-          const data = await response.json() as any;
-
-          const answer = data.answer ?? "";
-          const results = Array.isArray(data.results)
-            ? data.results.map((r: any) => ({
-                title: r.title,
-                url: r.url,
-                snippet: r.snippet,
-              }))
-            : [];
-
-          result = {
-            answer,
-            results,
-          };
-        } catch (e) {
-          const message = e instanceof Error ? e.message : String(e);
-          console.log(`[tool] web_search failed: ${message}`);
-          result = { error: message };
-        }
-
+        result = await runWebSearch(
+          input.query as string,
+          (input.max_results as number | undefined) ?? 3,
+          search
+        );
         break;
       }
       default:
@@ -205,6 +381,28 @@ export async function handleToolCall(
  */
 export function filterExtractedFacts(facts: ExtractedFact[]): { kept: ExtractedFact[]; skipped: { fact: ExtractedFact; reason: string }[] } {
   return filterFacts(facts);
+}
+
+/**
+ * Recall the user's facts for this turn, honouring a per-request token budget.
+ *
+ * The budget is what the user set in HA (`memory_token_limit`), falling back to
+ * the server's MEMORY_TOKEN_LIMIT. A budget of 0 means "no memory in the
+ * prompt": we skip the Shodh round-trip entirely instead of asking for zero
+ * tokens' worth of facts.
+ */
+export async function recallFacts(
+  memory: IMemoryStore,
+  userId: string,
+  message: string,
+  requestLimit: number | undefined,
+  configLimit: number
+): Promise<string[]> {
+  const limit = requestLimit ?? configLimit;
+  if (limit <= 0) return [];
+
+  const facts = await memory.getFactsWithinTokenLimit(userId, limit, message);
+  return facts.map((f) => f.content);
 }
 
 export async function extractAndStoreFacts(

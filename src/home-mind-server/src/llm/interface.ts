@@ -7,6 +7,31 @@
 
 import type { ExtractedFact, Fact } from "../memory/types.js";
 
+/**
+ * How the assistant reaches the internet.
+ *
+ * - `grounding` — the model itself searches, server-side, inside the same
+ *   request (Gemini's `googleSearch` tool). One API call, the whole prompt is
+ *   sent once: the cheapest and fastest option. Requires a Google project WITH
+ *   billing — the free tier lists Search grounding as "Not available" and
+ *   rejects such requests with 429 RESOURCE_EXHAUSTED.
+ * - `gemini_micro` — we expose our own `web_search` tool and answer it with a
+ *   separate, tiny grounded request against a SECOND (billed) key. Lets the
+ *   conversation run on a free key while search runs on a billed project, at
+ *   the cost of a second full-prompt round-trip.
+ * - `tavily` / `brave` — our own `web_search` tool backed by a third-party
+ *   search API. Google sees nothing, not even the query; results are raw
+ *   snippets rather than a synthesized answer.
+ */
+export type WebSearchMode = "grounding" | "gemini_micro" | "tavily" | "brave";
+
+export const WEB_SEARCH_MODES: readonly WebSearchMode[] = [
+  "grounding",
+  "gemini_micro",
+  "tavily",
+  "brave",
+] as const;
+
 // Chat types (LLM-agnostic)
 export interface ChatRequest {
   message: string;
@@ -21,6 +46,13 @@ export interface ChatRequest {
   /** Max web_search calls the model may make per request (HA option). 0 = no
    *  internet; default 1. Higher = more thorough but more LLM round-trips. */
   webSearchLimit?: number;
+  /** Token budget for recalled facts sent to the LLM (HA option). 0 = send no
+   *  memory at all (and skip the recall round-trip); omitted = server default
+   *  (MEMORY_TOKEN_LIMIT). More memory = better personalisation, more tokens
+   *  on every single request. */
+  memoryTokenLimit?: number;
+  /** How the assistant reaches the internet (HA option). See WebSearchMode. */
+  webSearchMode?: WebSearchMode;
 }
 
 /**

@@ -6,6 +6,7 @@ import type { IMemoryStore } from "../memory/interface.js";
 import type { IConversationStore } from "../memory/types.js";
 import type { ISttService } from "../stt/stt-service.js";
 import type { ITtsService } from "../tts/tts-service.js";
+import { usageSnapshot } from "../llm/search-usage.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -18,6 +19,8 @@ const ChatRequestSchema = z.object({
   customPrompt: z.string().optional(),
   exposedEntities: z.array(z.string()).optional(),
   webSearchLimit: z.number().int().min(0).max(5).optional(),
+  memoryTokenLimit: z.number().int().min(0).max(8000).optional(),
+  webSearchMode: z.enum(["grounding", "gemini_micro", "tavily", "brave"]).optional(),
 });
 
 const AddFactSchema = z.object({
@@ -118,6 +121,16 @@ export function createRouter(
       res.write(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`);
       res.end();
     }
+  });
+
+  /**
+   * GET /api/search/usage
+   * Monthly web-search usage per backend, with the quota each one is measured
+   * against and whether it has been taken out of rotation. Lets the HA side show
+   * "how much internet is left" without exposing any API key.
+   */
+  router.get("/search/usage", (_req: Request, res: Response) => {
+    res.json(usageSnapshot());
   });
 
   /**

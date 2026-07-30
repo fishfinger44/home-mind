@@ -67,6 +67,11 @@ function buildActiveConfig() {
   if (storedOverride.baseUrl && storedOverride.provider === "openai") {
     c.openaiBaseUrl = storedOverride.baseUrl;
   }
+  // Separate billed key for `gemini_micro` web search — independent of the
+  // provider, so a free-tier conversation key can coexist with paid search.
+  if (storedOverride.searchApiKey) {
+    c.geminiSearchApiKey = storedOverride.searchApiKey;
+  }
   return c;
 }
 
@@ -115,7 +120,8 @@ function applyLlm(
   provider: "anthropic" | "openai" | "ollama" | "gemini",
   model: string,
   apiKey?: string,
-  baseUrl?: string
+  baseUrl?: string,
+  searchApiKey?: string
 ): void {
   const sameProvider = storedOverride?.provider === provider;
   storedOverride = {
@@ -123,6 +129,9 @@ function applyLlm(
     model,
     apiKey: apiKey ?? (sameProvider ? storedOverride?.apiKey : undefined),
     baseUrl: baseUrl ?? (sameProvider ? storedOverride?.baseUrl : undefined),
+    // The search key belongs to a different project than the chat key, so it
+    // survives a provider switch — it is not tied to the selected provider.
+    searchApiKey: searchApiKey ?? storedOverride?.searchApiKey,
   };
   activeConfig = buildActiveConfig();
   currentExtractor = createFactExtractor(activeConfig);
@@ -191,6 +200,7 @@ app.use(
           : activeConfig.llmProvider === "openai" || activeConfig.llmProvider === "gemini"
             ? !!activeConfig.openaiApiKey
             : true,
+      hasSearchApiKey: !!activeConfig.geminiSearchApiKey,
     }),
     apply: applyLlm,
   })
