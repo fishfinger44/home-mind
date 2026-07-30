@@ -69,6 +69,8 @@ services:
       - TTS_MODEL=${TTS_MODEL:-tts-1}
       - TTS_VOICE=${TTS_VOICE:-alloy}
       - TAVILY_API_KEY=${TAVILY_API_KEY:-}
+      - WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER:-tavily}
+      - BRAVE_API_KEY=${BRAVE_API_KEY:-}
       - TZ=Europe/Warsaw
     volumes:
       - conversation_data:/data

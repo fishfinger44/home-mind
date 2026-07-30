@@ -51,6 +51,14 @@ When the user says "remember...", "save this...", "don't forget...", or teaches 
 
 If the user asks about something — energy, solar production, weather, security, anything — and you don't see a matching entity yet, **call search_entities with relevant keywords first**. Do NOT say "I don't have that tool" or "I can't help" without trying. Try the system word (e.g., "solar"), the brand (e.g., "solaredge"), the domain (e.g., "energy"), the room name, or the device type. Multiple short searches beat one give-up.
 
+## PLAYING MOVIES / TV SHOWS
+
+To play a film or series on the TV, call **call_service** with domain \`media_assistant\`, service \`find_and_play\`, data \`{ "title": "<name>", "year": <number, optional> }\`. This searches Plex then the user's streaming services and opens it on the Apple TV. Pass the title exactly as the user said it. Do NOT use random \`script.*\` entities to play films — always use \`media_assistant.find_and_play\`.
+
+## WEATHER FORECAST — USE THE LOCAL SOURCE, NOT WEB SEARCH
+
+For any **future/forecast** weather ("weather on Friday", "will it rain tomorrow", "temperature this weekend"), call **call_service** domain \`weather\`, service \`get_forecasts\`, with the weather entity, \`data: { "type": "daily" }\` (or \`"hourly"\`) and **\`return_response: true\`**. The forecast comes back in the tool result — accurate and free. \`get_state\` on a weather entity only gives the CURRENT conditions, NOT the forecast. Do **NOT** web_search for weather — search results are climate averages, not the real forecast.
+
 ## "TODAY'S X" AND PAST-DATA QUERIES
 
 - For **daily totals** ("how much solar today?", "energy used by miners today?", "total water use today?"): call **get_history** for that entity over today's range, not get_state. The current state of sensor.*_current_power is the **instantaneous** reading; the **daily total** lives in sensor.*_today_energy (or similar) or has to be derived from history.
@@ -127,6 +135,12 @@ When the user says "remember...", "save this...", "don't forget...", or teaches 
 
 ## ENTITY DISCOVERY — DON'T GIVE UP BEFORE SEARCHING
 If you don't see a matching entity, call **search_entities** with keywords (system word, brand, domain, room) before declining. Don't say "I don't have that tool" without trying.
+
+## PLAYING MOVIES / TV SHOWS
+To play a film/series, call_service domain \`media_assistant\` service \`find_and_play\` data \`{title, year?}\`. It searches Plex + streaming and opens it on the Apple TV. Never use random \`script.*\` for films — always \`media_assistant.find_and_play\`.
+
+## WEATHER FORECAST
+For future weather (tomorrow, Friday, weekend), call_service \`weather.get_forecasts\` with the weather entity, \`data {type: "daily"|"hourly"}\` and \`return_response: true\` — accurate + free. get_state gives only CURRENT weather. Do NOT web_search for forecasts.
 
 ## "TODAY'S X" / PAST-DATA QUERIES
 - Daily totals → **get_history** over today's range, NOT the current instantaneous sensor.
@@ -208,6 +222,30 @@ export function formatDateTimeWithOffset(): {
   return { display, iso, localMidnightIso };
 }
 
+/**
+ * Web-search policy, configurable per user (HA option "web_search_limit").
+ * 0 disables internet entirely; N>=1 caps searches per request. Kept in the
+ * STATIC prompt section so it stays cache-friendly (it only changes when the
+ * user changes the setting). Default is 1 (frugal).
+ */
+export function webSearchRule(limit: number): string {
+  if (limit <= 0) {
+    return `
+
+## WEB SEARCH — DISABLED
+Do NOT use web_search at all. Answer only from your own knowledge and Home Assistant tools. If something genuinely needs the internet, say briefly that internet lookup is turned off.`;
+  }
+  const count = limit === 1 ? "at most ONE" : `at most ${limit}`;
+  return `
+
+## WEB SEARCH — BE FRUGAL (each search costs an extra LLM round-trip)
+web_search is expensive: every call re-sends the whole prompt plus accumulated results. So:
+- Prefer your own knowledge. Only search when the answer is time-sensitive, local/current, or you genuinely don't know.
+- Use **${count}** web_search per request${limit === 1 ? " — a second only if the first returned nothing usable" : ""}. Do not exceed ${limit}.
+- Do NOT re-search with reworded queries or \`site:\` filters just to "double-check". Take the first good results and answer.
+- One short, broad query beats several narrow ones.`;
+}
+
 // Type for system prompt with caching
 export type CachedSystemPrompt = Anthropic.MessageCreateParams["system"];
 
@@ -220,7 +258,8 @@ export function buildSystemPrompt(
   isVoice: boolean = false,
   customPrompt?: string,
   deviceCheatSheet?: string,
-  homeLayout?: string
+  homeLayout?: string,
+  webSearchLimit?: number
 ): CachedSystemPrompt {
   const factsText =
     facts.length > 0 ? facts.map((f) => `- ${f}`).join("\n") : "No memories yet.";
@@ -234,6 +273,7 @@ export function buildSystemPrompt(
       : DEFAULT_IDENTITY;
 
   const instructions = isVoice ? VOICE_INSTRUCTIONS : SYSTEM_INSTRUCTIONS;
+  const searchRule = webSearchRule(webSearchLimit ?? 1);
 
   // Static content: identity + instructions + home layout + device cheat sheet.
   // Layout and the cheat sheet only refresh every ~30 min, so they belong in
@@ -241,7 +281,7 @@ export function buildSystemPrompt(
   // part of the prompt was re-charged at full price on every request.
   const layoutSection = homeLayout ? `\n\n${homeLayout}` : "";
   const deviceSection = deviceCheatSheet ? `\n\n${deviceCheatSheet}` : "";
-  const staticContent = `${identity}${instructions}${layoutSection}${deviceSection}`;
+  const staticContent = `${identity}${instructions}${searchRule}${layoutSection}${deviceSection}`;
 
   // Volatile content: per-request date/time + per-query recalled facts. Kept
   // out of the cached block so it doesn't bust the cache each turn.
@@ -280,7 +320,8 @@ export function buildSystemPromptText(
   isVoice: boolean = false,
   customPrompt?: string,
   deviceCheatSheet?: string,
-  homeLayout?: string
+  homeLayout?: string,
+  webSearchLimit?: number
 ): string {
   const factsText =
     facts.length > 0 ? facts.map((f) => `- ${f}`).join("\n") : "No memories yet.";
@@ -294,6 +335,7 @@ export function buildSystemPromptText(
       : DEFAULT_IDENTITY;
 
   const instructions = isVoice ? VOICE_INSTRUCTIONS : SYSTEM_INSTRUCTIONS;
+  const searchRule = webSearchRule(webSearchLimit ?? 1);
 
   const layoutSection = homeLayout ? `\n\n${homeLayout}` : "";
   const deviceSection = deviceCheatSheet ? `\n\n${deviceCheatSheet}` : "";
@@ -303,7 +345,7 @@ export function buildSystemPromptText(
   // device cheat sheet — these only change every ~30 min) so it forms a
   // cacheable prefix, and keep the VOLATILE bits (date/time, per-query recalled
   // facts) at the very end where they don't bust the cache.
-  return `${identity}${instructions}${layoutSection}${deviceSection}
+  return `${identity}${instructions}${searchRule}${layoutSection}${deviceSection}
 
 ## Current Context:
 - Date/Time: ${dateTimeStr}

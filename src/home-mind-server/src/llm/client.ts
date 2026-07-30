@@ -90,7 +90,7 @@ export class LLMClient implements IChatEngine {
     const homeLayout = this.topology.hasLayout()
       ? this.topology.formatSection(exposed)
       : undefined;
-    const systemPrompt = buildSystemPrompt(factContents, isVoice, customPrompt, deviceCheatSheet, homeLayout);
+    const systemPrompt = buildSystemPrompt(factContents, isVoice, customPrompt, deviceCheatSheet, homeLayout, request.webSearchLimit);
 
     // 3. Load conversation history if we have a conversationId
     const messages: Anthropic.MessageParam[] = [];

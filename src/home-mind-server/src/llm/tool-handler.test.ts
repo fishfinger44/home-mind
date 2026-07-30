@@ -63,10 +63,32 @@ describe("handleToolCall", () => {
       data: { brightness: 255 },
     });
 
-    expect(ha.callService).toHaveBeenCalledWith("light", "turn_on", "light.kitchen", {
-      brightness: 255,
-    });
+    expect(ha.callService).toHaveBeenCalledWith(
+      "light",
+      "turn_on",
+      "light.kitchen",
+      { brightness: 255 },
+      false
+    );
     expect(result).toEqual({ success: true });
+  });
+
+  it("passes return_response through for response-only services", async () => {
+    await handleToolCall(ha, "call_service", {
+      domain: "weather",
+      service: "get_forecasts",
+      entity_id: "weather.home",
+      data: { type: "daily" },
+      return_response: true,
+    });
+
+    expect(ha.callService).toHaveBeenCalledWith(
+      "weather",
+      "get_forecasts",
+      "weather.home",
+      { type: "daily" },
+      true
+    );
   });
 
   it("dispatches get_history to ha.getHistory", async () => {

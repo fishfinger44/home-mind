@@ -77,7 +77,8 @@ export async function handleToolCall(
           input.domain as string,
           input.service as string,
           input.entity_id as string | undefined,
-          input.data as Record<string, unknown> | undefined
+          input.data as Record<string, unknown> | undefined,
+          input.return_response === true
         );
         break;
 
@@ -94,14 +95,50 @@ export async function handleToolCall(
       }
       case "web_search": {
         const query = input.query as string;
-        const maxResults = (input.max_results as number | undefined) ?? 5;
-
-        if (!process.env.TAVILY_API_KEY) {
-          result = { error: "TAVILY_API_KEY is not set in the server environment" };
-          break;
-        }
+        const maxResults = (input.max_results as number | undefined) ?? 3;
+        // Provider is chosen via WEB_SEARCH_PROVIDER (default: tavily). "brave"
+        // reuses the same Brave Search key configured in HA's "Tools for Assist".
+        const provider = (process.env.WEB_SEARCH_PROVIDER ?? "tavily").toLowerCase();
 
         try {
+          if (provider === "brave") {
+            if (!process.env.BRAVE_API_KEY) {
+              result = { error: "BRAVE_API_KEY is not set in the server environment" };
+              break;
+            }
+            const url = new URL("https://api.search.brave.com/res/v1/web/search");
+            url.searchParams.set("q", query);
+            url.searchParams.set("count", String(Math.min(maxResults, 20)));
+            const response = await fetch(url, {
+              headers: {
+                Accept: "application/json",
+                "X-Subscription-Token": process.env.BRAVE_API_KEY,
+              },
+            });
+            if (!response.ok) {
+              const text = await response.text();
+              console.log(`[tool] web_search Brave error: ${response.status} ${text}`);
+              result = { error: `Brave API error: ${response.status}` };
+              break;
+            }
+            const data = (await response.json()) as any;
+            const results = Array.isArray(data?.web?.results)
+              ? data.web.results.slice(0, maxResults).map((r: any) => ({
+                  title: r.title,
+                  url: r.url,
+                  snippet: r.description,
+                }))
+              : [];
+            // Brave web search has no synthesized answer field; leave it empty.
+            result = { answer: "", results };
+            break;
+          }
+
+          // Default: Tavily
+          if (!process.env.TAVILY_API_KEY) {
+            result = { error: "TAVILY_API_KEY is not set in the server environment" };
+            break;
+          }
           const response = await fetch("https://api.tavily.com/search", {
             method: "POST",
             headers: {

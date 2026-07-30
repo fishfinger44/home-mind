@@ -18,6 +18,9 @@ export interface ChatRequest {
    *  cheat sheet are restricted to these (keeps unselected entities out of the
    *  prompt). */
   exposedEntities?: string[];
+  /** Max web_search calls the model may make per request (HA option). 0 = no
+   *  internet; default 1. Higher = more thorough but more LLM round-trips. */
+  webSearchLimit?: number;
 }
 
 /**

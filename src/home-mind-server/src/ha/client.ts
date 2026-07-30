@@ -195,14 +195,22 @@ export class HomeAssistantClient {
     domain: string,
     service: string,
     entityId?: string,
-    data?: Record<string, unknown>
-  ): Promise<EntityState[]> {
+    data?: Record<string, unknown>,
+    returnResponse = false
+  ): Promise<unknown> {
     const payload: Record<string, unknown> = { ...data };
     if (entityId) {
       payload.entity_id = entityId;
     }
 
-    const result = await this.fetch<EntityState[]>(`/api/services/${domain}/${service}`, {
+    // Services declared with SupportsResponse.ONLY (e.g. weather.get_forecasts,
+    // calendar.get_events) require ?return_response=true and reply with a
+    // { changed_states, service_response } body instead of a bare state array.
+    const path = returnResponse
+      ? `/api/services/${domain}/${service}?return_response=true`
+      : `/api/services/${domain}/${service}`;
+
+    const result = await this.fetch<unknown>(path, {
       method: "POST",
       body: JSON.stringify(payload),
     });

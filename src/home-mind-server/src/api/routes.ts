@@ -17,6 +17,7 @@ const ChatRequestSchema = z.object({
   isVoice: z.boolean().default(false),
   customPrompt: z.string().optional(),
   exposedEntities: z.array(z.string()).optional(),
+  webSearchLimit: z.number().int().min(0).max(5).optional(),
 });
 
 const AddFactSchema = z.object({
