@@ -22,6 +22,66 @@ type FunctionToolCall = OpenAI.ChatCompletionMessageFunctionToolCall;
 const OPENAI_TOOLS = toOpenAITools(TOOL_DEFINITIONS);
 
 /**
+ * Gemini's OpenAI-compat streaming sometimes concatenates two parallel tool
+ * calls into a single tool_call's arguments string — two back-to-back JSON
+ * objects like `{...}{...}` — which is not valid JSON. Left as-is it fails to
+ * parse locally AND makes the follow-up request 400 (malformed function call).
+ * This splits such a string into its individual top-level JSON objects so each
+ * becomes its own well-formed tool call. Returns [input] when it's a single
+ * value (the normal case). `parallel_tool_calls: false` does NOT prevent this —
+ * Gemini ignores it — so we sanitize defensively.
+ */
+export function splitConcatenatedJson(argsString: string): string[] {
+  const s = argsString.trim();
+  if (!s) return [s];
+  try {
+    JSON.parse(s);
+    return [s]; // already a single valid value — the common path
+  } catch {
+    // fall through to brace-scan
+  }
+  const chunks: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (c === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        chunks.push(s.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  if (
+    chunks.length > 1 &&
+    chunks.every((ch) => {
+      try {
+        JSON.parse(ch);
+        return true;
+      } catch {
+        return false;
+      }
+    })
+  ) {
+    return chunks;
+  }
+  return [s]; // couldn't cleanly split — let the normal error path handle it
+}
+
+/**
  * Hard cap on tool round-trips per user message. A model that loops (repeatedly
  * re-searching entities, retrying a tool it misreads as failing) otherwise runs
  * until the HA integration's 120s client timeout with nothing to show for it —
@@ -98,7 +158,7 @@ export class OpenAIChatEngine implements IChatEngine {
     const homeLayout = this.topology.hasLayout()
       ? this.topology.formatSection(exposed)
       : undefined;
-    const systemPrompt = buildSystemPromptText(factContents, isVoice, customPrompt, deviceCheatSheet, homeLayout);
+    const systemPrompt = buildSystemPromptText(factContents, isVoice, customPrompt, deviceCheatSheet, homeLayout, request.webSearchLimit);
 
     // Prompt-size telemetry (sections that dominate the input tokens).
     const approxTok = (s?: string) => Math.ceil((s?.length ?? 0) / 4);
@@ -265,6 +325,12 @@ export class OpenAIChatEngine implements IChatEngine {
       max_tokens: isVoice ? 500 : 2048,
       messages,
       tools: OPENAI_TOOLS,
+      // Force ONE tool call per turn. Gemini's OpenAI-compat streaming merges
+      // parallel tool calls into a single tool_call's arguments (two JSON
+      // objects concatenated → unparseable → 400 on the follow-up). This bites
+      // any command that targets multiple entities at once (e.g. two lights in
+      // one room). Sequential calls keep each tool_call well-formed.
+      parallel_tool_calls: false,
       // Keep the tool list in the request (history already references it) but
       // stop the model from issuing more calls.
       ...(disableTools ? { tool_choice: "none" as const } : {}),
@@ -337,24 +403,34 @@ export class OpenAIChatEngine implements IChatEngine {
       );
     }
 
-    // Convert accumulated tool calls to the expected format
+    // Convert accumulated tool calls to the expected format. A single accumulated
+    // entry may carry two concatenated JSON arg objects (Gemini merging parallel
+    // calls) — split those into separate, well-formed tool calls with unique ids.
     const toolCalls: FunctionToolCall[] = [];
     for (const [, tc] of [...toolCallAccumulator.entries()].sort(
       (a, b) => a[0] - b[0]
     )) {
-      toolCalls.push({
-        id: tc.id,
-        type: "function" as const,
-        function: {
-          name: tc.name,
-          arguments: tc.arguments,
-        },
-        // Echo provider-specific data (Gemini thought_signature) back so the
-        // follow-up request passes validation. Ignored by other providers.
-        ...(tc.extraContent !== undefined
-          ? { extra_content: tc.extraContent }
-          : {}),
-      } as FunctionToolCall);
+      const argChunks = splitConcatenatedJson(tc.arguments);
+      if (argChunks.length > 1) {
+        console.warn(
+          `[llm] split ${argChunks.length} concatenated tool-call args for ${tc.name}`
+        );
+      }
+      argChunks.forEach((args, i) => {
+        toolCalls.push({
+          id: argChunks.length > 1 ? `${tc.id || "call"}_${i}` : tc.id,
+          type: "function" as const,
+          function: {
+            name: tc.name,
+            arguments: args,
+          },
+          // Echo provider-specific data (Gemini thought_signature) back so the
+          // follow-up request passes validation. Ignored by other providers.
+          ...(tc.extraContent !== undefined
+            ? { extra_content: tc.extraContent }
+            : {}),
+        } as FunctionToolCall);
+      });
     }
 
     // Some OpenAI-compatible providers (notably Google Gemini's compat endpoint)

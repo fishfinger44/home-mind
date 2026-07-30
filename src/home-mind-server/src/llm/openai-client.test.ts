@@ -42,7 +42,7 @@ vi.mock("./tool-handler.js", () => ({
   extractAndStoreFacts: vi.fn().mockResolvedValue(1),
 }));
 
-import { OpenAIChatEngine } from "./openai-client.js";
+import { OpenAIChatEngine, splitConcatenatedJson } from "./openai-client.js";
 import { handleToolCall, extractAndStoreFacts } from "./tool-handler.js";
 
 describe("OpenAIChatEngine", () => {
@@ -511,5 +511,38 @@ describe("OpenAIChatEngine", () => {
       expect(result.response).toBe("Done");
       expect(result.error).toBeUndefined();
     });
+  });
+});
+
+describe("splitConcatenatedJson", () => {
+  it("returns a single valid object unchanged", () => {
+    const s = '{"entity_id":"light.a","brightness":30}';
+    expect(splitConcatenatedJson(s)).toEqual([s]);
+  });
+
+  it("splits two concatenated parallel tool-call argument objects", () => {
+    const a = '{"domain":"light","service":"turn_on","entity_id":"light.h60c1"}';
+    const b = '{"domain":"light","service":"turn_on","entity_id":"light.h60c1_2"}';
+
+    expect(splitConcatenatedJson(a + b)).toEqual([a, b]);
+  });
+
+  it("is not fooled by braces inside strings or escapes", () => {
+    const a = '{"query":"a { b } c"}';
+    const b = '{"query":"quote \\" and }"}';
+
+    expect(splitConcatenatedJson(a + b)).toEqual([a, b]);
+  });
+
+  it("keeps nested objects intact", () => {
+    const a = '{"domain":"light","data":{"rgb_color":[255,0,0]}}';
+    const b = '{"domain":"light","data":{"brightness":77}}';
+
+    expect(splitConcatenatedJson(a + b)).toEqual([a, b]);
+  });
+
+  it("returns the input as-is when it is unparseable garbage", () => {
+    expect(splitConcatenatedJson("not json")).toEqual(["not json"]);
+    expect(splitConcatenatedJson("")).toEqual([""]);
   });
 });
