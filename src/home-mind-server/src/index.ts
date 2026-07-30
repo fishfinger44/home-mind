@@ -50,12 +50,32 @@ console.log(`  ✓ Conversation store: ${config.conversationStorage}`);
 
 // Apply any persisted runtime LLM override (set via the HA integration) on top
 // of the .env config. The provider's API key still comes from .env.
-const llmOverride = loadLlmOverride();
-let activeConfig = llmOverride
-  ? { ...config, llmProvider: llmOverride.provider, llmModel: llmOverride.model }
-  : config;
-if (llmOverride) {
-  console.log(`  LLM override: ${llmOverride.provider}/${llmOverride.model} (runtime config)`);
+let storedOverride = loadLlmOverride();
+
+// Build the effective config: base .env config with the runtime override's
+// provider/model and (when set) API key + base URL layered on top. When the
+// override omits a key, the provider's key falls back to .env.
+function buildActiveConfig() {
+  if (!storedOverride) return config;
+  const c = { ...config, llmProvider: storedOverride.provider, llmModel: storedOverride.model };
+  if (storedOverride.apiKey) {
+    if (storedOverride.provider === "anthropic") c.anthropicApiKey = storedOverride.apiKey;
+    // "gemini" (native) reuses openaiApiKey as its Gemini key, like "openai".
+    else if (storedOverride.provider === "openai" || storedOverride.provider === "gemini")
+      c.openaiApiKey = storedOverride.apiKey;
+  }
+  if (storedOverride.baseUrl && storedOverride.provider === "openai") {
+    c.openaiBaseUrl = storedOverride.baseUrl;
+  }
+  return c;
+}
+
+let activeConfig = buildActiveConfig();
+if (storedOverride) {
+  console.log(
+    `  LLM override: ${storedOverride.provider}/${storedOverride.model} ` +
+    `(runtime config${storedOverride.apiKey ? ", custom key" : ""})`
+  );
 }
 
 const ha = new HomeAssistantClient(config);
@@ -86,15 +106,33 @@ const llm: IChatEngine = {
   chat: (request, onChunk) => currentEngine.chat(request, onChunk),
 };
 
-// Switch provider/model at runtime (called by POST /api/config/llm) and persist.
-function applyLlm(provider: "anthropic" | "openai" | "ollama", model: string): void {
-  activeConfig = { ...config, llmProvider: provider, llmModel: model };
+// Switch provider/model (and optionally API key / base URL) at runtime — called
+// by POST /api/config/llm — and persist. Secrets not supplied in the call are
+// kept from the previous override for the same provider (so changing only the
+// model doesn't wipe a UI-entered key); switching provider without a new key
+// falls back to the .env key for that provider.
+function applyLlm(
+  provider: "anthropic" | "openai" | "ollama" | "gemini",
+  model: string,
+  apiKey?: string,
+  baseUrl?: string
+): void {
+  const sameProvider = storedOverride?.provider === provider;
+  storedOverride = {
+    provider,
+    model,
+    apiKey: apiKey ?? (sameProvider ? storedOverride?.apiKey : undefined),
+    baseUrl: baseUrl ?? (sameProvider ? storedOverride?.baseUrl : undefined),
+  };
+  activeConfig = buildActiveConfig();
   currentExtractor = createFactExtractor(activeConfig);
   currentEngine = createChatEngine(
     activeConfig, memory, conversations, currentExtractor, ha, scanner, topology
   );
-  saveLlmOverride({ provider, model });
-  console.log(`  LLM switched -> ${provider}/${model}`);
+  saveLlmOverride(storedOverride);
+  console.log(
+    `  LLM switched -> ${provider}/${model}${apiKey ? " (custom key updated)" : ""}`
+  );
 }
 
 // Initialize STT (optional — only when STT_PROVIDER is set)
@@ -143,7 +181,17 @@ app.use((req, res, next) => {
 app.use(
   "/api",
   createLlmConfigRouter({
-    getCurrent: () => ({ provider: activeConfig.llmProvider, model: activeConfig.llmModel }),
+    getCurrent: () => ({
+      provider: activeConfig.llmProvider,
+      model: activeConfig.llmModel,
+      baseUrl: activeConfig.llmProvider === "openai" ? activeConfig.openaiBaseUrl : undefined,
+      hasApiKey:
+        activeConfig.llmProvider === "anthropic"
+          ? !!activeConfig.anthropicApiKey
+          : activeConfig.llmProvider === "openai" || activeConfig.llmProvider === "gemini"
+            ? !!activeConfig.openaiApiKey
+            : true,
+    }),
     apply: applyLlm,
   })
 );

@@ -6,8 +6,9 @@ const ConfigSchema = z
     port: z.coerce.number().default(3100),
     logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
 
-    // LLM
-    llmProvider: z.enum(["anthropic", "openai", "ollama"]).default("anthropic"),
+    // LLM ("gemini" = native Gemini API with Google Search grounding; reuses
+    // openaiApiKey as the Gemini key)
+    llmProvider: z.enum(["anthropic", "openai", "ollama", "gemini"]).default("anthropic"),
     llmModel: z.string().default("claude-haiku-4-5-20251001"),
     anthropicApiKey: z.string().optional(),
     openaiApiKey: z.string().optional(),
@@ -78,6 +79,13 @@ const ConfigSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "OPENAI_API_KEY is required when LLM_PROVIDER is openai",
+        path: ["openaiApiKey"],
+      });
+    }
+    if (data.llmProvider === "gemini" && !data.openaiApiKey) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "OPENAI_API_KEY (used as the Gemini key) is required when LLM_PROVIDER is gemini",
         path: ["openaiApiKey"],
       });
     }

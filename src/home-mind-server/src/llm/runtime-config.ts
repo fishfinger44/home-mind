@@ -8,8 +8,13 @@ import { dirname } from "node:path";
 const OVERRIDE_PATH = process.env.LLM_OVERRIDE_PATH ?? "/data/llm-override.json";
 
 export interface LlmOverride {
-  provider: "anthropic" | "openai" | "ollama";
+  provider: "anthropic" | "openai" | "ollama" | "gemini";
   model: string;
+  /** API key for the selected provider, when set from the HA options flow.
+   *  When absent, the provider's key falls back to the .env config. */
+  apiKey?: string;
+  /** Base URL override (OpenAI-compatible endpoints, e.g. Gemini). */
+  baseUrl?: string;
 }
 
 export function loadLlmOverride(): LlmOverride | null {
@@ -17,7 +22,12 @@ export function loadLlmOverride(): LlmOverride | null {
     if (!existsSync(OVERRIDE_PATH)) return null;
     const data = JSON.parse(readFileSync(OVERRIDE_PATH, "utf8"));
     if (data && typeof data.provider === "string" && typeof data.model === "string") {
-      return { provider: data.provider, model: data.model };
+      return {
+        provider: data.provider,
+        model: data.model,
+        ...(typeof data.apiKey === "string" && data.apiKey ? { apiKey: data.apiKey } : {}),
+        ...(typeof data.baseUrl === "string" && data.baseUrl ? { baseUrl: data.baseUrl } : {}),
+      };
     }
   } catch (err) {
     console.warn(`[llm-config] could not read override: ${(err as Error).message}`);
@@ -43,6 +53,12 @@ export const AVAILABLE_MODELS: Record<string, string[]> = {
     "claude-opus-4-8",
   ],
   openai: [
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-2.5-flash",
+  ],
+  // Native Gemini API + Google Search grounding (same models, native endpoint).
+  gemini: [
     "gemini-3.6-flash",
     "gemini-3.5-flash",
     "gemini-2.5-flash",

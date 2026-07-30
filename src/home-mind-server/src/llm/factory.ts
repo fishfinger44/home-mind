@@ -7,8 +7,14 @@ import { TopologyScanner } from "../ha/topology-scanner.js";
 import type { IChatEngine, IFactExtractor } from "./interface.js";
 import { LLMClient } from "./client.js";
 import { OpenAIChatEngine } from "./openai-client.js";
+import { GeminiChatEngine } from "./gemini-client.js";
 import { FactExtractor } from "../memory/extractor.js";
 import { OpenAIFactExtractor } from "../memory/openai-extractor.js";
+
+// OpenAI-compatible Gemini endpoint — used for fact extraction when the chat
+// engine is the native Gemini one (extraction needs no grounding).
+const GEMINI_COMPAT_BASE_URL =
+  "https://generativelanguage.googleapis.com/v1beta/openai/";
 
 export function createChatEngine(
   config: Config,
@@ -38,6 +44,8 @@ export function createChatEngine(
       );
     case "anthropic":
       return new LLMClient(config, memory, conversations, extractor, ha, scanner, topology);
+    case "gemini":
+      return new GeminiChatEngine(config, memory, conversations, extractor, ha, scanner, topology);
   }
 }
 
@@ -61,5 +69,15 @@ export function createFactExtractor(config: Config): IFactExtractor {
       );
     case "anthropic":
       return new FactExtractor(config.anthropicApiKey!, config.llmModel);
+    case "gemini":
+      // Native Gemini chat, but extraction runs over the OpenAI-compat endpoint
+      // (no grounding needed) reusing the same Gemini key.
+      return new OpenAIFactExtractor(
+        config.openaiApiKey!,
+        config.llmModel,
+        config.openaiBaseUrl ?? GEMINI_COMPAT_BASE_URL,
+        config.openaiResponseFormat,
+        config.openaiMaxTokens
+      );
   }
 }
