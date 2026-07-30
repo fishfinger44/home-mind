@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { handleToolCall, extractAndStoreFacts, filterExtractedFacts, normalizeTimestamp, truncateHistory, recallFacts, resolveSearchMode, groundedGeminiSearch, QuotaError } from "./tool-handler.js";
+import { handleToolCall, extractAndStoreFacts, filterExtractedFacts, normalizeTimestamp, truncateHistory, recallFacts, resolveSearchMode, groundedGeminiSearch, readBraveQuotaHeaders, QuotaError } from "./tool-handler.js";
 import type { HomeAssistantClient } from "../ha/client.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { IFactExtractor } from "./interface.js";
@@ -646,5 +646,38 @@ describe("groundedGeminiSearch", () => {
     const err = await groundedGeminiSearch("anything", "test-key").catch((e) => e);
     expect(err).not.toBeInstanceOf(QuotaError);
     expect(String(err)).toContain("Gemini search error 500");
+  });
+});
+
+describe("readBraveQuotaHeaders", () => {
+  // "50, 2000" is per-second then per-month; only the second figure is a
+  // monthly allowance, and a monthly limit of 0 states no allowance at all.
+  it("reads the monthly allowance out of Brave's rate-limit headers", async () => {
+    const { remoteQuota, resetUsageCache } = await import("./search-usage.js");
+    resetUsageCache();
+
+    readBraveQuotaHeaders(
+      new Headers({
+        "x-ratelimit-limit": "50, 2000",
+        "x-ratelimit-remaining": "49, 1993",
+      })
+    );
+
+    expect(remoteQuota("brave")).toMatchObject({
+      used: 7,
+      quota: 2000,
+      stance: "free_until_quota",
+    });
+  });
+
+  it("treats a plan with no stated monthly allowance as an unknown cost", async () => {
+    const { remoteQuota, resetUsageCache } = await import("./search-usage.js");
+    resetUsageCache();
+
+    readBraveQuotaHeaders(
+      new Headers({ "x-ratelimit-limit": "50, 0", "x-ratelimit-remaining": "49, 0" })
+    );
+
+    expect(remoteQuota("brave")?.stance).toBe("unknown");
   });
 });

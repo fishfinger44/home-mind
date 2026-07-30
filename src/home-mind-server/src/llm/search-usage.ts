@@ -1,13 +1,14 @@
 // Monthly usage accounting for the web-search backends, so the assistant can
-// move to a backend that still has quota instead of failing mid-sentence.
+// move to a backend that still has quota — and stop searching entirely rather
+// than spend money once nothing free is left.
 //
-// None of the three backends reports "requests left this month" on a normal
-// response, and their free allowances all reset monthly, so we count locally and
-// persist the counters. The count is a floor, not gospel: a request that fails
-// after the provider already charged it, or usage from another client sharing the
-// same key, will not be seen here. That is why an actual quota rejection (429 /
-// 402) also marks the backend exhausted — the observed error is more
-// trustworthy than our own tally.
+// Where the numbers come from, best source first:
+//   1. the provider itself — Tavily's /usage endpoint, Brave's x-ratelimit-*
+//      response headers. Authoritative: it counts every use of the key, not
+//      just ours, and it reflects plan changes we would never hear about.
+//   2. a quota rejection (429/402) — an observed refusal beats any tally.
+//   3. our own local count against the published allowance, as a floor for
+//      backends that report nothing (the grounded micro-call).
 //
 // Published free allowances at the time of writing (2026-07):
 //   tavily        1000 credits/month, no card required
@@ -36,11 +37,32 @@ const DEFAULT_QUOTAS: Record<SearchBackend, number> = {
   gemini_micro: envNumber("GEMINI_SEARCH_MONTHLY_QUOTA", 5000),
 };
 
+/**
+ * What using one more search on this backend would cost.
+ *
+ * - `free`            the provider states an allowance and we are inside it
+ * - `free_until_quota` free up to a published limit, BILLED past it
+ * - `unknown`         the provider tells us nothing we can trust — it may bill
+ *                     on the very next query
+ */
+export type CostStance = "free" | "free_until_quota" | "unknown";
+
+/** Numbers reported by the provider itself, which beat our local tally. */
+export interface RemoteQuota {
+  used: number;
+  /** 0 = the provider states no monthly cap (which is not the same as free). */
+  quota: number;
+  stance: CostStance;
+  checkedAt: string;
+}
+
 interface UsageFile {
   month: string;
   counts: Partial<Record<SearchBackend, number>>;
   /** Backends that answered with a quota error — skipped until the month rolls. */
   exhausted: Partial<Record<SearchBackend, string>>;
+  /** Last figures each provider reported about itself. */
+  remote?: Partial<Record<SearchBackend, RemoteQuota>>;
 }
 
 function currentMonth(now = new Date()): string {
@@ -48,7 +70,7 @@ function currentMonth(now = new Date()): string {
 }
 
 function emptyFile(): UsageFile {
-  return { month: currentMonth(), counts: {}, exhausted: {} };
+  return { month: currentMonth(), counts: {}, exhausted: {}, remote: {} };
 }
 
 let cache: UsageFile | null = null;
@@ -64,6 +86,7 @@ function load(): UsageFile {
           month: parsed.month,
           counts: parsed.counts ?? {},
           exhausted: parsed.exhausted ?? {},
+          remote: parsed.remote ?? {},
         };
       } else if (parsed?.month) {
         // New month: allowances reset, so drop the counters AND the exhausted flags.
@@ -88,12 +111,49 @@ function persist(data: UsageFile): void {
   }
 }
 
+/** The provider's own figures for a backend, when we have fetched them. */
+export function remoteQuota(backend: SearchBackend): RemoteQuota | undefined {
+  return load().remote?.[backend];
+}
+
+/**
+ * Store what a provider says about itself. These numbers replace our local
+ * tally, which only ever counted the searches THIS server made — the key may
+ * well have been used elsewhere (it usually has).
+ */
+export function setRemoteQuota(backend: SearchBackend, quota: RemoteQuota): void {
+  const data = load();
+  data.remote = { ...(data.remote ?? {}), [backend]: quota };
+  persist(data);
+}
+
+/** Milliseconds since the provider's figures were last fetched. */
+export function remoteQuotaAge(backend: SearchBackend): number {
+  const at = load().remote?.[backend]?.checkedAt;
+  return at ? Date.now() - new Date(at).getTime() : Number.POSITIVE_INFINITY;
+}
+
 export function quotaFor(backend: SearchBackend): number {
+  const remote = remoteQuota(backend);
+  if (remote && remote.quota > 0) return remote.quota;
   return DEFAULT_QUOTAS[backend];
 }
 
 export function usedThisMonth(backend: SearchBackend): number {
-  return load().counts[backend] ?? 0;
+  const remote = remoteQuota(backend);
+  // The provider counts every use of the key, including from other clients.
+  return Math.max(remote?.used ?? 0, load().counts[backend] ?? 0);
+}
+
+/**
+ * What one more search here would cost. `unknown` is the honest answer when a
+ * provider reports no monthly allowance at all: Brave's free tier was withdrawn
+ * in Feb 2026, so a key with no stated cap may simply be billing per query.
+ */
+export function costStance(backend: SearchBackend): CostStance {
+  const remote = remoteQuota(backend);
+  if (remote) return remote.stance;
+  return backend === "brave" ? "unknown" : "free_until_quota";
 }
 
 export function isExhausted(backend: SearchBackend): boolean {
@@ -101,15 +161,15 @@ export function isExhausted(backend: SearchBackend): boolean {
   if (data.exhausted[backend]) return true;
   const quota = quotaFor(backend);
   if (quota <= 0) return false; // 0 = "unmetered", never blocks
-  return (data.counts[backend] ?? 0) >= quota * THRESHOLD;
+  return usedThisMonth(backend) >= quota * THRESHOLD;
 }
 
 export function recordSearch(backend: SearchBackend): void {
   const data = load();
-  const used = (data.counts[backend] ?? 0) + 1;
-  data.counts[backend] = used;
+  data.counts[backend] = (data.counts[backend] ?? 0) + 1;
   persist(data);
 
+  const used = usedThisMonth(backend);
   const quota = quotaFor(backend);
   if (quota > 0) {
     const pct = Math.round((used / quota) * 100);
@@ -134,24 +194,41 @@ export function markExhausted(backend: SearchBackend, reason: string): void {
 
 /**
  * Order the backends to try: the preferred one first, then the rest as fallback.
- * `available` filters out backends whose key is missing. Backends over quota are
- * moved to the back rather than dropped, so a fully exhausted month still makes
- * an attempt instead of refusing to answer at all.
+ * `available` filters out backends whose key is missing.
+ *
+ * A backend that is out of quota is DROPPED, not demoted. Past the free
+ * allowance every one of these bills a card, so an empty chain — no search at
+ * all, and the assistant saying so — is the correct outcome, not a fallback
+ * worth making. Set SEARCH_ALLOW_PAID=true to spend money deliberately.
+ *
+ * The same caution applies to a backend whose cost we cannot establish: it is
+ * used only when explicitly chosen, never picked up as an automatic fallback.
  */
 export function searchChain(
   preferred: SearchBackend,
   available: (b: SearchBackend) => boolean
 ): SearchBackend[] {
+  const allowPaid = (envOrUndefined("SEARCH_ALLOW_PAID") ?? "false").toLowerCase() === "true";
   const ordered = [preferred, ...SEARCH_BACKENDS.filter((b) => b !== preferred)].filter(available);
-  const withQuota = ordered.filter((b) => !isExhausted(b));
-  const withoutQuota = ordered.filter((b) => isExhausted(b));
-  if (withQuota.length === 0 && ordered.length > 0) {
-    console.warn("[search] every configured search backend is at or over quota — trying anyway");
+
+  const usable = ordered.filter((backend) => {
+    if (isExhausted(backend) && !allowPaid) return false;
+    // "Unknown cost" is fine when the user picked this backend themselves —
+    // that is a deliberate choice. Sliding onto it automatically is not.
+    if (costStance(backend) === "unknown" && backend !== preferred && !allowPaid) return false;
+    return true;
+  });
+
+  if (usable.length === 0 && ordered.length > 0) {
+    console.warn(
+      "[search] no backend has free allowance left this month — refusing to search " +
+        "(set SEARCH_ALLOW_PAID=true to use a paid one)"
+    );
   }
-  return [...withQuota, ...withoutQuota];
+  return usable;
 }
 
-/** Snapshot for GET /api/search/usage (and, later, an HA sensor). */
+/** Snapshot for GET /api/search/usage and the HA sensors. */
 export function usageSnapshot(): {
   month: string;
   backends: {
@@ -160,6 +237,10 @@ export function usageSnapshot(): {
     quota: number;
     remaining: number;
     exhausted: boolean;
+    /** Whether the figures come from the provider or from our own tally. */
+    source: "provider" | "local";
+    cost: CostStance;
+    checkedAt?: string;
     exhaustedAt?: string;
   }[];
 } {
@@ -167,7 +248,8 @@ export function usageSnapshot(): {
   return {
     month: data.month,
     backends: SEARCH_BACKENDS.map((b) => {
-      const used = data.counts[b] ?? 0;
+      const remote = remoteQuota(b);
+      const used = usedThisMonth(b);
       const quota = quotaFor(b);
       return {
         backend: b,
@@ -175,6 +257,9 @@ export function usageSnapshot(): {
         quota,
         remaining: quota > 0 ? Math.max(quota - used, 0) : -1,
         exhausted: isExhausted(b),
+        source: remote ? ("provider" as const) : ("local" as const),
+        cost: costStance(b),
+        ...(remote ? { checkedAt: remote.checkedAt } : {}),
         ...(data.exhausted[b] ? { exhaustedAt: data.exhausted[b] } : {}),
       };
     }),

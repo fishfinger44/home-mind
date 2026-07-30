@@ -26,6 +26,68 @@ afterEach(() => {
   delete process.env.TAVILY_MONTHLY_QUOTA;
   delete process.env.BRAVE_MONTHLY_QUOTA;
   delete process.env.GEMINI_SEARCH_MONTHLY_QUOTA;
+  delete process.env.SEARCH_ALLOW_PAID;
+});
+
+describe("not spending money", () => {
+  it("drops an exhausted backend instead of trying it anyway", async () => {
+    const m = await freshModule();
+    m.markExhausted("tavily", "HTTP 429");
+
+    // Only Tavily is configured, and it is out — so there is nothing to try.
+    const chain = m.searchChain("tavily", (b) => b === "tavily");
+
+    expect(chain).toEqual([]);
+  });
+
+  it("keeps searching on a backend that still has free allowance", async () => {
+    const m = await freshModule();
+    m.markExhausted("tavily", "HTTP 429");
+
+    const chain = m.searchChain("tavily", (b) => b === "tavily" || b === "gemini_micro");
+
+    expect(chain).toEqual(["gemini_micro"]);
+  });
+
+  it("uses an exhausted backend only when paid searches are allowed", async () => {
+    const m = await freshModule({ SEARCH_ALLOW_PAID: "true" });
+    m.markExhausted("tavily", "HTTP 429");
+
+    expect(m.searchChain("tavily", (b) => b === "tavily")).toEqual(["tavily"]);
+  });
+
+  it("never slides onto a backend whose cost it cannot establish", async () => {
+    const m = await freshModule();
+    // Brave with no stated monthly allowance: possibly billed per query.
+    m.setRemoteQuota("brave", {
+      used: 0,
+      quota: 0,
+      stance: "unknown",
+      checkedAt: new Date().toISOString(),
+    });
+
+    // As a fallback it is skipped...
+    expect(m.searchChain("tavily", () => true)).toEqual(["tavily", "gemini_micro"]);
+    // ...but choosing it explicitly is the user's own decision to make.
+    expect(m.searchChain("brave", () => true)[0]).toBe("brave");
+  });
+
+  it("believes the provider's own count over its local tally", async () => {
+    const m = await freshModule();
+    m.recordSearch("tavily"); // this server has seen exactly one
+
+    m.setRemoteQuota("tavily", {
+      used: 45, // ...but the key was used elsewhere too
+      quota: 1000,
+      stance: "free_until_quota",
+      checkedAt: new Date().toISOString(),
+    });
+
+    expect(m.usedThisMonth("tavily")).toBe(45);
+    expect(m.quotaFor("tavily")).toBe(1000);
+    const snapshot = m.usageSnapshot().backends.find((b) => b.backend === "tavily");
+    expect(snapshot).toMatchObject({ used: 45, remaining: 955, source: "provider" });
+  });
 });
 
 describe("search usage accounting", () => {
@@ -76,11 +138,9 @@ describe("searchChain", () => {
   it("puts the preferred backend first and keeps the others as fallback", async () => {
     const m = await freshModule();
 
-    expect(m.searchChain("tavily", () => true)).toEqual([
-      "tavily",
-      "gemini_micro",
-      "brave",
-    ]);
+    // Brave is missing on purpose: with nothing known about its plan it counts
+    // as an unknown cost, which is not something to fall onto by accident.
+    expect(m.searchChain("tavily", () => true)).toEqual(["tavily", "gemini_micro"]);
   });
 
   it("drops backends whose key is not configured", async () => {
@@ -92,17 +152,13 @@ describe("searchChain", () => {
     ]);
   });
 
-  it("moves a spent backend behind the ones that still have quota", async () => {
+  it("takes a spent backend out rather than demoting it", async () => {
     const m = await freshModule();
     m.markExhausted("tavily", "HTTP 429");
 
-    // Still present — a fully spent month should attempt something rather than
-    // refuse — but only after the backends that can still serve.
-    expect(m.searchChain("tavily", () => true)).toEqual([
-      "gemini_micro",
-      "brave",
-      "tavily",
-    ]);
+    // Past its allowance Tavily bills, so it is gone for the month — only a
+    // backend with free allowance left is offered.
+    expect(m.searchChain("tavily", () => true)).toEqual(["gemini_micro"]);
   });
 
   it("returns nothing when no backend is configured at all", async () => {

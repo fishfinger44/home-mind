@@ -6,10 +6,13 @@ import { filterFacts } from "../memory/fact-patterns.js";
 import { envOrUndefined } from "../env.js";
 import {
   type SearchBackend,
+  SEARCH_BACKENDS,
   markExhausted,
   quotaFor,
   recordSearch,
+  remoteQuotaAge,
   searchChain,
+  setRemoteQuota,
   usedThisMonth,
 } from "./search-usage.js";
 
@@ -174,6 +177,81 @@ export interface SearchResult {
   queries?: string[];
 }
 
+/** How long the provider's own figures are trusted before we ask again. */
+const QUOTA_REFRESH_MS = 60 * 60 * 1000;
+
+/**
+ * Ask Tavily what it has actually charged this key.
+ *
+ * Free to call (it is an account endpoint, not a search) and worth far more
+ * than our local tally: it counts searches made from anywhere, and it shows
+ * `paygo_usage` — money already spent past the free plan. Any pay-as-you-go
+ * usage takes the backend out immediately; the point of this accounting is to
+ * not spend, so the first cent is the signal, not a threshold to tune.
+ */
+export async function refreshTavilyQuota(): Promise<void> {
+  if (!process.env.TAVILY_API_KEY) return;
+  if (remoteQuotaAge("tavily") < QUOTA_REFRESH_MS) return;
+
+  try {
+    const response = await fetch("https://api.tavily.com/usage", {
+      headers: { Authorization: `Bearer ${process.env.TAVILY_API_KEY}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return;
+
+    const data = (await response.json()) as any;
+    const account = data?.account ?? {};
+    const used = Number(account.plan_usage ?? 0);
+    const quota = Number(account.plan_limit ?? 0);
+    const paygo = Number(account.paygo_usage ?? 0);
+
+    setRemoteQuota("tavily", {
+      used,
+      quota,
+      stance: "free_until_quota",
+      checkedAt: new Date().toISOString(),
+    });
+    console.log(
+      `[search] tavily reports ${used}/${quota || "?"} used this month ` +
+        `(plan ${account.current_plan ?? "?"})`
+    );
+    if (paygo > 0) {
+      markExhausted("tavily", `pay-as-you-go usage has started (${paygo})`);
+    }
+  } catch (err) {
+    // A quota probe must never break the search that follows it.
+    console.warn(`[search] could not read Tavily usage: ${(err as Error).message}`);
+  }
+}
+
+/**
+ * Brave states its limits on every response: `x-ratelimit-limit: 50, 2000` is
+ * per-second and per-month, with `x-ratelimit-remaining` alongside. A monthly
+ * limit of 0 means the plan has no stated allowance — which since the free tier
+ * was withdrawn is more likely "billed per query" than "unlimited", so it is
+ * recorded as an unknown cost rather than a comfortable zero.
+ */
+export function readBraveQuotaHeaders(headers: Headers): void {
+  const monthly = (name: string): number | undefined => {
+    const parts = headers.get(name)?.split(",");
+    if (!parts || parts.length < 2) return undefined;
+    const value = Number(parts[1].trim());
+    return Number.isFinite(value) ? value : undefined;
+  };
+
+  const limit = monthly("x-ratelimit-limit");
+  const remaining = monthly("x-ratelimit-remaining");
+  if (limit === undefined) return;
+
+  setRemoteQuota("brave", {
+    used: remaining === undefined ? 0 : Math.max(limit - remaining, 0),
+    quota: limit,
+    stance: limit > 0 ? "free_until_quota" : "unknown",
+    checkedAt: new Date().toISOString(),
+  });
+}
+
 async function searchTavily(query: string, maxResults: number): Promise<SearchResult> {
   const response = await fetch("https://api.tavily.com/search", {
     method: "POST",
@@ -219,6 +297,9 @@ async function searchBrave(query: string, maxResults: number): Promise<SearchRes
       "X-Subscription-Token": process.env.BRAVE_API_KEY as string,
     },
   });
+
+  // Brave reports its allowance on every response, including refusals.
+  readBraveQuotaHeaders(response.headers);
 
   if (!response.ok) {
     const text = await response.text();
@@ -267,12 +348,32 @@ export async function runWebSearch(
     Boolean(searchKey)
   );
 
+  // Ask the provider what it has actually charged before deciding anything —
+  // our own tally only ever saw the searches this server made.
+  if (backendAvailable("tavily", searchKey)) await refreshTavilyQuota();
+
+  const configured = SEARCH_BACKENDS.filter((b) => backendAvailable(b, searchKey));
   const chain = searchChain(preferred, (b) => backendAvailable(b, searchKey));
+
   if (chain.length === 0) {
+    if (configured.length === 0) {
+      return {
+        error:
+          "No web search backend is configured — set TAVILY_API_KEY, BRAVE_API_KEY, " +
+          "or a search API key for grounded micro-calls",
+      };
+    }
+    // Keys exist, but using them now would cost money. Say so in words the
+    // model can pass on, rather than searching anyway and billing the card.
+    const state = configured
+      .map((b) => `${b} ${usedThisMonth(b)}/${quotaFor(b) || "?"}`)
+      .join(", ");
+    console.warn(`[search] blocked — no free allowance left (${state})`);
     return {
       error:
-        "No web search backend is configured — set TAVILY_API_KEY, BRAVE_API_KEY, " +
-        "or a search API key for grounded micro-calls",
+        "Web search is unavailable: this month's free search allowance is used up " +
+        `(${state}), and paid searches are switched off. Answer from what you already ` +
+        "know and tell the user the free allowance has run out — it resets next month.",
     };
   }
 

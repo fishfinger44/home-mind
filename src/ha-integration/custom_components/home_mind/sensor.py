@@ -172,7 +172,16 @@ class SearchQuotaSensor(CoordinatorEntity[SearchUsageCoordinator], SensorEntity)
             "quota": quota,
             "exhausted": data.get("exhausted", False),
             "month": self.coordinator.data.get("month"),
+            # "provider" means the figure came from the search service itself and
+            # counts every use of the key; "local" means it is only what this
+            # server has seen, so treat it as a floor.
+            "source": data.get("source", "local"),
+            # free_until_quota = free up to the limit above, billed past it;
+            # unknown = the provider states no allowance, so it may bill at once.
+            "cost": data.get("cost"),
         }
+        if checked_at := data.get("checkedAt"):
+            attributes["checked_at"] = checked_at
         if quota > 0:
             attributes["used_percent"] = round(used / quota * 100)
         if exhausted_at := data.get("exhaustedAt"):
