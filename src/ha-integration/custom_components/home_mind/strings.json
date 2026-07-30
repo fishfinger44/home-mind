@@ -3,15 +3,21 @@
     "step": {
       "user": {
         "title": "Configure Home Mind",
-        "description": "Enter the URL of your Home Mind API server.",
+        "description": "Enter the URL of your Home Mind API server. Don't have a server? Get a hosted one at [{cloud_url}]({cloud_url}).",
         "data": {
           "api_url": "API URL",
+          "api_token": "API Token (optional)",
           "user_id": "Default User ID (optional)"
+        },
+        "data_description": {
+          "api_token": "Required for Home Mind Cloud. Leave empty for self-hosted setups without authentication.",
+          "user_id": "Namespaces memory per person. Used when a request carries no Home Assistant user context — e.g. a voice satellite."
         }
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to the Home Mind API. Make sure it's running and accessible.",
+      "invalid_auth": "Invalid API token. Check your token on the Home Mind Cloud dashboard.",
       "unknown": "Unexpected error occurred."
     },
     "abort": {
@@ -21,13 +27,37 @@
   "options": {
     "step": {
       "init": {
-        "title": "Home Mind Options",
-        "description": "Configure optional settings for Home Mind.",
+        "title": "Home Mind — model & options",
+        "description": "Choose the AI provider and set the options. Model and API key come in the next step.",
         "data": {
-          "custom_prompt": "Custom system prompt"
+          "provider": "AI provider",
+          "custom_prompt": "Custom prompt (personality / rules)",
+          "prefer_local": "Try simple commands locally first (free, 0 tokens)",
+          "web_search_limit": "Web searches per request",
+          "memory_token_limit": "Memory sent to the AI (tokens)",
+          "web_search_mode": "How the assistant searches the web"
         },
         "data_description": {
-          "custom_prompt": "Custom instructions for the AI personality and behavior. Leave empty to use the default."
+          "prefer_local": "Simple commands (\"turn on the living room light\", \"what time is it\") are answered by Home Assistant's built-in agent — locally, nothing leaves the house, no cost. Only what HA does not recognise is passed to the AI.",
+          "web_search_limit": "Every search is another full LLM round-trip carrying the whole prompt, which makes it the most expensive tool. 0 = internet off (the agent says so instead of guessing), 1 = frugal (recommended), higher = more thorough but pricier.",
+          "memory_token_limit": "Token budget for facts about you and your home, recalled from the memory store and attached to EVERY request. More memory = the assistant knows you better and asks less, but each request costs more and is slower. 1500 is roughly 50-60 facts. 0 = no memory: the assistant knows nothing from earlier conversations and the server skips the memory lookup entirely (cheapest).",
+          "custom_prompt": "Replaces the default personality line. Leave empty to keep the default.",
+          "web_search_mode": "grounding — the model searches inside its own request: one API call, cheapest and fastest, but it needs a Google project WITH billing (the free tier rejects it). gemini_micro — search runs as a small separate request on a second, billed key, so the conversation itself can stay on a free key; costs one extra round-trip. tavily / brave — a third-party search API; Google sees nothing, but you get raw snippets instead of a written answer. Whichever you pick, the server counts usage per backend and switches to one that still has monthly quota when yours runs out."
+        }
+      },
+      "model": {
+        "title": "Model & API key",
+        "description": "Pick the model for {provider}. {key_hint}",
+        "data": {
+          "model": "Model",
+          "api_key": "API key ({provider})",
+          "base_url": "API base URL (OpenAI-compatible endpoint)",
+          "search_api_key": "Search API key (billed Google project, optional)"
+        },
+        "data_description": {
+          "api_key": "Leave blank to keep the key already stored on the server. Paste a new one to switch to another Google project (e.g. a free-tier one) or to rotate the key. The key is stored by the Home Mind server, not by Home Assistant.",
+          "base_url": "Only for the OpenAI-compatible provider. Keep the suggested value unless you know you need a different endpoint.",
+          "search_api_key": "Only needed for the gemini_micro search mode. Key of a Google project WITH billing — it pays for search only (5000 grounded queries/month are included), while the conversation keeps running on the key above. Leave blank to keep the stored one."
         }
       }
     }
@@ -36,6 +66,16 @@
     "conversation": {
       "home_mind": {
         "name": "Home Mind"
+      }
+    }
+  },
+  "selector": {
+    "web_search_mode": {
+      "options": {
+        "grounding": "Integrated Google Search (paid Gemini key, cheapest)",
+        "gemini_micro": "Micro-call to Google Search (second, billed key)",
+        "tavily": "Tavily",
+        "brave": "Brave Search"
       }
     }
   }
