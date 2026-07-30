@@ -71,6 +71,9 @@ services:
       - TAVILY_API_KEY=${TAVILY_API_KEY:-}
       - WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER:-tavily}
       - BRAVE_API_KEY=${BRAVE_API_KEY:-}
+      # true = the Brave account is capped at its free credit in Brave's
+      # dashboard, so running out refuses instead of charging
+      - BRAVE_CREDIT_ONLY=${BRAVE_CREDIT_ONLY:-false}
       # How the assistant reaches the internet: grounding | gemini_micro | tavily | brave
       - WEB_SEARCH_MODE=${WEB_SEARCH_MODE:-}
       # Key of a BILLED Google project, used only by gemini_micro search

@@ -29,6 +29,7 @@ afterEach(() => {
   delete process.env.SEARCH_ALLOW_PAID;
   delete process.env.BRAVE_FREE_CREDIT_USD;
   delete process.env.BRAVE_PRICE_PER_1K_USD;
+  delete process.env.BRAVE_CREDIT_ONLY;
 });
 
 describe("not spending money", () => {
@@ -69,6 +70,20 @@ describe("not spending money", () => {
     expect(chain).toEqual(["searxng"]);
     expect(m.isExhausted("searxng")).toBe(false);
     expect(m.costStance("searxng")).toBe("free");
+  });
+
+  it("uses a credit-capped Brave account until it actually refuses", async () => {
+    const m = await freshModule({ BRAVE_CREDIT_ONLY: "true", BRAVE_MONTHLY_QUOTA: "10" });
+    for (let i = 0; i < 10; i++) m.recordSearch("brave");
+
+    // Past the estimated allowance, but the account cannot overspend — stopping
+    // here would only waste credit that Brave will hand out anyway.
+    expect(m.isExhausted("brave")).toBe(false);
+    expect(m.costStance("brave")).toBe("free");
+
+    // An actual refusal is different: that is the provider saying no.
+    m.markExhausted("brave", "HTTP 402");
+    expect(m.isExhausted("brave")).toBe(true);
   });
 
   it("derives Brave's allowance from the renewable credit it grants", async () => {
@@ -163,8 +178,8 @@ describe("searchChain", () => {
     expect(m.searchChain("tavily", () => true)).toEqual([
       "tavily",
       "gemini_micro",
-      "searxng",
       "brave",
+      "searxng",
     ]);
   });
 
@@ -184,7 +199,7 @@ describe("searchChain", () => {
 
     // Past its allowance Tavily bills, so it is gone for the month — only
     // backends with free allowance left are offered.
-    expect(m.searchChain("tavily", () => true)).toEqual(["gemini_micro", "searxng", "brave"]);
+    expect(m.searchChain("tavily", () => true)).toEqual(["gemini_micro", "brave", "searxng"]);
   });
 
   it("returns nothing when no backend is configured at all", async () => {

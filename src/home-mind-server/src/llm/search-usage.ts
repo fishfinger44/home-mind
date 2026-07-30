@@ -24,15 +24,16 @@ import { dirname } from "node:path";
 
 export type SearchBackend = "gemini_micro" | "tavily" | "searxng" | "brave";
 
-// Fallback order when the preferred backend cannot answer. The self-hosted
-// metasearch instance sits ahead of Brave deliberately: it costs nothing and
-// asks nobody's permission, so it is the right place to land when the metered
-// backends are spent.
+// Fallback order when the preferred backend cannot answer: the free-but-finite
+// allowances first, best quality first, and the self-hosted instance last as the
+// floor. It is the only one that cannot run out, so anything placed after it
+// would never be reached — and any free allowance left unspent above it is
+// simply wasted.
 export const SEARCH_BACKENDS: readonly SearchBackend[] = [
   "gemini_micro",
   "tavily",
-  "searxng",
   "brave",
+  "searxng",
 ];
 
 const USAGE_PATH = envOrUndefined("SEARCH_USAGE_PATH") ?? "/data/search-usage.json";
@@ -47,6 +48,18 @@ const THRESHOLD = envNumber("SEARCH_QUOTA_THRESHOLD", 0.9);
  * estimate (the rate depends on the plan), which is why an actual 402/429 still
  * overrides it.
  */
+/**
+ * Whether the Brave account is set to spend free credit only.
+ *
+ * That setting is made in Brave's dashboard, and it changes what running out
+ * means: the API starts refusing instead of charging. So there is nothing to
+ * protect against by stopping early — the backend can be used right up to the
+ * provider's own refusal.
+ */
+function braveCreditOnly(): boolean {
+  return (envOrUndefined("BRAVE_CREDIT_ONLY") ?? "false").toLowerCase() === "true";
+}
+
 function braveQuotaFromCredit(): number {
   const credit = envNumber("BRAVE_FREE_CREDIT_USD", 5);
   const pricePerThousand = envNumber("BRAVE_PRICE_PER_1K_USD", 5);
@@ -178,6 +191,8 @@ export function usedThisMonth(backend: SearchBackend): number {
 export function costStance(backend: SearchBackend): CostStance {
   // Our own instance on our own machine — the one backend that can never bill.
   if (backend === "searxng") return "free";
+  // Capped at free credit in Brave's dashboard: it refuses rather than charges.
+  if (backend === "brave" && braveCreditOnly()) return "free";
   const remote = remoteQuota(backend);
   if (remote) return remote.stance;
   return "free_until_quota";
@@ -186,6 +201,10 @@ export function costStance(backend: SearchBackend): CostStance {
 export function isExhausted(backend: SearchBackend): boolean {
   const data = load();
   if (data.exhausted[backend]) return true;
+  // An account that cannot overspend needs no estimated cut-off: the derived
+  // quota is a guess, the provider's refusal is not, so wait for the refusal
+  // rather than leaving free credit unused.
+  if (backend === "brave" && braveCreditOnly()) return false;
   const quota = quotaFor(backend);
   if (quota <= 0) return false; // 0 = "unmetered", never blocks
   return usedThisMonth(backend) >= quota * THRESHOLD;
