@@ -567,6 +567,23 @@ describe("resolveSearchMode", () => {
 describe("groundedGeminiSearch", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    delete process.env.GEMINI_SEARCH_MODEL;
+  });
+
+  // Docker Compose sets unconfigured variables to an empty string, which `??`
+  // happily keeps — that built a URL with no model in it and came back as a
+  // bare 404 that looked like a dead API key.
+  it("falls back to the default model when the env var is set but blank", async () => {
+    process.env.GEMINI_SEARCH_MODEL = "";
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ candidates: [{ content: { parts: [{ text: "hi" }] } }] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await groundedGeminiSearch("anything", "test-key");
+
+    expect(fetchMock.mock.calls[0][0]).toContain("/models/gemini-3.6-flash:generateContent");
   });
 
   it("returns the answer, its sources and the queries the model ran", async () => {

@@ -4,8 +4,9 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { envOrUndefined } from "../env.js";
 
-const OVERRIDE_PATH = process.env.LLM_OVERRIDE_PATH ?? "/data/llm-override.json";
+const OVERRIDE_PATH = envOrUndefined("LLM_OVERRIDE_PATH") ?? "/data/llm-override.json";
 
 export interface LlmOverride {
   provider: "anthropic" | "openai" | "ollama" | "gemini";

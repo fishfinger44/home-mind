@@ -3,6 +3,7 @@ import type { IMemoryStore } from "../memory/interface.js";
 import type { IFactExtractor, WebSearchMode } from "./interface.js";
 import type { ExtractedFact } from "../memory/types.js";
 import { filterFacts } from "../memory/fact-patterns.js";
+import { envOrUndefined } from "../env.js";
 import {
   type SearchBackend,
   markExhausted,
@@ -99,8 +100,9 @@ export async function groundedGeminiSearch(
   query: string,
   apiKey: string
 ): Promise<{ answer: string; results: { title: string; url: string }[]; queries: string[] }> {
-  const model = process.env.GEMINI_SEARCH_MODEL ?? "gemini-3.6-flash";
-  const base = process.env.GEMINI_NATIVE_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta";
+  const model = envOrUndefined("GEMINI_SEARCH_MODEL") ?? "gemini-3.6-flash";
+  const base =
+    envOrUndefined("GEMINI_NATIVE_BASE_URL") ?? "https://generativelanguage.googleapis.com/v1beta";
 
   const response = await fetch(`${base}/models/${model}:generateContent`, {
     method: "POST",
@@ -257,11 +259,11 @@ export async function runWebSearch(
   maxResults: number,
   search?: WebSearchSettings
 ): Promise<SearchResult | { error: string }> {
-  const searchKey = search?.searchApiKey || process.env.GEMINI_SEARCH_API_KEY || "";
+  const searchKey = search?.searchApiKey || envOrUndefined("GEMINI_SEARCH_API_KEY") || "";
   const preferred = resolveSearchMode(
     search?.mode ??
-      (process.env.WEB_SEARCH_MODE as WebSearchMode | undefined) ??
-      (process.env.WEB_SEARCH_PROVIDER as WebSearchMode | undefined),
+      (envOrUndefined("WEB_SEARCH_MODE") as WebSearchMode | undefined) ??
+      (envOrUndefined("WEB_SEARCH_PROVIDER") as WebSearchMode | undefined),
     Boolean(searchKey)
   );
 

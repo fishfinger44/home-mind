@@ -18,21 +18,22 @@
 // Override any of them with the *_MONTHLY_QUOTA env vars.
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { envNumber, envOrUndefined } from "../env.js";
 import { dirname } from "node:path";
 
 export type SearchBackend = "gemini_micro" | "tavily" | "brave";
 
 export const SEARCH_BACKENDS: readonly SearchBackend[] = ["gemini_micro", "tavily", "brave"];
 
-const USAGE_PATH = process.env.SEARCH_USAGE_PATH ?? "/data/search-usage.json";
+const USAGE_PATH = envOrUndefined("SEARCH_USAGE_PATH") ?? "/data/search-usage.json";
 
 /** Fraction of the monthly quota at which we stop choosing a backend. */
-const THRESHOLD = Number(process.env.SEARCH_QUOTA_THRESHOLD ?? "0.9");
+const THRESHOLD = envNumber("SEARCH_QUOTA_THRESHOLD", 0.9);
 
 const DEFAULT_QUOTAS: Record<SearchBackend, number> = {
-  tavily: Number(process.env.TAVILY_MONTHLY_QUOTA ?? "1000"),
-  brave: Number(process.env.BRAVE_MONTHLY_QUOTA ?? "2000"),
-  gemini_micro: Number(process.env.GEMINI_SEARCH_MONTHLY_QUOTA ?? "5000"),
+  tavily: envNumber("TAVILY_MONTHLY_QUOTA", 1000),
+  brave: envNumber("BRAVE_MONTHLY_QUOTA", 2000),
+  gemini_micro: envNumber("GEMINI_SEARCH_MONTHLY_QUOTA", 5000),
 };
 
 interface UsageFile {

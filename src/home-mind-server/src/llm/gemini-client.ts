@@ -26,9 +26,10 @@ import type {
   IChatEngine,
   IFactExtractor,
 } from "./interface.js";
+import { envOrUndefined } from "../env.js";
 
 const NATIVE_BASE =
-  process.env.GEMINI_NATIVE_BASE_URL ??
+  envOrUndefined("GEMINI_NATIVE_BASE_URL") ??
   "https://generativelanguage.googleapis.com/v1beta";
 
 const MAX_TOOL_ITERATIONS = 8;
