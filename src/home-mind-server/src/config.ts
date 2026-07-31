@@ -23,6 +23,11 @@ const ConfigSchema = z
 
     // Ollama
     ollamaBaseUrl: z.string().url().optional(),
+    // VRAM of the card Ollama runs on, GB. Purely informational: it lets the
+    // model picker say whether a model fits instead of only how big it is.
+    // Nothing detects this — a model that does not fit still runs, just partly
+    // on the CPU and several times slower, which is the trap worth flagging.
+    ollamaVramGb: z.coerce.number().positive().optional(),
 
     // Home Assistant
     haUrl: z.string().url("HA_URL must be a valid URL"),
@@ -119,6 +124,7 @@ export function loadConfig(): Config {
     openaiResponseFormat: emptyToUndefined(process.env.OPENAI_RESPONSE_FORMAT),
     openaiMaxTokens: emptyToUndefined(process.env.OPENAI_MAX_TOKENS),
     ollamaBaseUrl: emptyToUndefined(process.env.OLLAMA_BASE_URL),
+    ollamaVramGb: emptyToUndefined(process.env.OLLAMA_VRAM_GB),
     haUrl: process.env.HA_URL,
     haToken: process.env.HA_TOKEN,
     haSkipTlsVerify: process.env.HA_SKIP_TLS_VERIFY,

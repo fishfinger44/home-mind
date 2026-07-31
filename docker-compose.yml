@@ -25,10 +25,22 @@ services:
       - ./data-piper:/data
     network_mode: host
     command: [
-      "--voice", "pl_PL-darkman-medium",
+      "--voice", "pl_PL-jarvis_wg_glos-medium",
       "--data-dir", "/data",
       "--download-dir", "/data"
     ]
+    # Piper laduje model glosu dopiero przy pierwszym zapytaniu (~1,8 s) i
+    # trzyma go potem w pamieci. Bez rozgrzewki pierwsze zdanie asystenta po
+    # kazdym starcie bylo o ~1,7 s wolniejsze. Zrobione jako healthcheck, a nie
+    # hook post_start, bo healthcheck dziala tez wtedy, gdy kontener wstaje bez
+    # udzialu compose (restart hosta, `docker restart`, restart: unless-stopped).
+    healthcheck:
+      test: ["CMD", "python3", "/data/warmup.py"]
+      start_period: 60s
+      start_interval: 5s
+      interval: 10m
+      timeout: 30s
+      retries: 3
 
   # Home Mind Server - API server
   server:
@@ -46,7 +58,12 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
+      # Domyslnie kontener ollama ponizej. Server ma network_mode: host, wiec
+      # siega po opublikowany port loopbacka, nie po nazwe uslugi.
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://127.0.0.1:11434/v1}
+      # Ile VRAM ma karta - tylko po to, by wybor modelu w HA umial powiedziec
+      # "zmiesci sie" zamiast samego rozmiaru. Nie zmienia niczego w dzialaniu.
+      - OLLAMA_VRAM_GB=${OLLAMA_VRAM_GB:-}
       - HA_URL=${HA_URL}
       - HA_TOKEN=${HA_TOKEN}
       - HA_SKIP_TLS_VERIFY=${HA_SKIP_TLS_VERIFY:-false}
@@ -86,6 +103,32 @@ services:
     volumes:
       - conversation_data:/data
 
+  # Ollama - lokalna inferencja LLM na GPU tej maszyny. Wystawione tylko na
+  # loopback: to backend dla home-mind-server (network_mode: host, wiec widzi
+  # 127.0.0.1), a nie usluga dla sieci domowej.
+  #
+  # OLLAMA_KEEP_ALIVE trzyma model w VRAM miedzy poleceniami. Bez tego kazde
+  # pytanie po dluzszej przerwie placi kilka sekund za ponowne zaladowanie wag z
+  # dysku - przy asystencie domowym, ktory jest wolany zrywami, to dominujacy
+  # koszt. Cena: model okupuje VRAM takze wtedy, gdy nikt nie pyta.
+  ollama:
+    image: ollama/ollama:latest
+    container_name: home-mind-ollama
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-30m}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
   # SearXNG - self-hosted metasearch, so the assistant can reach the internet
   # without an API key, an account, or a monthly allowance to run out of.
   # Published on loopback only: it is an internal API, not a public instance.
@@ -123,6 +166,8 @@ services:
 
 
 volumes:
+  ollama_models:
+    driver: local
   shodh_data:
     driver: local
   conversation_data:

@@ -67,6 +67,12 @@ function buildActiveConfig() {
   if (storedOverride.baseUrl && storedOverride.provider === "openai") {
     c.openaiBaseUrl = storedOverride.baseUrl;
   }
+  // Ollama's endpoint is a different field, and it is the one setting that
+  // cannot be left at its default in a container: "localhost" there is the
+  // server itself, not the machine running Ollama.
+  if (storedOverride.baseUrl && storedOverride.provider === "ollama") {
+    c.ollamaBaseUrl = storedOverride.baseUrl;
+  }
   // Separate billed key for `gemini_micro` web search — independent of the
   // provider, so a free-tier conversation key can coexist with paid search.
   if (storedOverride.searchApiKey) {
@@ -123,12 +129,21 @@ function applyLlm(
   baseUrl?: string,
   searchApiKey?: string
 ): void {
-  const sameProvider = storedOverride?.provider === provider;
+  // Keys and base URLs are remembered per provider, so switching away and back
+  // — including a trip through a local model — returns to the same credentials
+  // instead of silently falling through to the .env ones.
+  const apiKeys = { ...(storedOverride?.apiKeys ?? {}) };
+  if (apiKey) apiKeys[provider] = apiKey;
+  const baseUrls = { ...(storedOverride?.baseUrls ?? {}) };
+  if (baseUrl) baseUrls[provider] = baseUrl;
+
   storedOverride = {
     provider,
     model,
-    apiKey: apiKey ?? (sameProvider ? storedOverride?.apiKey : undefined),
-    baseUrl: baseUrl ?? (sameProvider ? storedOverride?.baseUrl : undefined),
+    apiKey: apiKeys[provider],
+    baseUrl: baseUrls[provider],
+    apiKeys,
+    baseUrls,
     // The search key belongs to a different project than the chat key, so it
     // survives a provider switch — it is not tied to the selected provider.
     searchApiKey: searchApiKey ?? storedOverride?.searchApiKey,
@@ -193,7 +208,12 @@ app.use(
     getCurrent: () => ({
       provider: activeConfig.llmProvider,
       model: activeConfig.llmModel,
-      baseUrl: activeConfig.llmProvider === "openai" ? activeConfig.openaiBaseUrl : undefined,
+      baseUrl:
+        activeConfig.llmProvider === "openai"
+          ? activeConfig.openaiBaseUrl
+          : activeConfig.llmProvider === "ollama"
+            ? activeConfig.ollamaBaseUrl
+            : undefined,
       hasApiKey:
         activeConfig.llmProvider === "anthropic"
           ? !!activeConfig.anthropicApiKey
@@ -203,7 +223,12 @@ app.use(
       hasSearchApiKey: !!activeConfig.geminiSearchApiKey,
     }),
     apply: applyLlm,
-  })
+  },
+    // Probed on every read of the form, so pulling a model shows up without a
+    // restart. Reads the live config, not the startup one, so it follows a
+    // base URL just changed from the options flow.
+    { get baseUrl() { return activeConfig.ollamaBaseUrl; }, vramGb: config.ollamaVramGb ?? null }
+  )
 );
 
 // Mount API routes

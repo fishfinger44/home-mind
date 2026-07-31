@@ -47,7 +47,7 @@
       },
       "model": {
         "title": "Model & API key",
-        "description": "Pick the model for {provider}. {key_hint}",
+        "description": "Pick the model for {provider}. {key_hint} {ollama_hint}",
         "data": {
           "model": "Model",
           "api_key": "API key ({provider})",
@@ -56,7 +56,8 @@
         },
         "data_description": {
           "api_key": "Leave blank to keep the key already stored on the server. Paste a new one to switch to another Google project (e.g. a free-tier one) or to rotate the key. The key is stored by the Home Mind server, not by Home Assistant.",
-          "base_url": "Only for the OpenAI-compatible provider. Keep the suggested value unless you know you need a different endpoint.",
+          "model": "For Ollama the list shows what is installed on the machine, with the VRAM each model needs. Entries marked DO POBRANIA are not downloaded yet — pull one first (`docker exec home-mind-ollama ollama pull <model>`), otherwise the first request fails. A model larger than the card still runs: Ollama moves the rest to system RAM and it becomes several times slower.",
+          "base_url": "For the OpenAI-compatible provider, and for Ollama when it runs on another machine (default: the Ollama container next to the server). Keep the suggested value unless you know you need a different endpoint.",
           "search_api_key": "Only needed for the gemini_micro search mode. Key of a Google project WITH billing — it pays for search only (5000 grounded queries/month are included), while the conversation keeps running on the key above. Leave blank to keep the stored one."
         }
       }
@@ -66,17 +67,6 @@
     "conversation": {
       "home_mind": {
         "name": "Home Mind"
-      }
-    }
-  },
-  "selector": {
-    "web_search_mode": {
-      "options": {
-        "grounding": "Integrated Google Search (paid Gemini key, cheapest)",
-        "gemini_micro": "Micro-call to Google Search (second, billed key)",
-        "tavily": "Tavily",
-        "brave": "Brave Search",
-        "searxng": "Own server (SearXNG, free, no key)"
       }
     }
   }

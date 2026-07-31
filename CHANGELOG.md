@@ -2,6 +2,18 @@
 
 All notable changes to Home Mind are documented here.
 
+## [Unreleased]
+
+### Added (llm/ollama-catalog.ts, api/llm-config-routes.ts, ha-integration)
+- **Ollama is selectable from the Home Assistant options flow.** The server has supported `LLM_PROVIDER=ollama` for a while, but the picker in HA only offered the hosted providers, so switching to a local model meant editing env vars and restarting. Ollama is now a provider like any other, and the model step lists what is *actually installed* on the machine rather than a fixed suggestion list — because unlike a hosted API, only a model that has been pulled can run.
+- **Each local model is shown with what it costs.** Size, parameter count, quantization, and the VRAM it needs (weights plus the KV cache and buffers Home Mind's long prompt makes it reserve). With `OLLAMA_VRAM_GB` set, the picker also says whether it fits — a model that doesn't fit does not fail, it silently spills into system RAM and gets several times slower, which is the trap this makes visible. A resident model that is only partly offloaded is reported too, since what actually fit beats any estimate.
+- **Models that cannot call tools are flagged.** Home Mind drives the house through six HA tools, so a model without function calling is unusable here no matter how well it writes — and Ollama hosts plenty of them. Read from Ollama's `capabilities`.
+- **`ollama` service in `docker-compose.yml`**, on the GPU, published on loopback only, with `OLLAMA_KEEP_ALIVE` so a model stays in VRAM between the bursts a house assistant is used in.
+
+### Fixed (index.ts, llm/runtime-config.ts)
+- **Switching provider no longer discards the previous provider's API key.** The runtime override stored one key, for whichever provider was active; switching away dropped it, and switching back silently fell through to the `.env` key — typically a *different* Google project. In a setup that deliberately runs the conversation on a free-tier key and search on a billed one, trying another provider for five minutes would quietly move chat onto the paid key. Keys and base URLs are now stored per provider (`apiKeys`/`baseUrls`), and existing override files are migrated on read.
+- **An Ollama base URL set from the options flow is now applied.** `buildActiveConfig()` only mapped the override's `baseUrl` onto the OpenAI provider, so an address entered for Ollama was accepted, stored, and ignored — leaving the server on the `localhost:11434` default, which inside a container is the server itself. This is the one setting a containerised deployment cannot leave at its default.
+
 ## [0.15.7] - 2026-07-25
 
 ### Fixed (llm/client.ts, llm/openai-client.ts)

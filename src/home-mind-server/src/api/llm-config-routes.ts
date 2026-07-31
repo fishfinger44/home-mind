@@ -1,7 +1,8 @@
 // Endpoints to read and switch the active LLM provider/model at runtime.
 
 import { Router, type Request, type Response } from "express";
-import { AVAILABLE_MODELS } from "../llm/runtime-config.js";
+import { AVAILABLE_MODELS, OLLAMA_SUGGESTIONS } from "../llm/runtime-config.js";
+import { fetchOllamaStatus } from "../llm/ollama-catalog.js";
 
 export interface LlmController {
   getCurrent: () => {
@@ -21,13 +22,29 @@ export interface LlmController {
   ) => void;
 }
 
-export function createLlmConfigRouter(controller: LlmController): Router {
+export function createLlmConfigRouter(
+  controller: LlmController,
+  /** Where a local Ollama would be, and how much VRAM the card has (null when
+   *  not configured). Both only feed the `ollama` block of the GET response. */
+  ollama: { baseUrl?: string; vramGb: number | null } = { vramGb: null }
+): Router {
   const router = Router();
 
-  router.get("/config/llm", (_req: Request, res: Response) => {
+  router.get("/config/llm", async (_req: Request, res: Response) => {
     // getCurrent never returns the key itself — only whether one is set — so the
     // secret is never exposed over the API.
-    res.json({ current: controller.getCurrent(), models: AVAILABLE_MODELS });
+    //
+    // The Ollama block is probed live because, unlike the hosted providers, the
+    // list of models that can actually run changes whenever someone pulls one.
+    // It is best-effort: a machine without Ollama still gets a working response.
+    res.json({
+      current: controller.getCurrent(),
+      models: AVAILABLE_MODELS,
+      ollama: {
+        ...(await fetchOllamaStatus(ollama.baseUrl, ollama.vramGb)),
+        suggestions: OLLAMA_SUGGESTIONS,
+      },
+    });
   });
 
   router.post("/config/llm", (req: Request, res: Response) => {

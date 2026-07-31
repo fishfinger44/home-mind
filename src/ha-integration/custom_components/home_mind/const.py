@@ -18,6 +18,30 @@ CONF_WEB_SEARCH_MODE = "web_search_mode"
 #   searxng      - our web_search tool answered by a SearXNG instance we host
 #                  ourselves: no key, no account, no monthly allowance
 WEB_SEARCH_MODES = ["grounding", "gemini_micro", "tavily", "searxng", "brave"]
+
+# Names for those modes in the options flow. They live here rather than in the
+# translations because the flow appends each backend's remaining allowance to
+# them, and a translation key replaces the whole label — taking the number with
+# it.
+SEARCH_MODE_LABELS = {
+    "grounding": "Integrated Google Search (paid Gemini key, cheapest)",
+    "gemini_micro": "Micro-call to Google Search (second, billed key)",
+    "tavily": "Tavily",
+    "searxng": "Own server (SearXNG, free, no key)",
+    "brave": "Brave Search",
+}
+
+# The backend /api/search/usage reports for each mode. None means there is no
+# monthly allowance to show: `grounding` is billed inside the chat request and
+# never passes through the metered web_search tool, and `searxng` is hosted
+# here, so it cannot run out.
+SEARCH_MODE_BACKENDS = {
+    "grounding": None,
+    "gemini_micro": "gemini_micro",
+    "tavily": "tavily",
+    "searxng": None,
+    "brave": "brave",
+}
 CONF_MEMORY_TOKEN_LIMIT = "memory_token_limit"
 # Token budget for facts recalled from memory and attached to every request.
 # 0 = send no memory at all (the server also skips the memory lookup).

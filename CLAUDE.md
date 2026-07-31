@@ -141,7 +141,10 @@ LLM config:
 - `ANTHROPIC_API_KEY` — required when `LLM_PROVIDER=anthropic`
 - `OPENAI_API_KEY` — required when `LLM_PROVIDER=openai`
 - `OPENAI_BASE_URL` — optional, for OpenAI-compatible APIs (Azure, local proxies)
-- `OLLAMA_BASE_URL` — optional, Ollama API endpoint (default: `http://localhost:11434/v1`)
+- `OLLAMA_BASE_URL` — optional, Ollama API endpoint (default: `http://localhost:11434/v1`; the compose file points it at the `ollama` service on loopback)
+- `OLLAMA_VRAM_GB` — optional, size of the card Ollama runs on. Purely informational: it lets the model picker say whether a model fits rather than only how big it is. Nothing detects it, and a model that does not fit still runs — Ollama spills the remainder into system RAM and it gets several times slower, which is the failure mode worth surfacing.
+
+**Runtime switching keeps credentials per provider.** `/data/llm-override.json` stores `apiKeys` and `baseUrls` keyed by provider name (legacy single `apiKey`/`baseUrl` files are migrated on read). Storing only the active provider's key made a switch a silent, unrecoverable loss: coming back fell through to the `.env` key, which is typically a *different* Google project — a free-tier key entered in the UI would quietly be replaced by a billed one. Trying a local model has to be free.
 
 Optional: `PORT` (default 3100), `API_TOKEN` (bearer token for auth — when set, all endpoints except health require it), `HA_SKIP_TLS_VERIFY`, `MEMORY_TOKEN_LIMIT` (default 1500), `LOG_LEVEL`, `CONVERSATION_STORAGE` (`memory` | `sqlite`, default `memory`), `CONVERSATION_DB_PATH` (default `/data/conversations.db`, only used when `CONVERSATION_STORAGE=sqlite`), `CUSTOM_PROMPT` (server-level default custom system prompt), `TZ` (timezone for the Docker container, default `Europe/Prague` in docker-compose; Node.js uses this for `toLocaleString()` so the LLM sees correct local time)
 
@@ -171,7 +174,7 @@ Optional bearer token auth via `API_TOKEN` env var. When set, all endpoints exce
 - `POST /api/tts` — Synthesize speech. Body `{ text, language? }`. Returns `audio/mpeg`. 501 if `TTS_PROVIDER=none`.
 - `GET /api/health` — Health check (always public, bypasses auth)
 - `GET /api/search/usage` — Monthly web-search usage per backend (used/quota/remaining/exhausted). No API keys exposed.
-- `GET|POST /api/config/llm` — Read/switch the active provider + model at runtime (also `apiKey`, `baseUrl`, `searchApiKey`). GET never returns a key, only `hasApiKey`/`hasSearchApiKey`.
+- `GET|POST /api/config/llm` — Read/switch the active provider + model at runtime (also `apiKey`, `baseUrl`, `searchApiKey`). GET never returns a key, only `hasApiKey`/`hasSearchApiKey`. GET also carries an `ollama` block, probed live on each call: reachability, the models actually installed (size, parameter count, quantization, estimated VRAM need, whether they fit `OLLAMA_VRAM_GB`, and whether they support tool calling at all), anything currently resident and how much of it sits on the GPU, plus suggestions worth pulling. Unlike the hosted providers, the list of models that can run changes whenever someone pulls one — hence live rather than static.
 - `GET /api/memory/:userId` — List user's facts
 - `POST /api/memory/:userId/facts` — Add fact manually
 - `DELETE /api/memory/:userId` — Clear all facts

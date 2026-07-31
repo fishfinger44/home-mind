@@ -39,15 +39,22 @@ from .const import (
     DEFAULT_MEMORY_TOKEN_LIMIT,
     CONF_WEB_SEARCH_MODE,
     WEB_SEARCH_MODES,
+    SEARCH_MODE_LABELS,
+    SEARCH_MODE_BACKENDS,
     DEFAULT_API_URL,
     DEFAULT_USER_ID,
     API_HEALTH_ENDPOINT,
     API_CONFIG_LLM_ENDPOINT,
+    API_SEARCH_USAGE_ENDPOINT,
     CLOUD_SIGNUP_URL,
 )
 
 # Default OpenAI-compatible endpoint for the Gemini provider.
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+# Ollama's OpenAI-compatible endpoint. Points at the container in the project's
+# compose file; a Ollama on another machine needs this changed to its address.
+DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,7 +76,33 @@ PROVIDER_OPTIONS = [
     SelectOptionDict(
         value="openai", label="Gemini (OpenAI-compat) — wyszukiwanie Tavily/Brave"
     ),
+    SelectOptionDict(
+        value="ollama",
+        label="Ollama — model lokalny na własnym GPU (bez klucza, bez internetu)",
+    ),
 ]
+
+
+def _gb(size_bytes: int) -> str:
+    """Bytes as GB with one decimal, in the locale the rest of the form uses."""
+    return f"{size_bytes / 1024 ** 3:.1f}".replace(".", ",")
+
+
+def _vram(value: float) -> str:
+    return f"{value:.1f}".replace(".", ",")
+
+
+def _allowance(usage: dict[str, Any]) -> str:
+    """One backend's remaining monthly allowance, in words."""
+    quota = int(usage.get("quota", 0) or 0)
+    used = int(usage.get("used", 0) or 0)
+    remaining = int(usage.get("remaining", -1))
+    if usage.get("exhausted"):
+        return f"used up ({used}/{quota})"
+    # The server reports -1 for a backend with no configured quota.
+    if remaining < 0:
+        return "no monthly limit"
+    return f"{remaining} of {quota} left"
 
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
@@ -163,6 +196,8 @@ class OptionsFlow(config_entries.OptionsFlow):
     _web_search_mode: str | None = None
     _models: dict[str, list[str]] = {}
     _current: dict[str, Any] = {}
+    _usage: dict[str, dict[str, Any]] = {}
+    _ollama: dict[str, Any] = {}
 
     def _endpoints(self) -> tuple[str, dict[str, str]]:
         api_url = self.config_entry.data[CONF_API_URL].rstrip("/")
@@ -181,6 +216,134 @@ class OptionsFlow(config_entries.OptionsFlow):
             data = await resp.json()
             self._models = data.get("models", {}) or {}
             self._current = data.get("current", {}) or {}
+            # Absent on servers older than the local-model support.
+            self._ollama = data.get("ollama", {}) or {}
+
+    async def _fetch_search_usage(self) -> None:
+        """Read how much monthly allowance each search backend has left.
+
+        Best-effort: the numbers only annotate the mode picker, so a server that
+        is unreachable or too old to know this endpoint must still leave the
+        options flow usable — just without them.
+        """
+        api_url, headers = self._endpoints()
+        session = async_get_clientsession(self.hass)
+        try:
+            async with session.get(
+                f"{api_url}{API_SEARCH_USAGE_ENDPOINT}",
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status != 200:
+                    return
+                data = await resp.json()
+        except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+            _LOGGER.debug("Could not read search usage for the options form: %s", err)
+            return
+
+        self._usage = {
+            entry["backend"]: entry for entry in data.get("backends", [])
+        }
+
+    def _web_search_mode_options(self) -> list[SelectOptionDict]:
+        """The search modes, each showing what is left on it this month."""
+        options: list[SelectOptionDict] = []
+        for mode in WEB_SEARCH_MODES:
+            label = SEARCH_MODE_LABELS.get(mode, mode)
+            backend = SEARCH_MODE_BACKENDS.get(mode)
+            if backend is None:
+                # Nothing meters this one. Say so for grounding, which is billed
+                # and would otherwise look like a backend we failed to read.
+                if mode == "grounding":
+                    label += " — not metered here"
+            elif (usage := self._usage.get(backend)) is not None:
+                label += f" — {_allowance(usage)}"
+            options.append(SelectOptionDict(value=mode, label=label))
+        return options
+
+    def _ollama_model_options(self) -> list[SelectOptionDict]:
+        """Local models, labelled with what they cost in VRAM.
+
+        Installed models come first: only those can actually be selected without
+        a `ollama pull`. Suggestions follow, so the picker also answers "what
+        should I download", with each one's requirement attached — the choice
+        that matters for a local model is whether it fits the card, and a model
+        that does not fit still runs, just partly on the CPU and far slower.
+        """
+        options: list[SelectOptionDict] = []
+        installed = {m["name"] for m in self._ollama.get("models", [])}
+
+        for model in self._ollama.get("models", []):
+            parts = [f"{_gb(model.get('sizeBytes', 0))} GB"]
+            if model.get("parameterSize"):
+                parts.append(model["parameterSize"])
+            if model.get("quantization"):
+                parts.append(model["quantization"])
+            label = f"{model['name']} — {', '.join(parts)}"
+            if (required := model.get("requiredVramGb")) is not None:
+                label += f" · potrzeba ~{_vram(required)} GB VRAM"
+            fits = model.get("fitsVram")
+            if fits is True:
+                label += " ✓ zmieści się"
+            elif fits is False:
+                label += " ⚠ NIE zmieści się — pójdzie częściowo na CPU"
+            # Hard requirement, not a nicety: Home Mind steers the house through
+            # tool calls, so a model without them cannot do the job at all.
+            if model.get("supportsTools") is False:
+                label += " ⛔ BEZ obsługi narzędzi — nie zsteruje domem"
+            options.append(SelectOptionDict(value=model["name"], label=label))
+
+        for suggestion in self._ollama.get("suggestions", []):
+            if suggestion["name"] in installed:
+                continue
+            options.append(
+                SelectOptionDict(
+                    value=suggestion["name"],
+                    label=(
+                        f"{suggestion['name']} — DO POBRANIA "
+                        f"(~{_vram(suggestion['vramGb'])} GB VRAM): {suggestion['note']}"
+                    ),
+                )
+            )
+        return options
+
+    def _ollama_hint(self) -> str:
+        """One line about the local backend, shown above the model picker."""
+        if not self._ollama:
+            return (
+                "Serwer Home Mind nie zna jeszcze modeli lokalnych — "
+                "zaktualizuj go, żeby zobaczyć, co jest zainstalowane."
+            )
+        if not self._ollama.get("reachable"):
+            return (
+                f"⚠ Ollama nieosiągalna pod {self._ollama.get('baseUrl', '?')} "
+                f"({self._ollama.get('error', 'brak odpowiedzi')}). "
+                "Model z listy „DO POBRANIA\" nie zadziała, dopóki jej nie uruchomisz."
+            )
+
+        count = len(self._ollama.get("models", []))
+        hint = f"Ollama działa pod {self._ollama['baseUrl']}, zainstalowanych modeli: {count}."
+        if count == 0:
+            hint += " Pobierz któryś: `docker exec home-mind-ollama ollama pull qwen3:4b`."
+        if (vram := self._ollama.get("vramTotalGb")) is not None:
+            usable = self._ollama.get("usableVramGb", vram)
+            hint += (
+                f" Karta ma {_vram(vram)} GB VRAM, dla modelu zostaje "
+                f"~{_vram(usable)} GB (resztę bierze sterownik)."
+            )
+        else:
+            hint += (
+                " Ustaw OLLAMA_VRAM_GB na serwerze, żeby lista mówiła też, "
+                "czy model się zmieści."
+            )
+        # What actually fit beats any estimate, so say it when we know it.
+        for loaded in self._ollama.get("loaded", []):
+            if loaded.get("onGpuPercent", 100) < 100:
+                hint += (
+                    f" ⚠ Załadowany {loaded['name']} siedzi na GPU tylko w "
+                    f"{loaded['onGpuPercent']}% — reszta liczy się na CPU."
+                )
+        return hint
 
     async def _post_llm(
         self,
@@ -231,6 +394,9 @@ class OptionsFlow(config_entries.OptionsFlow):
             self._web_search_mode = user_input.get(CONF_WEB_SEARCH_MODE)
             return await self.async_step_model()
 
+        # Only needed for the form itself, so it is not paid for on submit.
+        await self._fetch_search_usage()
+
         schema = vol.Schema(
             {
                 vol.Required(
@@ -267,12 +433,9 @@ class OptionsFlow(config_entries.OptionsFlow):
                         CONF_WEB_SEARCH_MODE, "grounding"
                     ),
                 ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=[
-                            SelectOptionDict(value=m, label=m) for m in WEB_SEARCH_MODES
-                        ],
-                        translation_key="web_search_mode",
-                    )
+                    # No translation_key: a translated label would replace the
+                    # whole string, including the allowance appended to it.
+                    SelectSelectorConfig(options=self._web_search_mode_options())
                 ),
                 vol.Optional(
                     CONF_CUSTOM_PROMPT,
@@ -321,8 +484,15 @@ class OptionsFlow(config_entries.OptionsFlow):
                     },
                 )
 
+        is_ollama = self._provider == "ollama"
         models = self._models.get(self._provider, [])
-        options = [SelectOptionDict(value=m, label=m) for m in models]
+        if is_ollama:
+            options = self._ollama_model_options()
+            # Prefer what is installed as the default — a suggestion would name
+            # a model the server cannot load yet.
+            models = [m["name"] for m in self._ollama.get("models", [])] or models
+        else:
+            options = [SelectOptionDict(value=m, label=m) for m in models]
         if self._current.get("provider") == self._provider and self._current.get("model"):
             default_model = self._current["model"]
         else:
@@ -334,6 +504,8 @@ class OptionsFlow(config_entries.OptionsFlow):
             base_url_default = self._current["baseUrl"]
         elif self._provider == "openai":
             base_url_default = DEFAULT_GEMINI_BASE_URL
+        elif is_ollama:
+            base_url_default = DEFAULT_OLLAMA_BASE_URL
         else:
             base_url_default = ""
 
@@ -347,14 +519,19 @@ class OptionsFlow(config_entries.OptionsFlow):
             vol.Required("model", default=default_model): SelectSelector(
                 SelectSelectorConfig(options=options, custom_value=True)
             ),
-            vol.Optional("api_key"): TextSelector(
-                TextSelectorConfig(type=TextSelectorType.PASSWORD)
-            ),
-            vol.Optional("search_api_key"): TextSelector(
-                TextSelectorConfig(type=TextSelectorType.PASSWORD)
-            ),
         }
-        if self._provider == "openai":
+        # A local model has no account behind it, so asking for a key would be
+        # asking for something that does not exist.
+        if not is_ollama:
+            schema_dict[vol.Optional("api_key")] = TextSelector(
+                TextSelectorConfig(type=TextSelectorType.PASSWORD)
+            )
+        # The search key belongs to the web-search backend, not to the chat
+        # provider — a local model still searches through it.
+        schema_dict[vol.Optional("search_api_key")] = TextSelector(
+            TextSelectorConfig(type=TextSelectorType.PASSWORD)
+        )
+        if self._provider == "openai" or is_ollama:
             schema_dict[
                 vol.Optional("base_url", default=base_url_default)
             ] = TextSelector(TextSelectorConfig(type=TextSelectorType.URL))
@@ -366,10 +543,15 @@ class OptionsFlow(config_entries.OptionsFlow):
             description_placeholders={
                 "provider": self._provider or "",
                 "key_hint": (
-                    "A key is already stored — leave blank to keep it."
-                    if has_key
-                    else "Enter the API key for the selected provider."
+                    ""
+                    if is_ollama
+                    else (
+                        "A key is already stored — leave blank to keep it."
+                        if has_key
+                        else "Enter the API key for the selected provider."
+                    )
                 ),
+                "ollama_hint": self._ollama_hint() if is_ollama else "",
             },
         )
 
