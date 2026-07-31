@@ -2,6 +2,7 @@ import type { HomeAssistantClient, HistoryEntry } from "../ha/client.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { IFactExtractor, WebSearchMode } from "./interface.js";
 import type { ExtractedFact } from "../memory/types.js";
+import { IMPERSONAL_FACT_CATEGORIES } from "../memory/types.js";
 import { filterFacts } from "../memory/fact-patterns.js";
 import { envOrUndefined } from "../env.js";
 import {
@@ -549,13 +550,26 @@ export async function recallFacts(
   userId: string,
   message: string,
   requestLimit: number | undefined,
-  configLimit: number
+  configLimit: number,
+  /**
+   * Whether facts about a person may be recalled.
+   *
+   * False on a shared device. What that profile has learned about the house is
+   * still worth having — knowing which entity the "main light" is turns two
+   * tool calls into one — so the recall happens, filtered to the categories
+   * that describe the home rather than anybody in it. The filter also covers
+   * profiles that collected personal facts before that rule existed.
+   */
+  allowPersonal: boolean = true
 ): Promise<string[]> {
   const limit = requestLimit ?? configLimit;
   if (limit <= 0) return [];
 
   const facts = await memory.getFactsWithinTokenLimit(userId, limit, message);
-  return facts.map((f) => f.content);
+  const usable = allowPersonal
+    ? facts
+    : facts.filter((f) => IMPERSONAL_FACT_CATEGORIES.includes(f.category));
+  return usable.map((f) => f.content);
 }
 
 export async function extractAndStoreFacts(
@@ -563,7 +577,17 @@ export async function extractAndStoreFacts(
   extractor: IFactExtractor,
   userId: string,
   userMessage: string,
-  assistantResponse: string
+  assistantResponse: string,
+  /**
+   * Whether facts about the speaker may be stored.
+   *
+   * False for a shared device, where we do not know who is talking. It does
+   * not silence learning entirely — the assistant still picks up how the house
+   * works (see `IMPERSONAL_FACT_CATEGORIES`) — it only refuses to file
+   * anything as a statement about a person, because on a shared profile that
+   * person is a guess and a wrong guess cannot be untangled afterwards.
+   */
+  allowPersonal: boolean = true
 ): Promise<number> {
   const existingFacts = await memory.getFacts(userId);
 
@@ -574,10 +598,23 @@ export async function extractAndStoreFacts(
   );
 
   // Filter out garbage
-  const { kept, skipped } = filterExtractedFacts(extractedFacts);
+  const { kept: notGarbage, skipped } = filterExtractedFacts(extractedFacts);
 
   for (const { fact, reason } of skipped) {
     console.debug(`[filter] Skipped fact for ${userId}: "${fact.content}" — ${reason}`);
+  }
+
+  // On a shared profile, keep only what is true of the house rather than of
+  // whoever happened to be speaking.
+  const kept = allowPersonal
+    ? notGarbage
+    : notGarbage.filter((f) => IMPERSONAL_FACT_CATEGORIES.includes(f.category));
+
+  if (!allowPersonal && kept.length < notGarbage.length) {
+    const dropped = notGarbage.length - kept.length;
+    console.log(
+      `[identity] ${dropped} personal fact(s) not stored for shared profile ${userId}`
+    );
   }
 
   if (kept.length === 0) return 0;

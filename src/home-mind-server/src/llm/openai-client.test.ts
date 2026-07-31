@@ -384,7 +384,34 @@ describe("OpenAIChatEngine", () => {
       extractor,
       "user-1",
       "Remember I like 22°C",
-      "Response"
+      "Response",
+      true
+    );
+  });
+
+  it("still extracts on a shared device, but forbids personal facts", async () => {
+    mockCreate.mockResolvedValue(
+      makeStream([
+        { choices: [{ delta: { content: "Response" }, finish_reason: null }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ])
+    );
+
+    await engine.chat({
+      message: "Głośnik w salonie: jak włączyć film?",
+      userId: "default",
+      identityConfidence: "unknown",
+    });
+
+    // Extraction runs — a shared device should still learn how the house works
+    // — but the last argument denies it the right to file anything as personal.
+    expect(extractAndStoreFacts).toHaveBeenCalledWith(
+      memory,
+      extractor,
+      "default",
+      "Głośnik w salonie: jak włączyć film?",
+      "Response",
+      false
     );
   });
 

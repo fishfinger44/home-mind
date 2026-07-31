@@ -129,15 +129,14 @@ export class GeminiChatEngine implements IChatEngine {
     // Personal memory is only for a speaker we are sure of: a guess that turns
     // out wrong would otherwise read one person's memories out to another.
     const trustedIdentity = trustsProfile(request.identityConfidence ?? "certain");
-    const factContents = trustedIdentity
-      ? await recallFacts(
-          this.memory,
-          userId,
-          message,
-          request.memoryTokenLimit,
-          this.config.memoryTokenLimit
-        )
-      : [];
+    const factContents = await recallFacts(
+      this.memory,
+      userId,
+      message,
+      request.memoryTokenLimit,
+      this.config.memoryTokenLimit,
+      trustedIdentity
+    );
 
     // 2. Refresh device/topology, build system prompt
     await Promise.all([this.scanner.refreshIfStale(), this.topology.refreshIfStale()]);
@@ -293,14 +292,18 @@ export class GeminiChatEngine implements IChatEngine {
     if (conversationId && responseText) {
       this.conversations.storeMessage(conversationId, userId, "assistant", responseText);
     }
-    // Only a speaker we are sure of gets facts written to their profile. A
-    // misattributed fact cannot be untangled later: it simply becomes something
-    // the assistant "knows" about the wrong person.
-    if (trustedIdentity) {
-      extractAndStoreFacts(this.memory, this.extractor, userId, message, responseText).catch(
-        (err) => console.error("Fact extraction failed:", err)
-      );
-    }
+    // Only a speaker we are sure of gets facts written about them personally: a
+    // misattributed fact cannot be untangled later, it simply becomes something
+    // the assistant "knows" about the wrong person. A shared device still
+    // learns how the house works — just nothing about who was talking.
+    extractAndStoreFacts(
+      this.memory,
+      this.extractor,
+      userId,
+      message,
+      responseText,
+      trustedIdentity
+    ).catch((err) => console.error("Fact extraction failed:", err));
 
     // Deliver the whole answer to the streaming callback in one shot (this engine
     // is non-streaming; the HA /api/chat path doesn't require token streaming).

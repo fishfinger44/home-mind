@@ -71,15 +71,14 @@ export class LLMClient implements IChatEngine {
     // Personal memory is only for a speaker we are sure of: a guess that turns
     // out wrong would otherwise read one person's memories out to another.
     const trustedIdentity = trustsProfile(request.identityConfidence ?? "certain");
-    const factContents = trustedIdentity
-      ? await recallFacts(
-          this.memory,
-          userId,
-          message,
-          request.memoryTokenLimit,
-          this.config.memoryTokenLimit
-        )
-      : [];
+    const factContents = await recallFacts(
+      this.memory,
+      userId,
+      message,
+      request.memoryTokenLimit,
+      this.config.memoryTokenLimit,
+      trustedIdentity
+    );
     if (this.config.logLevel === "debug") {
       const approxTokens = Math.ceil(factContents.join(" ").length / 4);
       console.debug(
@@ -190,18 +189,18 @@ export class LLMClient implements IChatEngine {
     }
 
     // 7. Extract and store new facts (async, don't block response)
-    // Only a speaker we are sure of gets facts written to their profile. A
-    // misattributed fact cannot be untangled later: it simply becomes something
-    // the assistant "knows" about the wrong person.
-    if (trustedIdentity) {
-      extractAndStoreFacts(
-        this.memory,
-        this.extractor,
-        userId,
-        message,
-        responseText
-      ).catch((err) => console.error("Fact extraction failed:", err));
-    }
+    // Only a speaker we are sure of gets facts written about them personally: a
+    // misattributed fact cannot be untangled later, it simply becomes something
+    // the assistant "knows" about the wrong person. A shared device still
+    // learns how the house works — just nothing about who was talking.
+    extractAndStoreFacts(
+      this.memory,
+      this.extractor,
+      userId,
+      message,
+      responseText,
+      trustedIdentity
+    ).catch((err) => console.error("Fact extraction failed:", err));
 
     // Count facts learned (we don't wait for extraction, so return 0 for now)
     return {

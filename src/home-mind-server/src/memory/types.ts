@@ -6,6 +6,26 @@ export type FactCategory =
   | "pattern" // Routines ("usually home by 6pm")
   | "correction"; // Corrections ("actually X, not Y")
 
+/**
+ * Categories that describe the house rather than a person.
+ *
+ * A shared device — the speaker in the living room, a satellite anyone can
+ * talk to — cannot know who is speaking, so nothing it learns may be filed as
+ * somebody's personal memory. But most of what it hears is not personal at
+ * all: which entity the "main light" is, what starts a film on the Apple TV,
+ * what a sensor reads normally. That knowledge is about the home, it is the
+ * same for everyone in it, and it is exactly what makes the assistant faster
+ * next time.
+ *
+ * So the shared profile keeps these three and drops `preference`, `identity`
+ * and `pattern`, which are all statements about a particular person.
+ */
+export const IMPERSONAL_FACT_CATEGORIES: readonly FactCategory[] = [
+  "device",
+  "baseline",
+  "correction",
+];
+
 export interface Fact {
   id: string;
   userId: string;

@@ -318,6 +318,94 @@ describe("extractAndStoreFacts", () => {
     expect(memory.addFacts).toHaveBeenCalledTimes(1);
   });
 
+  describe("on a shared profile (allowPersonal = false)", () => {
+    beforeEach(() => {
+      (extractor.extract as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { content: "Main light in the kitchen is light.wled_kitchen", category: "device", confidence: 0.9 },
+        { content: "Normal NOx reading in the hall is 100ppm", category: "baseline", confidence: 0.8 },
+        { content: "Actually the film starts from the Apple TV, not Kodi", category: "correction", confidence: 0.8 },
+        { content: "This person prefers 22°C in the bedroom", category: "preference", confidence: 0.9 },
+        { content: "The person speaking is called Ania", category: "identity", confidence: 0.9 },
+        { content: "This person is usually home by 6pm on weekdays", category: "pattern", confidence: 0.7 },
+      ]);
+      (memory.addFacts as ReturnType<typeof vi.fn>).mockResolvedValue(["a", "b", "c"]);
+    });
+
+    it("keeps what is true of the house and drops what is true of a person", async () => {
+      const count = await extractAndStoreFacts(memory, extractor, "default", "msg", "resp", false);
+
+      const stored = (memory.addFacts as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(stored.map((f: { category: string }) => f.category)).toEqual([
+        "device",
+        "baseline",
+        "correction",
+      ]);
+      expect(count).toBe(3);
+    });
+
+    it("still stores everything when the speaker is known", async () => {
+      (memory.addFacts as ReturnType<typeof vi.fn>).mockResolvedValue([
+        "a", "b", "c", "d", "e", "f",
+      ]);
+
+      await extractAndStoreFacts(memory, extractor, "user-1", "msg", "resp", true);
+
+      const stored = (memory.addFacts as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(stored).toHaveLength(6);
+    });
+
+    it("writes nothing when the conversation was purely personal", async () => {
+      (extractor.extract as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { content: "This person prefers 22°C in the bedroom", category: "preference", confidence: 0.9 },
+      ]);
+
+      const count = await extractAndStoreFacts(memory, extractor, "default", "msg", "resp", false);
+
+      expect(count).toBe(0);
+      expect(memory.addFacts).not.toHaveBeenCalled();
+    });
+
+    it("does not delete a fact that the dropped personal one claimed to replace", async () => {
+      (extractor.extract as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { content: "This person prefers 22°C in the bedroom", category: "preference", confidence: 0.9, replaces: ["old-1"] },
+      ]);
+
+      await extractAndStoreFacts(memory, extractor, "default", "msg", "resp", false);
+
+      // Dropping the replacement while honouring its deletion would lose the
+      // old fact and store nothing in its place.
+      expect(memory.deleteFact).not.toHaveBeenCalled();
+    });
+  });
+
+  it("recalls only impersonal facts on a shared profile", async () => {
+    const shared = {
+      getFactsWithinTokenLimit: vi.fn().mockResolvedValue([
+        { content: "Main light is light.wled_kitchen", category: "device" },
+        { content: "Prefers 22°C in the bedroom", category: "preference" },
+        { content: "Normal NOx is 100ppm", category: "baseline" },
+      ]),
+    } as unknown as IMemoryStore;
+
+    // A shared profile still gets what it knows about the house — that is the
+    // whole point of letting it learn — but nothing about a person, including
+    // anything filed there before the rule existed.
+    expect(await recallFacts(shared, "default", "msg", 1500, 1500, false)).toEqual([
+      "Main light is light.wled_kitchen",
+      "Normal NOx is 100ppm",
+    ]);
+
+    expect(await recallFacts(shared, "user-1", "msg", 1500, 1500, true)).toHaveLength(3);
+  });
+
+  it("defaults to allowing personal facts when the flag is omitted", async () => {
+    await extractAndStoreFacts(memory, extractor, "user-1", "msg", "resp");
+
+    expect(memory.addFacts).toHaveBeenCalledWith("user-1", [
+      { content: "User prefers 22°C for bedroom", category: "preference", confidence: 0.9 },
+    ]);
+  });
+
   it("returns 0 when extraction yields no facts", async () => {
     (extractor.extract as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 

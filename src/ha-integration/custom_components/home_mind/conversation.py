@@ -230,9 +230,16 @@ class HomeMindConversationAgent(ConversationEntity):
         if user_name:
             payload["userName"] = user_name
             # A logged-in Home Assistant user is as firm as identification gets
-            # here. Anything without one stays unset, and the server treats it
-            # as unknown: shared profile, no personal memory read or written.
+            # here.
             payload["identityConfidence"] = "certain"
+        else:
+            # Say "unknown" rather than leaving the field out. The server reads a
+            # missing value as "certain" for compatibility with clients that
+            # predate the field, so silence here would quietly grant a voice
+            # satellite — which carries no user at all — the same trust as a
+            # logged-in session, and file whatever it heard as somebody's
+            # personal memory.
+            payload["identityConfidence"] = "unknown"
 
         exposed = self._exposed_entities()
         if exposed is not None:
