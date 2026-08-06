@@ -48,6 +48,19 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Ciagla rozmowa: mikrofon zostaje otwarty po kazdej turze glosowej.
+#
+# WLACZONE 2026-08-06. Krotko bylo wylaczone na podstawie blednej diagnozy:
+# uznalem niskie podobienstwo (0.05-0.10) za dowod, ze satelita slyszy wlasny
+# glosnik, a historia rozmowy pokazala normalna wymiane z uzytkownikiem — tak
+# niski wynik daja po prostu bardzo krotkie wypowiedzi, przy ktorych weryfikacja
+# mowcy jest zawodna. Prawdziwa przyczyna zlego dzialania bylo wycinanie mowy
+# przez bramke energetyczna w voice-match (naprawione osobno).
+#
+# Po odpowiedzi mikrofon zostaje otwarty przez 15 s (timeout VAD w potoku HA);
+# cisza konczy ture i wraca slowo budzace, mowa przedluza lancuch.
+CONTINUE_CONVERSATION = True
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -209,7 +222,7 @@ class HomeMindConversationAgent(ConversationEntity):
             # would still be required after exactly the commands people chain
             # most — lights, switches, the time. Those are the ones it answers
             # locally, so they never reach the code below that sets the flag.
-            if user_input.agent_id is not None:
+            if CONTINUE_CONVERSATION and user_input.agent_id is not None:
                 result = replace(result, continue_conversation=True)
             return result
 
@@ -237,7 +250,7 @@ class HomeMindConversationAgent(ConversationEntity):
 
         Text conversations keep nothing open — there is no microphone to hold.
         """
-        return bool(is_voice and response)
+        return bool(CONTINUE_CONVERSATION and is_voice and response)
 
     def _person_for_voiceprint(self, speaker: str) -> tuple[str, str] | None:
         """Find the household member a voiceprint belongs to.
