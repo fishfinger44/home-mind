@@ -23,6 +23,18 @@ services:
     restart: unless-stopped
     volumes:
       - ./data-piper:/data
+      # Latka na blad upstreamu espeak-ng: w phsource/ph_polish twarde `dz` ma
+      # `ipa dʑ`, wiec KAZDE polskie "dz" wychodzilo miekkie i Piper mowil
+      # "zadzwonil" jako "zadzwonil" przez dz. Wada dotyczy tylko warstwy IPA,
+      # czyli wylacznie tego, co espeak oddaje innym modelom — wlasna synteza
+      # espeaka brzmi dobrze, dlatego nikt tego nie zglosil.
+      # Poprawka rusza 7 jezykow slowianskich (pl, cs, sk, sl, hr, sr, bs),
+      # u kazdego na korzysc; pozostale 135 bit w bit bez zmian. Pelny opis
+      # i sposob przebudowy: ~/hal-pl/espeak_latka/README.md
+      # UWAGA: sciezka zawiera wersje Pythona z obrazu, a obraz jest :latest.
+      # Po aktualizacji sprawdzic `pip show piper-tts` w kontenerze.
+      - /home/lech/hal-pl/espeak_latka/phontab:/usr/src/.venv/lib/python3.11/site-packages/piper/espeak-ng-data/phontab:ro
+      - /home/lech/hal-pl/espeak_latka/phonindex:/usr/src/.venv/lib/python3.11/site-packages/piper/espeak-ng-data/phonindex:ro
     network_mode: host
     command: [
       "--voice", "pl_PL-jarvis_wg_glos-medium",
