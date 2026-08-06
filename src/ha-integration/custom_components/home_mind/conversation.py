@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from dataclasses import replace
 from typing import Literal
 
 import aiohttp
@@ -26,6 +28,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import ulid
 
 from .const import (
+    SPEAKER_TAG_PATTERN,
     DOMAIN,
     CONF_API_URL,
     CONF_API_TOKEN,
@@ -90,12 +93,36 @@ class HomeMindConversationAgent(ConversationEntity):
         """Process a conversation input and return a response."""
         _LOGGER.debug("Processing conversation input: %s", user_input.text)
 
+        # A speaker tag from voice-match has to come off before anything reads
+        # the text: the built-in agent below would fail to match "[lech] zapal
+        # światło" against any intent, and the model should never see it either.
+        message, speaker = self._split_speaker_tag(user_input.text)
+        if speaker:
+            user_input = replace(user_input, text=message)
+
         # Get user ID from context if available, otherwise use default
         user_id = self._default_user_id
         user_name: str | None = None
+        identity_confidence = "certain"
         if user_input.context and user_input.context.user_id:
-            user_id = str(user_input.context.user_id)
-            user_name = await self._resolve_user_name(user_id)
+            account_id = str(user_input.context.user_id)
+            user_id = self._profile_for_account(account_id)
+            user_name = await self._resolve_user_name(account_id)
+        elif speaker:
+            # No logged-in user, but the voiceprint matched. A satellite is the
+            # only place this happens, and it is exactly the case that used to
+            # fall back to the shared profile.
+            account = self._person_for_voiceprint(speaker)
+            if account:
+                user_id, user_name = account
+                identity_confidence = "asserted"
+                _LOGGER.debug("Voice biometrics identified %s -> %s", speaker, user_id)
+            else:
+                _LOGGER.warning(
+                    "Voiceprint '%s' matches nobody in Settings → People; "
+                    "staying on the shared profile",
+                    speaker,
+                )
 
         # Determine if this is a voice request
         is_voice = user_input.agent_id is not None
@@ -113,11 +140,12 @@ class HomeMindConversationAgent(ConversationEntity):
 
         try:
             response_text = await self._call_api(
-                message=user_input.text,
+                message=message,
                 user_id=user_id,
                 conversation_id=conversation_id,
                 is_voice=is_voice,
                 user_name=user_name,
+                identity_confidence=identity_confidence,
             )
             _LOGGER.debug(
                 "Got response: %s", response_text[:100] if response_text else "None"
@@ -180,6 +208,49 @@ class HomeMindConversationAgent(ConversationEntity):
         )
         return None
 
+    def _person_for_voiceprint(self, speaker: str) -> tuple[str, str] | None:
+        """Find the household member a voiceprint belongs to.
+
+        Voiceprints are named after the person's Home Assistant id, so this is
+        an exact match rather than a name comparison — the enrolment panel and
+        this lookup cannot drift apart over how to fold "Michał".
+        """
+        for state in self.hass.states.async_all("person"):
+            if state.attributes.get("id") != speaker:
+                continue
+            name = state.attributes.get("friendly_name") or state.object_id
+            return speaker, name
+        return None
+
+    def _profile_for_account(self, account_id: str) -> str:
+        """Memory profile for a logged-in Home Assistant session.
+
+        Sessions are keyed through the person, not by the account, so that a
+        phone and a satellite reach the same memory. Keying on the account
+        directly would split them apart the moment somebody's login is added
+        or replaced — the person id survives both, and survives a rename too.
+        """
+        for state in self.hass.states.async_all("person"):
+            if state.attributes.get("user_id") == account_id:
+                return state.attributes.get("id") or account_id
+        # An account with no person has nothing more stable to offer.
+        return account_id
+
+    @staticmethod
+    def _split_speaker_tag(text: str) -> tuple[str, str | None]:
+        """Split "[lech] zapal światło" into the command and the speaker.
+
+        Returns the text unchanged with `None` when there is no tag, which is
+        every text conversation and every voice command whose speaker was not
+        recognised.
+        """
+        if not text:
+            return text, None
+        match = re.match(SPEAKER_TAG_PATTERN, text)
+        if not match:
+            return text, None
+        return text[match.end():], match.group(1)
+
     async def _resolve_user_name(self, user_id: str) -> str | None:
         """Name of the Home Assistant user behind this request, if there is one.
 
@@ -216,6 +287,7 @@ class HomeMindConversationAgent(ConversationEntity):
         conversation_id: str,
         is_voice: bool = False,
         user_name: str | None = None,
+        identity_confidence: str = "certain",
     ) -> str:
         """Call the Home Mind API."""
         url = f"{self._api_url}{API_CHAT_ENDPOINT}"
@@ -229,9 +301,11 @@ class HomeMindConversationAgent(ConversationEntity):
 
         if user_name:
             payload["userName"] = user_name
-            # A logged-in Home Assistant user is as firm as identification gets
-            # here.
-            payload["identityConfidence"] = "certain"
+            # A logged-in Home Assistant session is proof of who is asking. A
+            # voiceprint is strong evidence rather than proof — the server
+            # trusts both with personal memory, but saying which one this was
+            # keeps the distinction visible if that ever needs to change.
+            payload["identityConfidence"] = identity_confidence
         else:
             # Say "unknown" rather than leaving the field out. The server reads a
             # missing value as "certain" for compatibility with clients that

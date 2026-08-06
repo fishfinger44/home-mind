@@ -66,6 +66,29 @@ SEARCH_BACKEND_LABELS = {
     "brave": "Brave",
 }
 
+# Speaker tag written by wyoming-voice-match (TAG_SPEAKER=true): the transcript
+# arrives as "[lech] zapal światło" when the voiceprint matched. Carrying the
+# identity inside the text is deliberate — it cannot be paired with the wrong
+# utterance the way a separate webhook could, since there is nothing to
+# correlate.
+SPEAKER_TAG_PATTERN = r"^\[([A-Za-z0-9_\- ]{1,32})\]\s+"
+
+# A voiceprint is matched to a household member by name: the enrolment panel
+# names each voiceprint after the Home Assistant person it belongs to, so
+# "[lech]" finds the person "Lech" and, through them, their account.
+#
+# Resolving this live from the person registry rather than from a table here
+# means adding someone to the system is only ever enrolling their voice — no
+# code change, no restart, and no second list to keep in sync with Settings →
+# People. A voiceprint matching nobody stays unidentified and keeps using the
+# shared profile.
+#
+# Pointing a voice at the same account the person uses in the web UI is the
+# point of the account half: typed and spoken conversations then share one
+# memory, instead of the assistant knowing two disconnected halves of the same
+# person. Someone without an account still gets their own profile, keyed by the
+# voiceprint name — separate memory, just nothing to share it with.
+
 CLOUD_SIGNUP_URL = "https://homemind.veganostr.com"
 
 API_CONFIG_LLM_ENDPOINT = "/api/config/llm"
