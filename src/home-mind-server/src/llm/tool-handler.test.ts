@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleToolCall, extractAndStoreFacts, filterExtractedFacts, normalizeTimestamp, truncateHistory, recallFacts, resolveSearchMode, groundedGeminiSearch, readBraveQuotaHeaders, QuotaError } from "./tool-handler.js";
+import { handleToolCall, entityIdFrom, extractAndStoreFacts, filterExtractedFacts, normalizeTimestamp, truncateHistory, recallFacts, resolveSearchMode, groundedGeminiSearch, readBraveQuotaHeaders, QuotaError } from "./tool-handler.js";
 import type { HomeAssistantClient } from "../ha/client.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { IFactExtractor } from "./interface.js";
@@ -135,6 +135,42 @@ describe("handleToolCall", () => {
     });
 
     expect(result).toEqual({ error: "string error" });
+  });
+});
+
+describe("entityIdFrom", () => {
+  it("accepts the flat entity_id our tool documents", () => {
+    expect(entityIdFrom({ entity_id: "button.kuchnia" })).toBe("button.kuchnia");
+  });
+
+  it("accepts Home Assistant's own target syntax", () => {
+    // Every HA doc writes it this way, so models reach for it. Dropping the
+    // entity here produced a 400 on a real "mop the kitchen" command.
+    expect(entityIdFrom({ target: { entity_id: "button.kuchnia" } })).toBe(
+      "button.kuchnia"
+    );
+  });
+
+  it("accepts entity_id tucked into data, the pre-2024 shape", () => {
+    expect(entityIdFrom({ data: { entity_id: "vacuum.robot" } })).toBe(
+      "vacuum.robot"
+    );
+  });
+
+  it("joins a list of entities", () => {
+    expect(entityIdFrom({ target: { entity_id: ["light.a", "light.b"] } })).toBe(
+      "light.a,light.b"
+    );
+  });
+
+  it("returns undefined when no entity is named", () => {
+    expect(entityIdFrom({ domain: "script", service: "turn_on" })).toBeUndefined();
+  });
+
+  it("prefers the flat form when both are given", () => {
+    expect(
+      entityIdFrom({ entity_id: "light.a", target: { entity_id: "light.b" } })
+    ).toBe("light.a");
   });
 });
 

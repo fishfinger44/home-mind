@@ -489,7 +489,7 @@ export async function handleToolCall(
         result = await ha.callService(
           input.domain as string,
           input.service as string,
-          input.entity_id as string | undefined,
+          entityIdFrom(input),
           input.data as Record<string, unknown> | undefined,
           input.return_response === true
         );
@@ -545,6 +545,34 @@ export function filterExtractedFacts(facts: ExtractedFact[]): { kept: ExtractedF
  * prompt": we skip the Shodh round-trip entirely instead of asking for zero
  * tokens' worth of facts.
  */
+/**
+ * The entity a service call is aimed at, however the model chose to say it.
+ *
+ * Our tool takes a flat `entity_id`, but every Home Assistant example writes
+ * `target: {entity_id: ...}`, so a model that has read the documentation
+ * reaches for `target` — and used to have the entity silently dropped, leaving
+ * Home Assistant to reject a service call that names nothing. It cost a real
+ * command: "mop the kitchen" hit a 400 and fell back to a worse route. Both
+ * spellings mean the same thing, so accept both.
+ */
+export function entityIdFrom(input: Record<string, unknown>): string | undefined {
+  if (typeof input.entity_id === "string") return input.entity_id;
+  if (Array.isArray(input.entity_id)) return input.entity_id.join(",");
+
+  const target = input.target as Record<string, unknown> | undefined;
+  const fromTarget = target?.entity_id;
+  if (typeof fromTarget === "string") return fromTarget;
+  if (Array.isArray(fromTarget)) return fromTarget.join(",");
+
+  // Some models put it in `data`, mirroring the pre-2024 service-call shape.
+  const data = input.data as Record<string, unknown> | undefined;
+  const fromData = data?.entity_id;
+  if (typeof fromData === "string") return fromData;
+  if (Array.isArray(fromData)) return fromData.join(",");
+
+  return undefined;
+}
+
 export async function recallFacts(
   memory: IMemoryStore,
   userId: string,
