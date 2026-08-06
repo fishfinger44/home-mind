@@ -113,6 +113,22 @@ class HomeMindConversationAgent(ConversationEntity):
         if speaker:
             user_input = replace(user_input, text=message)
 
+        # Pusta transkrypcja konczy ture bez pytania modelu i bez otwierania
+        # mikrofonu ponownie. Home Assistant tego nie sprawdza — po pustym
+        # rozpoznaniu mowy woła agenta z pustym tekstem (`assert intent_input
+        # is not None` i nic wiecej), wiec przy wlaczonej ciaglej rozmowie
+        # kazda cisza zaczynalaby kolejna ture. Mostek do Gemini odrzuca cisze
+        # wczesniej i zwraca wlasnie pusty tekst; tutaj domykamy petle.
+        if not message.strip():
+            _LOGGER.debug("Pusta transkrypcja — koncze ture")
+            intent_response = intent.IntentResponse(language=user_input.language)
+            intent_response.async_set_speech("")
+            return ConversationResult(
+                response=intent_response,
+                conversation_id=user_input.conversation_id or ulid.ulid_now(),
+                continue_conversation=False,
+            )
+
         # Get user ID from context if available, otherwise use default
         user_id = self._default_user_id
         user_name: str | None = None
