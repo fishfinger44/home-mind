@@ -485,15 +485,25 @@ export async function handleToolCall(
         result = await ha.searchEntities(input.query as string);
         break;
 
-      case "call_service":
+      case "call_service": {
+        // `return_response` belongs beside `domain`, but models routinely tuck
+        // it into `data` alongside the service's own fields. Home Assistant
+        // then refuses the call for not asking for a response — and, had it got
+        // further, would have rejected the stray field against a strict schema.
+        const data = { ...(input.data as Record<string, unknown> | undefined) };
+        const wantsResponse =
+          input.return_response === true || data.return_response === true;
+        delete data.return_response;
+
         result = await ha.callService(
           input.domain as string,
           input.service as string,
           entityIdFrom(input),
-          input.data as Record<string, unknown> | undefined,
-          input.return_response === true
+          Object.keys(data).length > 0 ? data : undefined,
+          wantsResponse
         );
         break;
+      }
 
       case "get_history": {
         const startTime = normalizeTimestamp(input.start_time as string | undefined);

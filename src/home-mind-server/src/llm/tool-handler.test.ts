@@ -94,6 +94,24 @@ describe("handleToolCall", () => {
     );
   });
 
+  it("takes return_response from data, where models often put it", async () => {
+    await handleToolCall(ha, "call_service", {
+      domain: "media_assistant",
+      service: "search",
+      data: { query: "Smerfy", return_response: true },
+    });
+
+    // The flag must be lifted out and the field removed: left in data it would
+    // be an unexpected key against a strict service schema.
+    expect(ha.callService).toHaveBeenCalledWith(
+      "media_assistant",
+      "search",
+      undefined,
+      { query: "Smerfy" },
+      true
+    );
+  });
+
   it("dispatches get_history to ha.getHistory", async () => {
     const result = await handleToolCall(ha, "get_history", {
       entity_id: "sensor.temp",
