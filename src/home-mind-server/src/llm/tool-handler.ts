@@ -1,8 +1,8 @@
 import type { HomeAssistantClient, HistoryEntry } from "../ha/client.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { IFactExtractor, WebSearchMode } from "./interface.js";
-import type { ExtractedFact } from "../memory/types.js";
-import { IMPERSONAL_FACT_CATEGORIES } from "../memory/types.js";
+import type { ExtractedFact, Fact } from "../memory/types.js";
+import { IMPERSONAL_FACT_CATEGORIES, isImpersonal } from "../memory/types.js";
 import { filterFacts } from "../memory/fact-patterns.js";
 import { envOrUndefined } from "../env.js";
 import {
@@ -560,16 +560,58 @@ export async function recallFacts(
    * that describe the home rather than anybody in it. The filter also covers
    * profiles that collected personal facts before that rule existed.
    */
-  allowPersonal: boolean = true
+  allowPersonal: boolean = true,
+  /**
+   * The profile holding what the whole house knows, when the speaker has their
+   * own profile as well.
+   *
+   * Recall then reads both: being recognised must not cut someone off from the
+   * device nicknames and sensor baselines everyone else taught the assistant.
+   * Omitted (or equal to `userId`) when there is nothing to combine — an
+   * unidentified speaker is already reading the shared profile directly.
+   */
+  sharedUserId?: string
 ): Promise<string[]> {
   const limit = requestLimit ?? configLimit;
   if (limit <= 0) return [];
 
-  const facts = await memory.getFactsWithinTokenLimit(userId, limit, message);
-  const usable = allowPersonal
-    ? facts
-    : facts.filter((f) => IMPERSONAL_FACT_CATEGORIES.includes(f.category));
-  return usable.map((f) => f.content);
+  const personalOnly = (facts: Fact[]) =>
+    allowPersonal ? facts : facts.filter((f) => isImpersonal(f.category));
+
+  if (!sharedUserId || sharedUserId === userId) {
+    const facts = await memory.getFactsWithinTokenLimit(userId, limit, message);
+    return personalOnly(facts).map((f) => f.content);
+  }
+
+  // Each profile is asked for the full budget and the merged result is trimmed
+  // back to it. Splitting the budget up front would be worse: it would cap the
+  // speaker's own memory at half even when the shared profile has nothing to
+  // say, which is exactly the state this house is in today.
+  const [ownFacts, sharedFacts] = await Promise.all([
+    memory.getFactsWithinTokenLimit(userId, limit, message),
+    memory.getFactsWithinTokenLimit(sharedUserId, limit, message),
+  ]);
+
+  // The shared profile is filtered regardless of `allowPersonal`: it is not
+  // anybody's profile, so a personal fact in it is either legacy or a mistake,
+  // and reading it out to whoever is standing there is the harm we are avoiding.
+  const merged = [
+    ...personalOnly(ownFacts),
+    ...sharedFacts.filter((f) => isImpersonal(f.category)),
+  ];
+
+  const contents: string[] = [];
+  const seen = new Set<string>();
+  let tokens = 0;
+  for (const fact of merged) {
+    if (seen.has(fact.content)) continue;
+    const factTokens = Math.ceil(fact.content.length / 4);
+    if (tokens + factTokens > limit) break;
+    seen.add(fact.content);
+    contents.push(fact.content);
+    tokens += factTokens;
+  }
+  return contents;
 }
 
 export async function extractAndStoreFacts(
@@ -587,9 +629,30 @@ export async function extractAndStoreFacts(
    * anything as a statement about a person, because on a shared profile that
    * person is a guess and a wrong guess cannot be untangled afterwards.
    */
-  allowPersonal: boolean = true
+  allowPersonal: boolean = true,
+  /**
+   * Where impersonal facts belong when the speaker has their own profile.
+   *
+   * Knowing who is talking should add a personal memory, not privatise the
+   * house: "the main light is light.wled_kitchen" is as true for everyone else
+   * as it is for the speaker, so it keeps going to the shared profile while
+   * only statements about the person land in theirs.
+   */
+  sharedUserId?: string
 ): Promise<number> {
-  const existingFacts = await memory.getFacts(userId);
+  const splitProfiles = Boolean(sharedUserId && sharedUserId !== userId);
+
+  // Which profile a fact came from, so a replacement deletes the original
+  // rather than silently failing against the wrong one.
+  const ownFacts = await memory.getFacts(userId);
+  const sharedFacts = splitProfiles ? await memory.getFacts(sharedUserId!) : [];
+  const profileOfFact = new Map<string, string>();
+  for (const f of ownFacts) profileOfFact.set(f.id, userId);
+  for (const f of sharedFacts) profileOfFact.set(f.id, sharedUserId!);
+
+  // The extractor sees both profiles, otherwise it would keep "discovering"
+  // house facts that the shared profile already holds.
+  const existingFacts = [...ownFacts, ...sharedFacts];
 
   const extractedFacts = await extractor.extract(
     userMessage,
@@ -619,27 +682,44 @@ export async function extractAndStoreFacts(
 
   if (kept.length === 0) return 0;
 
-  // Delete replaced facts first
+  // Delete replaced facts first, each from the profile that actually holds it.
   for (const fact of kept) {
     if (fact.replaces && fact.replaces.length > 0) {
       for (const oldFactId of fact.replaces) {
-        const deleted = await memory.deleteFact(userId, oldFactId);
+        const owner = profileOfFact.get(oldFactId) ?? userId;
+        const deleted = await memory.deleteFact(owner, oldFactId);
         if (deleted) {
-          console.log(`Replaced old fact ${oldFactId} for ${userId}`);
+          console.log(`Replaced old fact ${oldFactId} for ${owner}`);
         }
       }
     }
   }
 
-  // Batch store all kept facts
-  const ids = await memory.addFacts(
-    userId,
-    kept.map((f) => ({ content: f.content, category: f.category, confidence: f.confidence }))
-  );
-
+  // Route each fact to the profile it is true of: the house, or the speaker.
+  const byProfile = new Map<string, ExtractedFact[]>();
   for (const fact of kept) {
-    console.log(`Stored new fact for ${userId}: ${fact.content}`);
+    const target =
+      splitProfiles && isImpersonal(fact.category) ? sharedUserId! : userId;
+    const bucket = byProfile.get(target);
+    if (bucket) bucket.push(fact);
+    else byProfile.set(target, [fact]);
   }
 
-  return ids.length;
+  let stored = 0;
+  for (const [target, facts] of byProfile) {
+    const ids = await memory.addFacts(
+      target,
+      facts.map((f) => ({
+        content: f.content,
+        category: f.category,
+        confidence: f.confidence,
+      }))
+    );
+    stored += ids.length;
+    for (const fact of facts) {
+      console.log(`Stored new fact for ${target}: ${fact.content}`);
+    }
+  }
+
+  return stored;
 }

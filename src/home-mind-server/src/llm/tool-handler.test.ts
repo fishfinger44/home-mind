@@ -378,6 +378,92 @@ describe("extractAndStoreFacts", () => {
     });
   });
 
+  describe("routing writes between the speaker and the house", () => {
+    it("files personal facts under the speaker and house facts under the shared profile", async () => {
+      const memory = {
+        getFacts: vi.fn().mockResolvedValue([]),
+        addFacts: vi.fn().mockResolvedValue(["id"]),
+        deleteFact: vi.fn().mockResolvedValue(true),
+      } as unknown as IMemoryStore;
+      const extractor = {
+        extract: vi.fn().mockResolvedValue([
+          { content: "Prefers 22°C", category: "preference", confidence: 0.9 },
+          { content: "Main light is light.wled_kitchen", category: "device", confidence: 0.9 },
+          { content: "Normal NOx is 100ppm", category: "baseline", confidence: 0.9 },
+        ]),
+      } as unknown as IFactExtractor;
+
+      const count = await extractAndStoreFacts(
+        memory,
+        extractor,
+        "lech",
+        "msg",
+        "resp",
+        true,
+        "default"
+      );
+
+      expect(memory.addFacts).toHaveBeenCalledWith("lech", [
+        { content: "Prefers 22°C", category: "preference", confidence: 0.9 },
+      ]);
+      expect(memory.addFacts).toHaveBeenCalledWith("default", [
+        { content: "Main light is light.wled_kitchen", category: "device", confidence: 0.9 },
+        { content: "Normal NOx is 100ppm", category: "baseline", confidence: 0.9 },
+      ]);
+      expect(count).toBe(2);
+    });
+
+    it("shows the extractor both profiles so it stops rediscovering house facts", async () => {
+      const memory = {
+        getFacts: vi.fn(async (userId: string) =>
+          userId === "default"
+            ? [{ id: "h-1", content: "Main light is light.wled_kitchen", category: "device" }]
+            : [{ id: "p-1", content: "Prefers 22°C", category: "preference" }]
+        ),
+        addFacts: vi.fn().mockResolvedValue(["id"]),
+        deleteFact: vi.fn().mockResolvedValue(true),
+      } as unknown as IMemoryStore;
+      const extractor = {
+        extract: vi.fn().mockResolvedValue([]),
+      } as unknown as IFactExtractor;
+
+      await extractAndStoreFacts(memory, extractor, "lech", "msg", "resp", true, "default");
+
+      expect(extractor.extract).toHaveBeenCalledWith("msg", "resp", [
+        { id: "p-1", content: "Prefers 22°C", category: "preference" },
+        { id: "h-1", content: "Main light is light.wled_kitchen", category: "device" },
+      ]);
+    });
+
+    it("deletes a replaced fact from the profile that actually holds it", async () => {
+      const memory = {
+        getFacts: vi.fn(async (userId: string) =>
+          userId === "default"
+            ? [{ id: "h-1", content: "Main light is light.wled_bedroom", category: "device" }]
+            : []
+        ),
+        addFacts: vi.fn().mockResolvedValue(["id"]),
+        deleteFact: vi.fn().mockResolvedValue(true),
+      } as unknown as IMemoryStore;
+      const extractor = {
+        extract: vi.fn().mockResolvedValue([
+          {
+            content: "Main light is light.wled_kitchen",
+            category: "device",
+            confidence: 0.9,
+            replaces: ["h-1"],
+          },
+        ]),
+      } as unknown as IFactExtractor;
+
+      await extractAndStoreFacts(memory, extractor, "lech", "msg", "resp", true, "default");
+
+      // The correction lives in the shared profile. Deleting it against the
+      // speaker's profile would no-op and leave both versions in play.
+      expect(memory.deleteFact).toHaveBeenCalledWith("default", "h-1");
+    });
+  });
+
   it("recalls only impersonal facts on a shared profile", async () => {
     const shared = {
       getFactsWithinTokenLimit: vi.fn().mockResolvedValue([
@@ -396,6 +482,74 @@ describe("extractAndStoreFacts", () => {
     ]);
 
     expect(await recallFacts(shared, "user-1", "msg", 1500, 1500, true)).toHaveLength(3);
+  });
+
+  describe("with a speaker profile alongside the shared one", () => {
+    const own = [
+      { content: "Prefers 22°C in the bedroom", category: "preference" },
+    ];
+    const house = [
+      { content: "Main light is light.wled_kitchen", category: "device" },
+      { content: "Someone works from home", category: "pattern" },
+    ];
+
+    function splitMemory() {
+      return {
+        getFactsWithinTokenLimit: vi.fn(async (userId: string) =>
+          userId === "default" ? house : own
+        ),
+      } as unknown as IMemoryStore;
+    }
+
+    it("recalls the speaker's own facts together with the house's", async () => {
+      const facts = await recallFacts(
+        splitMemory(),
+        "lech",
+        "msg",
+        1500,
+        1500,
+        true,
+        "default"
+      );
+
+      // Being recognised must add memory, not remove it: the personal fact and
+      // the house fact both come back.
+      expect(facts).toEqual([
+        "Prefers 22°C in the bedroom",
+        "Main light is light.wled_kitchen",
+      ]);
+    });
+
+    it("never reads a personal fact out of the shared profile", async () => {
+      const facts = await recallFacts(
+        splitMemory(),
+        "lech",
+        "msg",
+        1500,
+        1500,
+        true,
+        "default"
+      );
+
+      // "Someone works from home" sits in the shared profile, so it is about
+      // nobody in particular — reading it back as this speaker's own would be
+      // the misattribution the split exists to prevent.
+      expect(facts).not.toContain("Someone works from home");
+    });
+
+    it("keeps the merged recall inside the token budget", async () => {
+      const big = {
+        getFactsWithinTokenLimit: vi.fn(async () => [
+          { content: "x".repeat(400), category: "device" },
+          { content: "y".repeat(400), category: "device" },
+        ]),
+      } as unknown as IMemoryStore;
+
+      // 100 tokens ≈ 400 chars, so exactly one fact fits — asking two profiles
+      // must not quietly spend twice the budget.
+      const facts = await recallFacts(big, "lech", "msg", 100, 100, true, "default");
+      expect(facts).toHaveLength(1);
+    });
   });
 
   it("defaults to allowing personal facts when the flag is omitted", async () => {

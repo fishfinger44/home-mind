@@ -37,6 +37,11 @@ const AddFactSchema = z.object({
     "pattern",
     "correction",
   ]),
+  // Optional so hand-written calls stay a two-field affair. It exists for
+  // moving facts between profiles: without it every migrated fact would land
+  // at the default confidence, quietly flattening what the assistant was more
+  // and less sure of.
+  confidence: z.number().min(0).max(1).optional(),
 });
 
 export function createRouter(
@@ -173,8 +178,8 @@ export function createRouter(
         });
       }
 
-      const { content, category } = parsed.data;
-      const id = await memory.addFactIfNew(userId, content, category);
+      const { content, category, confidence } = parsed.data;
+      const id = await memory.addFactIfNew(userId, content, category, confidence);
 
       if (id) {
         res.status(201).json({ id, message: "Fact added" });

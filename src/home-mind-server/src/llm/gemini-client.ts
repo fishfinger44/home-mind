@@ -12,6 +12,7 @@
 import type { Config } from "../config.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { IConversationStore } from "../memory/types.js";
+import { SHARED_PROFILE_ID } from "../memory/types.js";
 import { HomeAssistantClient } from "../ha/client.js";
 import { DeviceScanner } from "../ha/device-scanner.js";
 import { TopologyScanner } from "../ha/topology-scanner.js";
@@ -135,7 +136,8 @@ export class GeminiChatEngine implements IChatEngine {
       message,
       request.memoryTokenLimit,
       this.config.memoryTokenLimit,
-      trustedIdentity
+      trustedIdentity,
+      SHARED_PROFILE_ID
     );
 
     // 2. Refresh device/topology, build system prompt
@@ -302,7 +304,8 @@ export class GeminiChatEngine implements IChatEngine {
       userId,
       message,
       responseText,
-      trustedIdentity
+      trustedIdentity,
+      SHARED_PROFILE_ID
     ).catch((err) => console.error("Fact extraction failed:", err));
 
     // Deliver the whole answer to the streaming callback in one shot (this engine

@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Config } from "../config.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { IConversationStore } from "../memory/types.js";
+import { SHARED_PROFILE_ID } from "../memory/types.js";
 import { HomeAssistantClient } from "../ha/client.js";
 import { DeviceScanner } from "../ha/device-scanner.js";
 import { TopologyScanner } from "../ha/topology-scanner.js";
@@ -77,7 +78,8 @@ export class LLMClient implements IChatEngine {
       message,
       request.memoryTokenLimit,
       this.config.memoryTokenLimit,
-      trustedIdentity
+      trustedIdentity,
+      SHARED_PROFILE_ID
     );
     if (this.config.logLevel === "debug") {
       const approxTokens = Math.ceil(factContents.join(" ").length / 4);
@@ -199,7 +201,8 @@ export class LLMClient implements IChatEngine {
       userId,
       message,
       responseText,
-      trustedIdentity
+      trustedIdentity,
+      SHARED_PROFILE_ID
     ).catch((err) => console.error("Fact extraction failed:", err));
 
     // Count facts learned (we don't wait for extraction, so return 0 for now)

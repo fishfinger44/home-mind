@@ -26,6 +26,23 @@ export const IMPERSONAL_FACT_CATEGORIES: readonly FactCategory[] = [
   "correction",
 ];
 
+/**
+ * The profile that holds what everyone in the house shares.
+ *
+ * Before anyone could be identified, this was simply the id every voice
+ * request carried. It keeps that name so nothing already learned is orphaned,
+ * but it now has a second job: once a speaker *is* identified, their personal
+ * facts go to their own profile while the impersonal ones keep landing here.
+ * Otherwise the first person to be recognised would quietly take the house's
+ * knowledge with them, and whatever the others taught the satellite would end
+ * up in a profile no one reads.
+ */
+export const SHARED_PROFILE_ID = "default";
+
+export function isImpersonal(category: FactCategory): boolean {
+  return IMPERSONAL_FACT_CATEGORIES.includes(category);
+}
+
 export interface Fact {
   id: string;
   userId: string;

@@ -385,7 +385,11 @@ describe("OpenAIChatEngine", () => {
       "user-1",
       "Remember I like 22°C",
       "Response",
-      true
+      true,
+      // Impersonal facts keep going to the shared profile even for a known
+      // speaker, so being recognised adds a personal memory without taking
+      // the house's knowledge along with it.
+      "default"
     );
   });
 
@@ -411,7 +415,10 @@ describe("OpenAIChatEngine", () => {
       "default",
       "Głośnik w salonie: jak włączyć film?",
       "Response",
-      false
+      false,
+      // Speaker and shared profile are the same here, so there is nothing to
+      // split — the routing is inert on an unidentified device.
+      "default"
     );
   });
 
