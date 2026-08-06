@@ -156,6 +156,41 @@ describe("handleToolCall", () => {
   });
 });
 
+describe("filtering service-call procedures out of memory", () => {
+  const odrzucane = [
+    // Prawdziwy zapis z pamieci, sprzeczny z promptem
+    'Aby zagrać ulubioną muzykę na Denonie: wywołaj media_player.play_media na encji '
+      + 'media_player.denon_avr_x2400h z media_content_id="Favorites"',
+    "Radio graj przez HEOS: wywołaj media_player.select_source na encji media_player.denon",
+    "User can play music on Denon using play_media service with Artist/Album format",
+    "To turn off the AC use climate.turn_off and call_service with hvac_mode",
+  ];
+  const zachowywane = [
+    // Nazwa encji w fakcie jest w porzadku — to wiedza o domu, nie procedura
+    "Main light in the kitchen is light.wled_kitchen",
+    "User has an Apple TV in the living room named media_player.pokoj_dzienny",
+    "User's dining room lights are nicknamed 'światła nad stołem'",
+    "Normal NOx for this home is around 100ppm",
+  ];
+
+  it("drops instructions on how to call services", () => {
+    const { kept, skipped } = filterExtractedFacts(
+      odrzucane.map((content) => ({ content, category: "device" as const, confidence: 0.9 }))
+    );
+    expect(kept).toHaveLength(0);
+    expect(skipped).toHaveLength(odrzucane.length);
+    for (const s of skipped) expect(s.reason).toContain("service-call procedure");
+  });
+
+  it("keeps facts that merely name an entity", () => {
+    const { kept, skipped } = filterExtractedFacts(
+      zachowywane.map((content) => ({ content, category: "device" as const, confidence: 0.9 }))
+    );
+    expect(skipped).toHaveLength(0);
+    expect(kept).toHaveLength(zachowywane.length);
+  });
+});
+
 describe("entityIdFrom", () => {
   it("accepts the flat entity_id our tool documents", () => {
     expect(entityIdFrom({ entity_id: "button.kuchnia" })).toBe("button.kuchnia");

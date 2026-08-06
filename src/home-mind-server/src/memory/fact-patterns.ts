@@ -11,6 +11,27 @@ export const TRANSIENT_PATTERNS =
 export const DEVICE_SPEC_PATTERNS =
   /\b(supports?\s+\d+|supports?\s+(rgbw|rgb|color_temp|xy|hs|brightness|on_off)|color.?mode|effect.?list|\d+\+?\s+effects?|firmware|protocol|supported.?features?|supported.?color)\b/i;
 
+// Service-call procedures — the assistant writing down HOW to operate the house
+// instead of WHAT is true about it.
+//
+// These go stale the moment the rules change and nothing links them to the
+// system prompt, so the two end up contradicting each other. A real case: the
+// prompt said music goes only through script.zagraj_muzyke while memory held
+// "wywolaj media_player.play_media ... NIE trzeba sprawdzac stanu", learned
+// back when that was the right answer. Worse, decay does not save us — recall
+// reinforces whatever it retrieves, so a wrong-but-relevant procedure gets
+// stronger every time the subject comes up.
+//
+// Entity ids are deliberately NOT matched: "main light is light.wled_kitchen"
+// is a fact worth keeping. What is matched is SERVICE names, which only appear
+// when something is describing a call, and the parameter names that go with them.
+export const SERVICE_PROCEDURE_PATTERNS =
+  // Distinctive service names, which do not occur in ordinary prose, are matched
+  // bare — "using play_media service" is as much a procedure as ".play_media".
+  // turn_on/turn_off/toggle only count after a dot, because "turn off the light"
+  // is a perfectly good thing for a fact to say.
+  /\b(call_service|service_data|media_content_id|media_content_type|play_media|select_source|set_hvac_mode|send_command|volume_set|volume_mute|set_cover_position|select_option|wywołaj|wywolaj)\b|\.(turn_on|turn_off|toggle|open_cover|close_cover|media_play|media_pause|press)\b/i;
+
 // Command-echo patterns — assistant restating what it just did, not a user-stated fact
 export const COMMAND_ECHO_PATTERNS =
   /\b(was set to|was changed to|was turned|has been set|has been turned|has been changed)\b/i;
@@ -34,6 +55,10 @@ export function matchesGarbagePattern(content: string, confidence?: number): str
 
   if (COMMAND_ECHO_PATTERNS.test(content)) {
     return "command echo (restating action)";
+  }
+
+  if (SERVICE_PROCEDURE_PATTERNS.test(content)) {
+    return "service-call procedure (belongs in the system prompt, not memory)";
   }
 
   if (typeof confidence === "number" && confidence < 0.5) {
