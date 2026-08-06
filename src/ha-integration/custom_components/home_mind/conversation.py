@@ -178,7 +178,12 @@ class HomeMindConversationAgent(ConversationEntity):
         self, user_input: ConversationInput
     ) -> ConversationResult | None:
         """Try the built-in HA agent first. Return its result only if it acted
-        on the command; return None to fall through to the Home Mind server."""
+        on the command; return None to fall through to the Home Mind server.
+
+        A result from here is returned to Home Assistant unchanged apart from
+        the continue_conversation flag, which the built-in agent never sets for
+        a completed action.
+        """
         try:
             result = await ha_conversation.async_converse(
                 hass=self.hass,
@@ -200,6 +205,12 @@ class HomeMindConversationAgent(ConversationEntity):
             intent.IntentResponseType.QUERY_ANSWER,
         ):
             _LOGGER.debug("Handled locally (%s) — no tokens spent", response_type)
+            # The built-in agent ends every turn, so without this the wake word
+            # would still be required after exactly the commands people chain
+            # most — lights, switches, the time. Those are the ones it answers
+            # locally, so they never reach the code below that sets the flag.
+            if user_input.agent_id is not None:
+                result = replace(result, continue_conversation=True)
             return result
 
         # no_intent_match / no_valid_targets / error → let Home Mind (LLM) try.
@@ -211,23 +222,22 @@ class HomeMindConversationAgent(ConversationEntity):
 
     @staticmethod
     def _expects_an_answer(response: str, is_voice: bool) -> bool:
-        """Whether to keep the microphone open for a reply.
+        """Whether to keep the microphone open after this turn.
 
-        Home Assistant reopens it once for the next turn, so this is a
-        single-shot flag rather than a mode — there is no loop to run away
-        with, which is what made an earlier automation-based attempt hold two
-        whole conversations with itself in nine seconds.
+        Every spoken turn keeps it open. Home Assistant reopens the microphone
+        once and the satellite closes it again when nobody speaks, so this is a
+        single-shot flag rather than a mode — there is nothing to run away
+        with, unlike an earlier automation that reopened the microphone after
+        playback and held two whole conversations with itself in nine seconds.
 
-        A question mark is the signal: the assistant is told to ask when a
-        command is ambiguous, and making the user say the wake word again to
-        answer their own question is the rudest thing a voice assistant does.
-        Statements end the turn. Text conversations never keep anything open —
-        there is no microphone to hold.
+        Keeping it open only for questions was the cautious reading, and it
+        was the wrong one: most turns are commands answered with a statement,
+        so the wake word was still needed for every single one, which is the
+        thing continuous conversation exists to remove.
+
+        Text conversations keep nothing open — there is no microphone to hold.
         """
-        if not is_voice or not response:
-            return False
-        # Trailing quotes and spaces are common; the mark itself is the signal.
-        return response.rstrip().rstrip("\"'»”)*_ ").endswith("?")
+        return bool(is_voice and response)
 
     def _person_for_voiceprint(self, speaker: str) -> tuple[str, str] | None:
         """Find the household member a voiceprint belongs to.
