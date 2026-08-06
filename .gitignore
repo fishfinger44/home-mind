@@ -300,3 +300,11 @@ data-piper/*.onnx
 data-piper/*.onnx.json
 data-piper/*.wav
 data-piper/voices.json
+
+# Kopie zapasowe robione przed ryzykowna zmiana. Zostaja na dysku jako droga
+# powrotu, ale nie sa zrodlem — bez tej reguly wisza jako niesledzone i
+# predzej czy pozniej ktoras trafi do commita przez `git add -A`.
+*.bak
+*.bak_*
+*.bak-*
+*.przed_*
