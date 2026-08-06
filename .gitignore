@@ -292,3 +292,11 @@ publicity/
 
 # Private / personal docs
 jure-private/
+
+# Katalog roboczy Pipera montowany do kontenera: modele glosow (60-115 MB
+# kazdy), probki i wygenerowane audio. To dane uruchomieniowe, nie zrodla —
+# jeden model juz zdazyl trafic do historii repo, wiec dalej ich nie wciagamy.
+data-piper/*.onnx
+data-piper/*.onnx.json
+data-piper/*.wav
+data-piper/voices.json
