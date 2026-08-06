@@ -6,6 +6,21 @@ const DEFAULT_IDENTITY = `You are a helpful smart home assistant with persistent
 const DEFAULT_VOICE_IDENTITY = `You are a helpful smart home voice assistant with persistent memory. Keep responses brief but smart.`;
 
 // Tool/memory instructions shared across all personas
+/**
+ * House rules come after the built-in instructions on purpose.
+ *
+ * Position is not a guarantee of precedence — models weigh the beginning and
+ * the end of a prompt more than the middle, but nothing promises that a later
+ * line wins. It is a tendency, and one worth having on our side: the rules
+ * that describe THIS house should not be read before the generic ones they
+ * qualify. The real defence against contradiction is not to write one, which
+ * is what the conflict check in the editor is for.
+ */
+function rulesSection(houseRules?: string): string {
+  if (!houseRules?.trim()) return "";
+  return `\n\n## HOUSE RULES\n${houseRules.trim()}`;
+}
+
 const SYSTEM_INSTRUCTIONS = `
 
 ## WHEN TO USE TOOLS vs ANSWER DIRECTLY
@@ -263,7 +278,8 @@ export function buildSystemPrompt(
   homeLayout?: string,
   webSearchLimit?: number,
   speaker?: string,
-  trusted: boolean = true
+  trusted: boolean = true,
+  houseRules?: string
 ): CachedSystemPrompt {
   const factsText =
     facts.length > 0 ? facts.map((f) => `- ${f}`).join("\n") : "No memories yet.";
@@ -285,7 +301,7 @@ export function buildSystemPrompt(
   // part of the prompt was re-charged at full price on every request.
   const layoutSection = homeLayout ? `\n\n${homeLayout}` : "";
   const deviceSection = deviceCheatSheet ? `\n\n${deviceCheatSheet}` : "";
-  const staticContent = `${identity}${instructions}${searchRule}${layoutSection}${deviceSection}`;
+  const staticContent = `${identity}${instructions}${rulesSection(houseRules)}${searchRule}${layoutSection}${deviceSection}`;
 
   // Volatile content: per-request date/time + per-query recalled facts. Kept
   // out of the cached block so it doesn't bust the cache each turn.
@@ -329,7 +345,8 @@ export function buildSystemPromptText(
   homeLayout?: string,
   webSearchLimit?: number,
   speaker?: string,
-  trusted: boolean = true
+  trusted: boolean = true,
+  houseRules?: string
 ): string {
   const factsText =
     facts.length > 0 ? facts.map((f) => `- ${f}`).join("\n") : "No memories yet.";
@@ -353,7 +370,7 @@ export function buildSystemPromptText(
   // device cheat sheet — these only change every ~30 min) so it forms a
   // cacheable prefix, and keep the VOLATILE bits (date/time, per-query recalled
   // facts) at the very end where they don't bust the cache.
-  return `${identity}${instructions}${searchRule}${layoutSection}${deviceSection}
+  return `${identity}${instructions}${rulesSection(houseRules)}${searchRule}${layoutSection}${deviceSection}
 
 ${speakerSection(speaker, trusted)}
 

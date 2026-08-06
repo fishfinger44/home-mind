@@ -3,6 +3,7 @@ import type { Config } from "../config.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { IConversationStore } from "../memory/types.js";
 import { SHARED_PROFILE_ID } from "../memory/types.js";
+import { rulesForPrompt } from "../rules/store.js";
 import { HomeAssistantClient } from "../ha/client.js";
 import { DeviceScanner } from "../ha/device-scanner.js";
 import { TopologyScanner } from "../ha/topology-scanner.js";
@@ -99,7 +100,7 @@ export class LLMClient implements IChatEngine {
     const homeLayout = this.topology.hasLayout()
       ? this.topology.formatSection(exposed)
       : undefined;
-    const systemPrompt = buildSystemPrompt(factContents, isVoice, customPrompt, deviceCheatSheet, homeLayout, request.webSearchLimit, request.userName, trustedIdentity);
+    const systemPrompt = buildSystemPrompt(factContents, isVoice, customPrompt, deviceCheatSheet, homeLayout, request.webSearchLimit, request.userName, trustedIdentity, rulesForPrompt());
 
     // 3. Load conversation history if we have a conversationId
     const messages: Anthropic.MessageParam[] = [];

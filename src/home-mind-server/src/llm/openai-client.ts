@@ -3,6 +3,7 @@ import type { Config } from "../config.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { IConversationStore } from "../memory/types.js";
 import { SHARED_PROFILE_ID } from "../memory/types.js";
+import { rulesForPrompt } from "../rules/store.js";
 import { HomeAssistantClient } from "../ha/client.js";
 import { DeviceScanner } from "../ha/device-scanner.js";
 import { TopologyScanner } from "../ha/topology-scanner.js";
@@ -167,7 +168,7 @@ export class OpenAIChatEngine implements IChatEngine {
     const homeLayout = this.topology.hasLayout()
       ? this.topology.formatSection(exposed)
       : undefined;
-    const systemPrompt = buildSystemPromptText(factContents, isVoice, customPrompt, deviceCheatSheet, homeLayout, request.webSearchLimit, request.userName, trustedIdentity);
+    const systemPrompt = buildSystemPromptText(factContents, isVoice, customPrompt, deviceCheatSheet, homeLayout, request.webSearchLimit, request.userName, trustedIdentity, rulesForPrompt());
 
     // Prompt-size telemetry (sections that dominate the input tokens).
     const approxTok = (s?: string) => Math.ceil((s?.length ?? 0) / 4);

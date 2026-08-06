@@ -28,6 +28,7 @@ const regula = (nadpisz: Partial<Record<string, unknown>> = {}) => ({
   text: "Muzykę graj wyłącznie przez script.zagraj_muzyke.",
   enabled: true,
   protected: false,
+  suggested: false,
   ...nadpisz,
 });
 
@@ -75,6 +76,24 @@ describe("magazyn regul domowych", () => {
       "utf-8"
     );
     const { loadRules } = await swiezyModul();
+    expect(loadRules()).toHaveLength(1);
+  });
+
+  it("zapisuje sugestie asystenta zawsze jako WYLACZONA", async () => {
+    const { suggestRule, loadRules, rulesForPrompt } = await swiezyModul();
+    const nowa = suggestRule("Radio", "Radio graj przez HEOS.");
+    expect(nowa?.enabled).toBe(false);
+    expect(nowa?.suggested).toBe(true);
+    expect(loadRules()).toHaveLength(1);
+    // Wylaczona = nie dotyka promptu, dopoki czlowiek jej nie wlaczy.
+    expect(rulesForPrompt()).toBeUndefined();
+  });
+
+  it("nie duplikuje sugestii o tej samej tresci", async () => {
+    const { suggestRule, loadRules } = await swiezyModul();
+    suggestRule("Radio", "Radio graj przez HEOS.");
+    const druga = suggestRule("Radio inaczej", "  Radio graj przez HEOS.  ");
+    expect(druga).toBeNull();
     expect(loadRules()).toHaveLength(1);
   });
 

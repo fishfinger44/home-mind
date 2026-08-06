@@ -13,6 +13,7 @@ import type { Config } from "../config.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { IConversationStore } from "../memory/types.js";
 import { SHARED_PROFILE_ID } from "../memory/types.js";
+import { rulesForPrompt } from "../rules/store.js";
 import { HomeAssistantClient } from "../ha/client.js";
 import { DeviceScanner } from "../ha/device-scanner.js";
 import { TopologyScanner } from "../ha/topology-scanner.js";
@@ -159,7 +160,8 @@ export class GeminiChatEngine implements IChatEngine {
       homeLayout,
       request.webSearchLimit,
       request.userName,
-      trustedIdentity
+      trustedIdentity,
+      rulesForPrompt()
     );
 
     const webSearchEnabled = (request.webSearchLimit ?? 1) > 0;

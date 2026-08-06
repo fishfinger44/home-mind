@@ -38,6 +38,16 @@ export interface HouseRule {
    * rule that cannot be corrected.
    */
   protected: boolean;
+  /**
+   * Written by the assistant rather than by a person.
+   *
+   * The extractor spots operating procedures in conversation and used to throw
+   * them away, because a procedure stored as a fact goes stale and then argues
+   * with the prompt. Filing them here instead keeps the signal without the
+   * risk: a suggestion is always saved disabled, so it changes nothing until
+   * someone reads it, checks it against the rest and turns it on.
+   */
+  suggested: boolean;
 }
 
 /** In-memory copy so prompt building stays synchronous and cheap. */
@@ -84,6 +94,8 @@ export function saveRules(rules: HouseRule[]): HouseRule[] {
     text: r.text.trim(),
     enabled: r.enabled,
     protected: r.protected,
+    // Older files predate the field; absent means a person wrote it.
+    suggested: r.suggested === true,
   }));
 
   mkdirSync(dirname(RULES_PATH), { recursive: true });
@@ -103,6 +115,32 @@ export function rulesForPrompt(): string | undefined {
   const enabled = loadRules().filter((r) => r.enabled && r.text.trim());
   if (enabled.length === 0) return undefined;
   return enabled.map((r) => r.text.trim()).join("\n\n");
+}
+
+/**
+ * File a rule proposed by the assistant, disabled and marked as such.
+ *
+ * Silently ignores a proposal whose text already exists, so the same advice
+ * repeated across conversations does not pile up as duplicates.
+ */
+export function suggestRule(title: string, text: string): HouseRule | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  const existing = loadRules();
+  if (existing.some((r) => r.text.trim() === trimmed)) return null;
+
+  const rule: HouseRule = {
+    id: `s${Date.now().toString(36)}`,
+    title: title.trim() || "Sugestia asystenta",
+    text: trimmed,
+    enabled: false,
+    protected: false,
+    suggested: true,
+  };
+  saveRules([...existing, rule]);
+  console.log(`[rules] assistant suggested a rule: ${rule.title}`);
+  return rule;
 }
 
 /** Test seam: drop the cache so the next read hits the disk again. */

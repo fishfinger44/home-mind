@@ -119,6 +119,9 @@ class HomeMindConversationAgent(ConversationEntity):
         # is not None` i nic wiecej), wiec przy wlaczonej ciaglej rozmowie
         # kazda cisza zaczynalaby kolejna ture. Mostek do Gemini odrzuca cisze
         # wczesniej i zwraca wlasnie pusty tekst; tutaj domykamy petle.
+        if self._is_farewell(message):
+            _LOGGER.debug("Pożegnanie — zamykam nasłuch")
+
         if not message.strip():
             _LOGGER.debug("Pusta transkrypcja — koncze ture")
             intent_response = intent.IntentResponse(language=user_input.language)
@@ -186,7 +189,10 @@ class HomeMindConversationAgent(ConversationEntity):
             return ConversationResult(
                 response=intent_response,
                 conversation_id=conversation_id,
-                continue_conversation=self._expects_an_answer(response_text, is_voice),
+                continue_conversation=(
+                    self._expects_an_answer(response_text, is_voice)
+                    and not self._is_farewell(message)
+                ),
             )
 
         except Exception as err:
@@ -238,7 +244,11 @@ class HomeMindConversationAgent(ConversationEntity):
             # would still be required after exactly the commands people chain
             # most — lights, switches, the time. Those are the ones it answers
             # locally, so they never reach the code below that sets the flag.
-            if CONTINUE_CONVERSATION and user_input.agent_id is not None:
+            if (
+                CONTINUE_CONVERSATION
+                and user_input.agent_id is not None
+                and not self._is_farewell(user_input.text)
+            ):
                 result = replace(result, continue_conversation=True)
             return result
 
@@ -248,6 +258,24 @@ class HomeMindConversationAgent(ConversationEntity):
             response_type,
         )
         return None
+
+    # Pożegnania. Po nich mikrofon ma się zamknąć — inaczej "dobranoc" zostawia
+    # go otwartym na 15 sekund w cichym pokoju, a każdy trzask staje się turą.
+    # Dokładnie tak 06.08 o 23:49 hałas przyszedł jako "Jeden.", asystent zrobił
+    # z tego pytanie o sprzątanie kuchni i uruchomił mopowanie po niejednoznacznym
+    # "Tak, to było trzasknięcie".
+    POZEGNANIA = (
+        "dobranoc", "do widzenia", "na razie", "to wszystko", "koniec",
+        "dziękuję to wszystko", "papa", "cześć", "śpij dobrze", "idę spać",
+    )
+
+    @classmethod
+    def _is_farewell(cls, message: str) -> bool:
+        tekst = message.strip().lower().rstrip(".!?…").strip()
+        if not tekst or len(tekst) > 40:
+            return False
+        return any(tekst == p or tekst.endswith(" " + p) or tekst.startswith(p + ",")
+                   or tekst.startswith(p + " ") for p in cls.POZEGNANIA)
 
     @staticmethod
     def _expects_an_answer(response: str, is_voice: bool) -> bool:
