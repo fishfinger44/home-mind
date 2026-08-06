@@ -157,6 +157,7 @@ class HomeMindConversationAgent(ConversationEntity):
             return ConversationResult(
                 response=intent_response,
                 conversation_id=conversation_id,
+                continue_conversation=self._expects_an_answer(response_text, is_voice),
             )
 
         except Exception as err:
@@ -207,6 +208,26 @@ class HomeMindConversationAgent(ConversationEntity):
             response_type,
         )
         return None
+
+    @staticmethod
+    def _expects_an_answer(response: str, is_voice: bool) -> bool:
+        """Whether to keep the microphone open for a reply.
+
+        Home Assistant reopens it once for the next turn, so this is a
+        single-shot flag rather than a mode — there is no loop to run away
+        with, which is what made an earlier automation-based attempt hold two
+        whole conversations with itself in nine seconds.
+
+        A question mark is the signal: the assistant is told to ask when a
+        command is ambiguous, and making the user say the wake word again to
+        answer their own question is the rudest thing a voice assistant does.
+        Statements end the turn. Text conversations never keep anything open —
+        there is no microphone to hold.
+        """
+        if not is_voice or not response:
+            return False
+        # Trailing quotes and spaces are common; the mark itself is the signal.
+        return response.rstrip().rstrip("\"'»”)*_ ").endswith("?")
 
     def _person_for_voiceprint(self, speaker: str) -> tuple[str, str] | None:
         """Find the household member a voiceprint belongs to.
