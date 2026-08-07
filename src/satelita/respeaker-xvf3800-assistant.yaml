@@ -1396,14 +1396,16 @@ external_components:
     components:
       - i2s_audio
     refresh: 0s
+  # Lokalna kopia zamiast `ref: main`, bo `relock_beam()` jest naszym dodatkiem
+  # (patrz components/respeaker_xvf3800/). Zrodlo: formatBCE/Respeaker-XVF3800-
+  # ESPHome-integration, odbite 2026-08-07. Aktualizacja upstreamu = recznie
+  # przeniesc te jedna metode.
   - source:
-      type: git
-      url: https://github.com/formatBCE/Respeaker-XVF3800-ESPHome-integration
-      ref: main
+      type: local
+      path: components
     components:
       - respeaker_xvf3800
       - aic3104
-    refresh: 0s
 
 respeaker_xvf3800:
   id: respeaker
@@ -1690,11 +1692,20 @@ voice_assistant:
   on_listening:
     - lambda: id(voice_assistant_phase) = ${voice_assist_waiting_for_command_phase_id};
     # Zaczyna sie kolejna tura ciaglej rozmowy — odwolaj zwolnienie beamu, zeby
-    # pin z chwili slowa budzacego przetrwal. To musi byc TUTAJ, a nie ponowne
-    # lock_beam(): lock przypina do azymutu BIEZACEGO, a ten po odtworzeniu
-    # odpowiedzi mogl juz uciec w strone halasu — przyszpililibysmy mikrofon OD
-    # mowiacego.
+    # pin z chwili slowa budzacego przetrwal.
     - script.stop: zwolnij_beam_po_rozmowie
+    # ...a jesli odliczanie zdazylo dobiec do konca, przypnij z powrotem. Samo
+    # `script.stop` niczego nie przywraca, a POMIAR (07.08) pokazal, ze miedzy
+    # on_end a on_listening mija 4-7 s, wiec 3-sekundowe odliczanie wygrywalo
+    # ZAWSZE: pierwsza tura po slowie budzacym byla przypieta, a cala reszta
+    # rozmowy szla juz mikrofonem dookolnym. Stad wejscia obcych glosow.
+    #
+    # relock_beam(), nie lock_beam(): lock przypina do azymutu BIEZACEGO, a ten
+    # po odtworzeniu odpowiedzi mogl juz uciec w strone halasu — przyszpililibysmy
+    # mikrofon OD mowiacego. relock tylko wlacza z powrotem stale wiazki na
+    # azymucie ZAPAMIETANYM przy slowie budzacym (unlock_beam() go nie kasuje).
+    # Gdy beam wciaz trzyma, relock jest pusta operacja.
+    - lambda: id(respeaker).relock_beam();
     - script.execute: control_leds
   on_stt_vad_start:
     - lambda: id(voice_assistant_phase) = ${voice_assist_listening_for_command_phase_id};
