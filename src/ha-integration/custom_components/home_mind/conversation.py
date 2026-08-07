@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import replace
-from typing import Literal
+from typing import Any, Literal
 
 import aiohttp
 
@@ -61,24 +61,36 @@ _LOGGER = logging.getLogger(__name__)
 # cisza konczy ture i wraca slowo budzace, mowa przedluza lancuch.
 CONTINUE_CONVERSATION = True
 
-# Ile tur z rzedu wolno przeprowadzic bez ANI JEDNEGO wywolania uslugi, zanim
-# mikrofon sie zamknie.
+# Kiedy zamknac mikrofon w ciaglej rozmowie.
 #
-# To jedyne zabezpieczenie w tym pliku, ktore nie zalezy od jezyka, od tresci
-# odpowiedzi ani od tego, czy model zachowal sie zgodnie z regulami. Zamyka
-# kazda petle, takze taka, ktorej nie przewidzielismy.
+# Problem, ktory to rozwiazuje (zapis z satelity 07.08): kazda odpowiedz
+# otwiera mikrofon ponownie, wiec halas w pokoju wypelnia to otwarcie, dostaje
+# odpowiedz i otwiera mikrofon nastepny raz. Po „Dziekuje" -> „Prosze bardzo"
+# przyszlo „mama." -> „W czym moge pomoc?" i przekrecone zdanie -> „Nie
+# rozumiem…", a mikrofon byl otwarty TAKZE po tej ostatniej turze. Rozmowa
+# ucichla dlatego, ze zabraklo dosc glosnego dzwieku, a nie dlatego, ze ja
+# zamknelismy.
 #
-# Powod: przy wlaczonej ciaglej rozmowie kazda odpowiedz otwiera mikrofon
-# ponownie, wiec halas w pokoju wypelnia to otwarcie, dostaje odpowiedz i
-# otwiera mikrofon nastepny raz. 07.08 zapis z satelity: po „Dziekuje" ->
-# „Prosze bardzo" przyszlo „mama." -> „W czym moge pomoc?" i „Jas, w klasie
-# musze do mowic, tak, czy nie?" -> „Nie rozumiem…" — a mikrofon byl otwarty
-# TAKZE po tej ostatniej turze. Rozmowa nie skonczyla sie dlatego, ze ja
-# zamknelismy, tylko dlatego, ze zabraklo dosc glosnego dzwieku.
+# ROZPOZNANY MOWCA NIE MA ZADNEGO LIMITU. Ciagla rozmowa istnieje po to, zeby
+# byla ciagla; ucinanie jej po dwoch turach „bez akcji" kaleczylo dokladnie to,
+# czemu ma sluzyc. Sygnal, ktory odroznia czlowieka od pokoju, mamy juz i w tej
+# rozmowie zadzialal bezblednie: tury 1-2 przyszly ze znacznikiem `[lech]` z
+# voice-match, tury 3-4 (szum) bez zadnego znacznika.
 #
-# Cena: rozmowa czysto slowna (dwa zarty pod rzad, nic do zrobienia w domu)
-# tez sie urwie i trzeba bedzie powtorzyc slowo budzace. Wybor swiadomy —
-# ciagla rozmowa istnieje po to, by lancuchowac POLECENIA.
+# Stad dwa progi dla dwoch roznych sytuacji:
+
+# Rozmowe zaczal ktos rozpoznany, a teraz kolejne tury nie naleza do nikogo
+# znanego — czyli albo odszedl, albo mikrofon nagrywa pokoj.
+#
+# Prog 2, nie 1, bo weryfikacja mowcy jest zawodna przy BARDZO KROTKICH
+# wypowiedziach („tak", „nie", „jeszcze jeden") — to byla diagnoza tamtego
+# wyniku 0,556. Jedno chybienie wolno; dwa pod rzad to juz nie przypadek.
+MAX_TUR_BEZ_ROZPOZNANIA = 2
+
+# Rozmowy, w ktorej NIKT nigdy nie zostal rozpoznany (gosc, albo voice-match
+# nie ma odcisku), nie da sie pilnowac tozsamoscia — nie ma czego porownywac.
+# Zostaje slabszy sygnal: tury, w ktorych nic sie w domu nie wydarzylo. Nie
+# dotyczy rozmow z rozpoznanym mowca, wiec nie kaleczy ciaglosci.
 MAX_TUR_BEZ_DZIALANIA = 2
 
 
@@ -107,10 +119,12 @@ class HomeMindConversationAgent(ConversationEntity):
         self._api_token = entry.data.get(CONF_API_TOKEN, "").strip() or None
         self._default_user_id = entry.data.get(CONF_USER_ID, DEFAULT_USER_ID)
         self._session = async_get_clientsession(hass)
-        # Kolejne tury bez wywolania uslugi, per rozmowa. Slownik, a nie jedna
-        # liczba, bo rozmowa pisana moze trwac obok glosowej; kasowany, gdy
-        # tura sie zamyka, wiec nie rosnie w nieskonczonosc.
-        self._jalowe_tury: dict[str, int] = {}
+        # Stan ciaglej rozmowy, per conversation_id: ile tur z rzedu bez
+        # rozpoznanego mowcy, ile bez zadnego dzialania, i czy ktokolwiek w tej
+        # rozmowie zostal kiedykolwiek rozpoznany. Slownik, a nie pojedyncze
+        # liczniki, bo rozmowa pisana moze trwac obok glosowej; wpis znika, gdy
+        # tura sie domyka, wiec nie rosnie w nieskonczonosc.
+        self._stan_rozmowy: dict[str, dict[str, Any]] = {}
 
         self._attr_unique_id = entry.entry_id
         self._attr_device_info = dr.DeviceInfo(
@@ -221,26 +235,37 @@ class HomeMindConversationAgent(ConversationEntity):
                 "Got response: %s", response_text[:100] if response_text else "None"
             )
 
-            # Tura, w ktorej cos sie w domu wydarzylo, zeruje licznik: lancuch
-            # polecen ma trwac dowolnie dlugo. Licza sie tylko tury jalowe pod
-            # rzad, bo to one skladaja sie w petle na szumie.
-            jalowe = 0 if tools_used else self._jalowe_tury.get(conversation_id, 0) + 1
+            # Rozpoznany mowca zeruje wszystko: rozmowa moze trwac dowolnie
+            # dlugo, a to, ze pare tur temu ktos byl nierozpoznany, przestaje
+            # miec znaczenie, skoro znowu slychac czlowieka.
+            stan = self._stan_rozmowy.get(
+                conversation_id, {"bez_rozpoznania": 0, "jalowe": 0, "znany": False}
+            )
+            if rozpoznany:
+                stan = {"bez_rozpoznania": 0, "jalowe": 0, "znany": True}
+            else:
+                stan = {
+                    "bez_rozpoznania": stan["bez_rozpoznania"] + 1,
+                    "jalowe": 0 if tools_used else stan["jalowe"] + 1,
+                    "znany": stan["znany"],
+                }
 
             intent_response = intent.IntentResponse(language=user_input.language)
             intent_response.async_set_speech(response_text)
 
             trzymaj = self._trzymaj_mikrofon(
-                response_text, is_voice, jalowe
+                response_text, is_voice, rozpoznany, stan
             ) and not self._is_farewell(message)
 
             if trzymaj:
-                self._jalowe_tury[conversation_id] = jalowe
+                self._stan_rozmowy[conversation_id] = stan
             else:
                 # Tura sie domyka — nie ma czego pamietac, a slownik ma nie rosnac.
-                self._jalowe_tury.pop(conversation_id, None)
-                if jalowe >= MAX_TUR_BEZ_DZIALANIA:
+                self._stan_rozmowy.pop(conversation_id, None)
+                if not rozpoznany and stan["znany"]:
                     _LOGGER.debug(
-                        "%d tury bez zadnego dzialania — zamykam nasluch", jalowe
+                        "%d tury bez rozpoznanego mowcy — zamykam nasluch",
+                        stan["bez_rozpoznania"],
                     )
 
             return ConversationResult(
@@ -304,13 +329,15 @@ class HomeMindConversationAgent(ConversationEntity):
                 and not self._is_farewell(user_input.text)
             ):
                 result = replace(result, continue_conversation=True)
-                # Wbudowany agent trafil tu wylacznie dlatego, ze WYKONAL
-                # akcje albo odpowiedzial na pytanie o dane — to jest dzialanie,
-                # wiec licznik tur jalowych wraca do zera tak samo jak po
-                # wywolaniu uslugi na serwerze. Bez tego lancuch „zapal, zgas,
-                # otworz" urywalby sie po dwoch poleceniach.
+                # Tu sie trafia wylacznie z rozpoznanym mowca (warunek przy
+                # wywolaniu) i wylacznie gdy agent WYKONAL akcje albo odpowiedzial
+                # na pytanie o dane. Obie rzeczy zeruja stan tak samo jak tura
+                # obsluzona na serwerze — bez tego lancuch „zapal, zgas, otworz"
+                # niosl by ze soba liczniki sprzed niego.
                 if result.conversation_id:
-                    self._jalowe_tury.pop(result.conversation_id, None)
+                    self._stan_rozmowy[result.conversation_id] = {
+                        "bez_rozpoznania": 0, "jalowe": 0, "znany": True,
+                    }
             return result
 
         # no_intent_match / no_valid_targets / error → let Home Mind (LLM) try.
@@ -365,32 +392,39 @@ class HomeMindConversationAgent(ConversationEntity):
         return any(f in tekst for f in cls.NIEZROZUMIENIE)
 
     @classmethod
-    def _trzymaj_mikrofon(cls, response: str, is_voice: bool, jalowe: int) -> bool:
+    def _trzymaj_mikrofon(
+        cls, response: str, is_voice: bool, rozpoznany: bool, stan: dict[str, Any]
+    ) -> bool:
         """Czy po tej turze mikrofon ma zostac otwarty.
 
-        Domyslnie tak dla kazdej mowionej tury: wiekszosc tur to polecenia
-        zbywane zdaniem oznajmujacym, wiec otwieranie mikrofonu tylko po
-        pytaniach kazaloby powtarzac slowo budzace dokladnie tam, gdzie ciagla
-        rozmowa ma sens. Rozmowy pisane nie trzymaja niczego — nie ma
-        mikrofonu do trzymania.
+        Rozmowy pisane nie trzymaja niczego — nie ma mikrofonu do trzymania.
 
-        Ale „jednorazowa flaga, wiec nie ma sie czemu wyrwac" — jak glosilo
-        wczesniejsze uzasadnienie — jest prawda WYLACZNIE w cichym pokoju.
-        Przy halasie kazde otwarcie zostaje wypelnione szumem, szum dostaje
-        odpowiedz, a odpowiedz otwiera mikrofon nastepny raz; jednorazowosc
-        sklada sie w petle, ktora sama sie karmi. Dlatego dwa hamulce:
+        „Jednorazowa flaga, wiec nie ma sie czemu wyrwac" — jak glosilo
+        wczesniejsze uzasadnienie tej funkcji — jest prawda WYLACZNIE w cichym
+        pokoju. Przy halasie kazde otwarcie zostaje wypelnione szumem, szum
+        dostaje odpowiedz, a odpowiedz otwiera mikrofon nastepny raz;
+        jednorazowosc sklada sie w petle, ktora sama sie karmi.
 
-        - odpowiedz przyznajaca niezrozumienie konczy ture od razu, bo wsadem
-          byl szum i nasluchiwanie go dalej jest odwrotnoscia leku;
-        - MAX_TUR_BEZ_DZIALANIA kolejnych tur bez wywolania uslugi konczy ture
-          niezaleznie od tresci — to hamulec, ktory dziala takze wtedy, gdy
-          model odpowie czyms, czego tu nie przewidziano.
+        Ale lekiem NIE jest limit tur, bo to kaleczy ciaglosc, czyli cala
+        wartosc tej funkcji. Lekiem jest pytanie „czy to nadal mowi ten sam
+        czlowiek": dopoki voice-match kogos rozpoznaje, mikrofon zostaje
+        otwarty BEZ ZADNEGO LIMITU. Progi wchodza dopiero wtedy, gdy tozsamosc
+        znika — i sa inne w zaleznosci od tego, czy bylo co tracic.
         """
         if not (CONTINUE_CONVERSATION and is_voice and response):
             return False
+        # Niezrozumienie znaczy, ze wsadem byl szum; nasluchiwanie go dalej
+        # podstawia mikrofon pod ten sam halas.
         if cls._przyznaje_niezrozumienie(response):
             return False
-        return jalowe < MAX_TUR_BEZ_DZIALANIA
+        if rozpoznany:
+            return True
+        if stan["znany"]:
+            # Rozmowe zaczal ktos rozpoznany, a teraz nie wiadomo, kto mowi.
+            return stan["bez_rozpoznania"] < MAX_TUR_BEZ_ROZPOZNANIA
+        # Nikt w tej rozmowie nigdy nie zostal rozpoznany — tozsamosc nie jest
+        # dostepna jako sygnal, wiec zostaje slabszy: brak dzialan.
+        return stan["jalowe"] < MAX_TUR_BEZ_DZIALANIA
 
     def _person_for_voiceprint(self, speaker: str) -> tuple[str, str] | None:
         """Find the household member a voiceprint belongs to.
