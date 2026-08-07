@@ -49,6 +49,17 @@ export interface GrupaUrzadzen {
   wzory?: RegExp[];
   /** Restricted unless the household says otherwise. */
   domyslnie: boolean;
+  /**
+   * Whether the calming-services exemption is withheld from this group.
+   *
+   * That exemption rests on an assumption — that risk travels in one
+   * direction, because starting a machine wakes a household and stopping one
+   * does not. For the air conditioning the assumption simply fails: switching
+   * it off during a heatwave, or in the middle of the night, is as disruptive
+   * as switching it on. Where the assumption does not hold, the group is
+   * closed in both directions rather than split.
+   */
+  bezUlgi?: boolean;
 }
 
 export const GRUPY_URZADZEN: GrupaUrzadzen[] = [
@@ -70,10 +81,11 @@ export const GRUPY_URZADZEN: GrupaUrzadzen[] = [
   {
     id: "klimatyzacja",
     nazwa: "Klimatyzacja",
-    opis: "Włączanie i tryby. Odczyt temperatury zostaje dla wszystkich.",
+    opis: "Włączanie ORAZ wyłączanie — oba dotkliwe. Odczyt temperatury zostaje dla wszystkich.",
     domeny: ["climate"],
     wzory: [/^switch\.580d0d2f9e31/i],
     domyslnie: true,
+    bezUlgi: true,
   },
   {
     id: "swiatlo",
@@ -103,10 +115,14 @@ export const GRUPY_URZADZEN: GrupaUrzadzen[] = [
  * Services that only ever calm a device down.
  *
  * Anyone may stop what is already running — a guest who wants the vacuum out
- * of the way, a child who wants the air conditioner off, someone who simply
- * finds it too loud. Refusing that would be obstruction rather than safety,
- * and it is the direction of travel that carries the risk: starting a machine
- * is what wakes a household, not stopping one.
+ * of the way, someone who simply finds it too loud. Refusing that would be
+ * obstruction rather than safety, and it is the direction of travel that
+ * carries the risk: starting a machine is what wakes a household, not stopping
+ * one.
+ *
+ * That reasoning is not universal, which is why `bezUlgi` exists. It does not
+ * hold for the air conditioning, where turning it off on a hot night is as
+ * unwelcome as turning it on — so that group is closed both ways.
  *
  * Reading is unaffected either way — these rules apply to call_service only,
  * so anyone can still ask what the temperature is.
@@ -193,10 +209,6 @@ export function checkRestriction(
   if (speakerRecognised) return { allowed: true };
 
   const ustawienia = wczytajOgraniczenia();
-  if (ustawienia.wolnoZatrzymywac && service && USLUGI_USPOKAJAJACE.has(service.toLowerCase())) {
-    return { allowed: true };
-  }
-
   const zamkniete = GRUPY_URZADZEN.filter((g) => ustawienia.grupy.includes(g.id));
   const encje = (entityId ?? "").split(",").map((e) => e.trim()).filter(Boolean);
 
@@ -211,14 +223,23 @@ export function checkRestriction(
 
   if (!trafiona) return { allowed: true };
 
+  // Ulga rozstrzyga się dopiero tutaj, bo zależy od grupy: klimatyzacja jest
+  // zamknięta w obie strony, reszta tylko w kierunku uruchomienia.
+  const uspokajajaca = !!service && USLUGI_USPOKAJAJACE.has(service.toLowerCase());
+  if (uspokajajaca && ustawienia.wolnoZatrzymywac && !trafiona.bezUlgi) {
+    return { allowed: true };
+  }
+
   return {
     allowed: false,
     reason:
       `Odmowa: „${trafiona.nazwa}” obsługuje tylko rozpoznany domownik, ` +
       "a tego głosu nie rozpoznałem. " +
-      (ustawienia.wolnoZatrzymywac
-        ? "Zatrzymanie i wyłączenie są dozwolone dla każdego, podobnie jak odczyt stanu. "
-        : "Odczyt stanu jest dozwolony dla każdego. ") +
+      (trafiona.bezUlgi
+        ? "Dotyczy to zarówno włączania, jak i wyłączania. Odczyt stanu jest dozwolony dla każdego. "
+        : ustawienia.wolnoZatrzymywac
+          ? "Zatrzymanie i wyłączenie są dozwolone dla każdego, podobnie jak odczyt stanu. "
+          : "Odczyt stanu jest dozwolony dla każdego. ") +
       "Powiedz to użytkownikowi wprost i nie szukaj innej drogi do tego samego urządzenia.",
   };
 }

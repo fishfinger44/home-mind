@@ -44,11 +44,31 @@ describe("urzadzenia tylko dla rozpoznanych domownikow", () => {
     expect(checkRestriction("climate", "set_hvac_mode", "climate.580d0d2f9e31", nierozpoznany).allowed).toBe(false);
   });
 
-  it("POZWALA kazdemu zatrzymac i wylaczyc", () => {
+  it("POZWALA kazdemu zatrzymac i wylaczyc — poza klimatyzacja", () => {
     // Kierunek dzialania niesie ryzyko: uruchomienie budzi dom, zatrzymanie nie.
     expect(checkRestriction("vacuum", "stop", "vacuum.roborock", nierozpoznany).allowed).toBe(true);
-    expect(checkRestriction("climate", "turn_off", "climate.580d0d2f9e31", nierozpoznany).allowed).toBe(true);
     expect(checkRestriction("cover", "stop_cover", "cover.salon_lewa", nierozpoznany).allowed).toBe(true);
+  });
+
+  it("blokuje klimatyzacje w OBIE strony", () => {
+    // Przy klimatyzacji zalozenie o kierunku ryzyka nie dziala: wylaczenie jej
+    // w upalna noc jest tak samo dotkliwe jak wlaczenie, wiec grupa jest
+    // zamknieta w obie strony zamiast rozdzielana.
+    for (const usluga of ["turn_off", "turn_on", "set_hvac_mode", "set_temperature"]) {
+      expect(
+        checkRestriction("climate", usluga, "climate.580d0d2f9e31", nierozpoznany).allowed
+      ).toBe(false);
+    }
+    // Take switch podszywajacy sie pod klimatyzacje.
+    expect(
+      checkRestriction("switch", "turn_off", "switch.580d0d2f9e31_ac", nierozpoznany).allowed
+    ).toBe(false);
+  });
+
+  it("odmowa przy klimatyzacji nie obiecuje, ze wylaczyc wolno", () => {
+    const powod = checkRestriction("climate", "turn_off", "climate.580d0d2f9e31", nierozpoznany).reason ?? "";
+    expect(powod).toContain("włączania, jak i wyłączania");
+    expect(powod).not.toContain("Zatrzymanie i wyłączenie są dozwolone");
   });
 
   it("nie rusza swiatel, muzyki, filmow ani projektora", () => {
