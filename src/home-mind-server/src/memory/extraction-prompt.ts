@@ -1,3 +1,71 @@
+import type { Fact } from "./types.js";
+
+/**
+ * The existing facts, as a numbered list.
+ *
+ * They used to go in as pretty-printed JSON objects, each carrying a ULID and
+ * a category: roughly forty tokens of scaffolding around ten tokens of
+ * content, repeated for every fact in the profile, on every single turn. The
+ * model needs only two things from this list — the wording, so it can spot a
+ * duplicate, and a handle to point at what a new fact supersedes. A line
+ * number is that handle, and the caller maps it back to the real id. The
+ * category is the extractor's own output, so feeding it back teaches nothing.
+ */
+export function formatExistingFacts(facts: Fact[]): { section: string; ids: string[] } {
+  if (facts.length === 0) {
+    return { section: "No existing facts stored yet.", ids: [] };
+  }
+
+  const lines = facts.map((f, i) => `${i + 1}. ${f.content}`);
+  return {
+    section: `Existing facts, numbered (check whether a new fact duplicates or replaces one):\n${lines.join("\n")}`,
+    ids: facts.map((f) => f.id),
+  };
+}
+
+/**
+ * Turn whatever the model put in `replaces` back into fact ids.
+ *
+ * It is asked for line numbers, but a model that has seen ids elsewhere in the
+ * conversation sometimes echoes one, and numbers arrive as strings about as
+ * often as numbers. Anything resolving to neither is dropped rather than
+ * guessed at: a bad reference here deletes a fact nobody meant to touch.
+ */
+export function resolveReplaces(replaces: unknown, ids: string[]): string[] {
+  if (!Array.isArray(replaces)) return [];
+
+  const resolved: string[] = [];
+  for (const entry of replaces) {
+    if (typeof entry === "number" || (typeof entry === "string" && /^\s*\d+\s*$/.test(entry))) {
+      const index = Number(entry) - 1;
+      if (Number.isInteger(index) && index >= 0 && index < ids.length) {
+        resolved.push(ids[index]);
+      }
+      continue;
+    }
+    if (typeof entry === "string" && ids.includes(entry)) resolved.push(entry);
+  }
+  return resolved;
+}
+
+/**
+ * Fill the prompt's placeholders.
+ *
+ * A plain `String.replace` with a string pattern would read `$&` and friends
+ * in the *replacement* as substitution syntax — so a user message containing
+ * one would silently corrupt the prompt. A replacer function is exempt from
+ * that reading.
+ */
+export function fillExtractionPrompt(values: {
+  existingFactsSection: string;
+  userMessage: string;
+  assistantResponse: string;
+}): string {
+  return EXTRACTION_PROMPT.replace("{existing_facts_section}", () => values.existingFactsSection)
+    .replace("{user_message}", () => values.userMessage)
+    .replace("{assistant_response}", () => values.assistantResponse);
+}
+
 export const EXTRACTION_PROMPT = `You are a memory extraction assistant for a smart home AI. Analyze this conversation and extract ONLY long-term facts worth remembering about the user and their home.
 
 Categories (use exactly these):
@@ -47,14 +115,14 @@ Return ONLY a JSON array of facts to remember. Each fact must have:
 - "content": A complete, standalone statement about the USER or their home (not about the assistant)
 - "category": One of the categories above
 - "confidence": 0.0 to 1.0 — how confident you are this is a lasting fact (not transient)
-- "replaces": Array of IDs from existing facts that this new fact supersedes (empty if none)
+- "replaces": Array of NUMBERS from the numbered list of existing facts that this new fact supersedes (empty if none)
 
 Return empty array [] if no facts worth remembering.
 
 Important:
 - Only extract SIGNIFICANT facts that should persist across sessions
 - Make facts self-contained and clear
-- If a new fact updates/changes an existing fact about the SAME TOPIC, include that fact's ID in "replaces"
+- If a new fact updates/changes an existing fact about the SAME TOPIC, include that fact's NUMBER in "replaces"
 - Return valid JSON only, no explanation`;
 
 export const VALID_CATEGORIES = [

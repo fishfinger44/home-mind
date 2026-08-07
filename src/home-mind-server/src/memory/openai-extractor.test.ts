@@ -17,6 +17,17 @@ vi.mock("openai", () => {
 import { OpenAIFactExtractor } from "./openai-extractor.js";
 import type { Fact } from "./types.js";
 
+const fakt = (id: string, content: string): Fact => ({
+  id,
+  userId: "user-1",
+  content,
+  category: "preference",
+  confidence: 0.8,
+  createdAt: new Date(),
+  lastUsed: new Date(),
+  useCount: 1,
+});
+
 describe("OpenAIFactExtractor", () => {
   let extractor: OpenAIFactExtractor;
 
@@ -97,26 +108,47 @@ describe("OpenAIFactExtractor", () => {
     expect(result).toHaveLength(6);
   });
 
-  it("handles replaces field correctly", async () => {
+  it("zamienia numery z listy na prawdziwe id faktow", async () => {
+    const istniejace: Fact[] = [
+      fakt("old-1", "Stara preferencja"),
+      fakt("old-2", "Druga stara preferencja"),
+    ];
     mockCreate.mockResolvedValue({
       choices: [
         {
           message: {
             content: JSON.stringify([
-              {
-                content: "New pref",
-                category: "preference",
-                replaces: ["old-1", "old-2"],
-              },
+              // Numer i numer jako tekst — modele zwracaja i tak, i tak.
+              { content: "New pref", category: "preference", replaces: [1, "2"] },
             ]),
           },
         },
       ],
     });
 
-    const result = await extractor.extract("msg", "resp", []);
+    const result = await extractor.extract("msg", "resp", istniejace);
 
     expect(result[0].replaces).toEqual(["old-1", "old-2"]);
+  });
+
+  it("odrzuca odwolania, ktorych nie ma na liscie", async () => {
+    mockCreate.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify([
+              // 7 wykracza poza liste, "zmyslone-id" nigdy nie bylo wyslane.
+              { content: "New pref", category: "preference", replaces: [7, "zmyslone-id"] },
+            ]),
+          },
+        },
+      ],
+    });
+
+    const result = await extractor.extract("msg", "resp", [fakt("old-1", "Stara preferencja")]);
+
+    // Zle odwolanie kasowaloby fakt, ktorego nikt nie chcial ruszac.
+    expect(result[0].replaces).toEqual([]);
   });
 
   it("defaults replaces to empty array when not an array", async () => {
@@ -141,30 +173,34 @@ describe("OpenAIFactExtractor", () => {
     expect(result[0].replaces).toEqual([]);
   });
 
-  it("passes existing facts to the prompt", async () => {
-    const existingFacts: Fact[] = [
-      {
-        id: "fact-1",
-        userId: "user-1",
-        content: "Old preference",
-        category: "preference",
-        confidence: 0.8,
-        createdAt: new Date(),
-        lastUsed: new Date(),
-        useCount: 1,
-      },
-    ];
-
+  it("wysyla fakty jako numerowana liste, bez id i kategorii", async () => {
     mockCreate.mockResolvedValue({
       choices: [{ message: { content: "[]" } }],
     });
 
-    await extractor.extract("msg", "resp", existingFacts);
+    await extractor.extract("msg", "resp", [
+      fakt("01KYF13DPF456BT0YKDD5SN75A", "Old preference"),
+    ]);
 
-    const callArgs = mockCreate.mock.calls[0][0];
-    const promptContent = callArgs.messages[0].content;
-    expect(promptContent).toContain("fact-1");
-    expect(promptContent).toContain("Old preference");
+    const prompt = mockCreate.mock.calls[0][0].messages[0].content;
+    expect(prompt).toContain("1. Old preference");
+    // ULID i kategoria to byly ~40 tokenow rusztowania na 10 tokenow tresci,
+    // powtarzane dla kazdego faktu w kazdej turze.
+    expect(prompt).not.toContain("01KYF13DPF456BT0YKDD5SN75A");
+    expect(prompt).not.toContain('"content": "Old preference"');
+  });
+
+  it("nie daje sie zwiesc znakom podstawienia w wypowiedzi", async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: "[]" } }],
+    });
+
+    // `$&` w tekscie zastepowanym przez String.replace wstawia caly wzorzec.
+    await extractor.extract("cena to 5$ & reszta", "$'ok", []);
+
+    const prompt = mockCreate.mock.calls[0][0].messages[0].content;
+    expect(prompt).toContain("cena to 5$ & reszta");
+    expect(prompt).not.toContain("{user_message}");
   });
 
   it("returns empty array when API throws", async () => {

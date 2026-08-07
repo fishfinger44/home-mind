@@ -1,7 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { ExtractedFact, Fact } from "./types.js";
 import type { IFactExtractor } from "../llm/interface.js";
-import { EXTRACTION_PROMPT, VALID_CATEGORIES } from "./extraction-prompt.js";
+import {
+  VALID_CATEGORIES,
+  fillExtractionPrompt,
+  formatExistingFacts,
+  resolveReplaces,
+} from "./extraction-prompt.js";
 
 export class FactExtractor implements IFactExtractor {
   private client: Anthropic;
@@ -18,26 +23,12 @@ export class FactExtractor implements IFactExtractor {
     existingFacts: Fact[] = []
   ): Promise<ExtractedFact[]> {
     try {
-      // Build existing facts section for the prompt
-      let existingFactsSection = "";
-      if (existingFacts.length > 0) {
-        const factsJson = existingFacts.map((f) => ({
-          id: f.id,
-          content: f.content,
-          category: f.category,
-        }));
-        existingFactsSection = `Existing facts (check if new facts should replace any of these):
-${JSON.stringify(factsJson, null, 2)}`;
-      } else {
-        existingFactsSection = "No existing facts stored yet.";
-      }
-
-      const prompt = EXTRACTION_PROMPT.replace(
-        "{existing_facts_section}",
-        existingFactsSection
-      )
-        .replace("{user_message}", userMessage)
-        .replace("{assistant_response}", assistantResponse);
+      const { section, ids } = formatExistingFacts(existingFacts);
+      const prompt = fillExtractionPrompt({
+        existingFactsSection: section,
+        userMessage,
+        assistantResponse,
+      });
 
       const response = await this.client.messages.create({
         model: this.model,
@@ -70,7 +61,7 @@ ${JSON.stringify(factsJson, null, 2)}`;
           content: f.content,
           category: f.category,
           confidence: typeof f.confidence === "number" ? f.confidence : undefined,
-          replaces: Array.isArray(f.replaces) ? f.replaces : [],
+          replaces: resolveReplaces(f.replaces, ids),
         }));
     } catch (error) {
       // Log but don't fail - extraction is best-effort
