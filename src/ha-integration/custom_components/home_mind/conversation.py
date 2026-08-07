@@ -61,6 +61,26 @@ _LOGGER = logging.getLogger(__name__)
 # cisza konczy ture i wraca slowo budzace, mowa przedluza lancuch.
 CONTINUE_CONVERSATION = True
 
+# Ile tur z rzedu wolno przeprowadzic bez ANI JEDNEGO wywolania uslugi, zanim
+# mikrofon sie zamknie.
+#
+# To jedyne zabezpieczenie w tym pliku, ktore nie zalezy od jezyka, od tresci
+# odpowiedzi ani od tego, czy model zachowal sie zgodnie z regulami. Zamyka
+# kazda petle, takze taka, ktorej nie przewidzielismy.
+#
+# Powod: przy wlaczonej ciaglej rozmowie kazda odpowiedz otwiera mikrofon
+# ponownie, wiec halas w pokoju wypelnia to otwarcie, dostaje odpowiedz i
+# otwiera mikrofon nastepny raz. 07.08 zapis z satelity: po „Dziekuje" ->
+# „Prosze bardzo" przyszlo „mama." -> „W czym moge pomoc?" i „Jas, w klasie
+# musze do mowic, tak, czy nie?" -> „Nie rozumiem…" — a mikrofon byl otwarty
+# TAKZE po tej ostatniej turze. Rozmowa nie skonczyla sie dlatego, ze ja
+# zamknelismy, tylko dlatego, ze zabraklo dosc glosnego dzwieku.
+#
+# Cena: rozmowa czysto slowna (dwa zarty pod rzad, nic do zrobienia w domu)
+# tez sie urwie i trzeba bedzie powtorzyc slowo budzace. Wybor swiadomy —
+# ciagla rozmowa istnieje po to, by lancuchowac POLECENIA.
+MAX_TUR_BEZ_DZIALANIA = 2
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -87,6 +107,10 @@ class HomeMindConversationAgent(ConversationEntity):
         self._api_token = entry.data.get(CONF_API_TOKEN, "").strip() or None
         self._default_user_id = entry.data.get(CONF_USER_ID, DEFAULT_USER_ID)
         self._session = async_get_clientsession(hass)
+        # Kolejne tury bez wywolania uslugi, per rozmowa. Slownik, a nie jedna
+        # liczba, bo rozmowa pisana moze trwac obok glosowej; kasowany, gdy
+        # tura sie zamyka, wiec nie rosnie w nieskonczonosc.
+        self._jalowe_tury: dict[str, int] = {}
 
         self._attr_unique_id = entry.entry_id
         self._attr_device_info = dr.DeviceInfo(
@@ -119,8 +143,8 @@ class HomeMindConversationAgent(ConversationEntity):
         # is not None` i nic wiecej), wiec przy wlaczonej ciaglej rozmowie
         # kazda cisza zaczynalaby kolejna ture. Mostek do Gemini odrzuca cisze
         # wczesniej i zwraca wlasnie pusty tekst; tutaj domykamy petle.
-        if self._is_farewell(message):
-            _LOGGER.debug("Pożegnanie — zamykam nasłuch")
+        # (Pożegnanie zamyka nasłuch niżej, przy składaniu ConversationResult —
+        # tutaj stał blok, który wyglądał jakby je obsługiwał, a tylko logował.)
 
         if not message.strip():
             _LOGGER.debug("Pusta transkrypcja — koncze ture")
@@ -185,7 +209,7 @@ class HomeMindConversationAgent(ConversationEntity):
                 return local_result
 
         try:
-            response_text = await self._call_api(
+            response_text, tools_used = await self._call_api(
                 message=message,
                 user_id=user_id,
                 conversation_id=conversation_id,
@@ -197,16 +221,32 @@ class HomeMindConversationAgent(ConversationEntity):
                 "Got response: %s", response_text[:100] if response_text else "None"
             )
 
+            # Tura, w ktorej cos sie w domu wydarzylo, zeruje licznik: lancuch
+            # polecen ma trwac dowolnie dlugo. Licza sie tylko tury jalowe pod
+            # rzad, bo to one skladaja sie w petle na szumie.
+            jalowe = 0 if tools_used else self._jalowe_tury.get(conversation_id, 0) + 1
+
             intent_response = intent.IntentResponse(language=user_input.language)
             intent_response.async_set_speech(response_text)
+
+            trzymaj = self._trzymaj_mikrofon(
+                response_text, is_voice, jalowe
+            ) and not self._is_farewell(message)
+
+            if trzymaj:
+                self._jalowe_tury[conversation_id] = jalowe
+            else:
+                # Tura sie domyka — nie ma czego pamietac, a slownik ma nie rosnac.
+                self._jalowe_tury.pop(conversation_id, None)
+                if jalowe >= MAX_TUR_BEZ_DZIALANIA:
+                    _LOGGER.debug(
+                        "%d tury bez zadnego dzialania — zamykam nasluch", jalowe
+                    )
 
             return ConversationResult(
                 response=intent_response,
                 conversation_id=conversation_id,
-                continue_conversation=(
-                    self._expects_an_answer(response_text, is_voice)
-                    and not self._is_farewell(message)
-                ),
+                continue_conversation=trzymaj,
             )
 
         except Exception as err:
@@ -264,6 +304,13 @@ class HomeMindConversationAgent(ConversationEntity):
                 and not self._is_farewell(user_input.text)
             ):
                 result = replace(result, continue_conversation=True)
+                # Wbudowany agent trafil tu wylacznie dlatego, ze WYKONAL
+                # akcje albo odpowiedzial na pytanie o dane — to jest dzialanie,
+                # wiec licznik tur jalowych wraca do zera tak samo jak po
+                # wywolaniu uslugi na serwerze. Bez tego lancuch „zapal, zgas,
+                # otworz" urywalby sie po dwoch poleceniach.
+                if result.conversation_id:
+                    self._jalowe_tury.pop(result.conversation_id, None)
             return result
 
         # no_intent_match / no_valid_targets / error → let Home Mind (LLM) try.
@@ -283,32 +330,67 @@ class HomeMindConversationAgent(ConversationEntity):
         "dziękuję to wszystko", "papa", "cześć", "śpij dobrze", "idę spać",
     )
 
+    # Podziekowanie konczy wymiane tylko wtedy, gdy jest CALA wypowiedzia.
+    #
+    # Osobno od POZEGNANIA, bo tamte dopasowuja sie takze jako poczatek zdania
+    # („dobranoc, zgas swiatlo" to pozegnanie mimo doklejonego polecenia). Przy
+    # podziekowaniu ta sama regula bylaby szkodliwa: „Dziekuje, zapal jeszcze
+    # swiatlo w salonie" to polecenie, nie koniec rozmowy, a zamkniecie
+    # mikrofonu kosztowaloby wypowiedziane juz zdanie.
+    PODZIEKOWANIA = ("dziękuję", "dziekuje", "dzięki", "dzieki", "dziękuję ci")
+
     @classmethod
     def _is_farewell(cls, message: str) -> bool:
         tekst = message.strip().lower().rstrip(".!?…").strip()
         if not tekst or len(tekst) > 40:
             return False
+        if tekst in cls.PODZIEKOWANIA:
+            return True
         return any(tekst == p or tekst.endswith(" " + p) or tekst.startswith(p + ",")
                    or tekst.startswith(p + " ") for p in cls.POZEGNANIA)
 
-    @staticmethod
-    def _expects_an_answer(response: str, is_voice: bool) -> bool:
-        """Whether to keep the microphone open after this turn.
+    # Odpowiedzi, ktorymi asystent przyznaje, ze nie zrozumial.
+    #
+    # Niezrozumienie znaczy, ze wsadem byl szum — a wtedy przedluzanie nasluchu
+    # jest odwrotnoscia tego, co trzeba zrobic: podstawia mikrofon pod ten sam
+    # halas, ktory wlasnie wyprodukowal niezrozumiala ture.
+    NIEZROZUMIENIE = (
+        "nie zrozumiałem", "nie rozumiem", "nie dosłyszałem", "nie usłyszałem",
+        "nie zrozumiałam", "nie wiem, o co",
+    )
 
-        Every spoken turn keeps it open. Home Assistant reopens the microphone
-        once and the satellite closes it again when nobody speaks, so this is a
-        single-shot flag rather than a mode — there is nothing to run away
-        with, unlike an earlier automation that reopened the microphone after
-        playback and held two whole conversations with itself in nine seconds.
+    @classmethod
+    def _przyznaje_niezrozumienie(cls, response: str) -> bool:
+        tekst = (response or "").strip().lower()
+        return any(f in tekst for f in cls.NIEZROZUMIENIE)
 
-        Keeping it open only for questions was the cautious reading, and it
-        was the wrong one: most turns are commands answered with a statement,
-        so the wake word was still needed for every single one, which is the
-        thing continuous conversation exists to remove.
+    @classmethod
+    def _trzymaj_mikrofon(cls, response: str, is_voice: bool, jalowe: int) -> bool:
+        """Czy po tej turze mikrofon ma zostac otwarty.
 
-        Text conversations keep nothing open — there is no microphone to hold.
+        Domyslnie tak dla kazdej mowionej tury: wiekszosc tur to polecenia
+        zbywane zdaniem oznajmujacym, wiec otwieranie mikrofonu tylko po
+        pytaniach kazaloby powtarzac slowo budzace dokladnie tam, gdzie ciagla
+        rozmowa ma sens. Rozmowy pisane nie trzymaja niczego — nie ma
+        mikrofonu do trzymania.
+
+        Ale „jednorazowa flaga, wiec nie ma sie czemu wyrwac" — jak glosilo
+        wczesniejsze uzasadnienie — jest prawda WYLACZNIE w cichym pokoju.
+        Przy halasie kazde otwarcie zostaje wypelnione szumem, szum dostaje
+        odpowiedz, a odpowiedz otwiera mikrofon nastepny raz; jednorazowosc
+        sklada sie w petle, ktora sama sie karmi. Dlatego dwa hamulce:
+
+        - odpowiedz przyznajaca niezrozumienie konczy ture od razu, bo wsadem
+          byl szum i nasluchiwanie go dalej jest odwrotnoscia leku;
+        - MAX_TUR_BEZ_DZIALANIA kolejnych tur bez wywolania uslugi konczy ture
+          niezaleznie od tresci — to hamulec, ktory dziala takze wtedy, gdy
+          model odpowie czyms, czego tu nie przewidziano.
         """
-        return bool(CONTINUE_CONVERSATION and is_voice and response)
+        if not (CONTINUE_CONVERSATION and is_voice and response):
+            return False
+        if cls._przyznaje_niezrozumienie(response):
+            return False
+        return jalowe < MAX_TUR_BEZ_DZIALANIA
 
     def _person_for_voiceprint(self, speaker: str) -> tuple[str, str] | None:
         """Find the household member a voiceprint belongs to.
@@ -390,8 +472,13 @@ class HomeMindConversationAgent(ConversationEntity):
         is_voice: bool = False,
         user_name: str | None = None,
         identity_confidence: str = "certain",
-    ) -> str:
-        """Call the Home Mind API."""
+    ) -> tuple[str, list[str]]:
+        """Call the Home Mind API. Zwraca odpowiedz i liste uzytych narzedzi.
+
+        Narzedzia sa potrzebne, zeby odroznic ture, w ktorej cos sie w domu
+        wydarzylo, od samej wymiany zdan — na tym opiera sie licznik tur
+        jalowych, ktory zamyka mikrofon.
+        """
         url = f"{self._api_url}{API_CHAT_ENDPOINT}"
 
         payload = {
@@ -455,4 +542,8 @@ class HomeMindConversationAgent(ConversationEntity):
                 raise Exception(f"API error {response.status}: {error_text}")
 
             data = await response.json()
-            return data.get("response") or "I received your request but got no response."
+            tools = data.get("toolsUsed") or []
+            return (
+                data.get("response") or "I received your request but got no response.",
+                list(tools),
+            )
