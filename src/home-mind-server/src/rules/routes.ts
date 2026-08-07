@@ -94,6 +94,12 @@ export function createRulesRouter(llm: IChatEngine): Router {
         // No memory and no web search — the rules are the entire input.
         memoryTokenLimit: 0,
         webSearchLimit: 0,
+        // And nothing written back. `memoryTokenLimit: 0` only stops the read;
+        // extraction runs after every answer regardless, so each click on this
+        // button was quietly copying the rules into memory as facts — which is
+        // very likely where the rule-shaped entries in the shared profile came
+        // from. A review of the prompt must not become part of the prompt.
+        skipExtraction: true,
       });
       res.json({ wynik: (odpowiedz.response ?? "").trim() || "BRAK" });
     } catch (err) {

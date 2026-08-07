@@ -84,6 +84,19 @@ export interface ChatRequest {
   /** How sure the caller is about who is speaking. Governs whether personal
    *  memory may be read and whether anything may be written to that profile. */
   identityConfidence?: IdentityConfidence;
+  /**
+   * Nie wyciągaj faktów z tej wymiany.
+   *
+   * Dla wywołań wewnętrznych, które nie są rozmową z człowiekiem: kontrola
+   * sprzeczności reguł i kontrola pamięci względem reguł. Ich wsadem jest
+   * WŁASNY prompt systemu, więc ekstrakcja przepisuje reguły z powrotem do
+   * pamięci jako fakty — a to znaczy, że sprawdzacz duplikatów sam produkuje
+   * duplikaty, które potem znajduje. Sprzężenie zwrotne, które samo się karmi.
+   *
+   * `memoryTokenLimit: 0` tego nie załatwia: wyłącza CZYTANIE pamięci, a zapis
+   * odbywa się bezwarunkowo po każdej odpowiedzi.
+   */
+  skipExtraction?: boolean;
   /** Display name of whoever is speaking, when the caller could establish it.
    *  Today it comes from the Home Assistant user behind the request; a voice or
    *  face recogniser could supply it instead. Absent = unidentified, which the

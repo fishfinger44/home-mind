@@ -134,7 +134,7 @@ export class OpenAIChatEngine implements IChatEngine {
     request: ChatRequest,
     onChunk?: StreamCallback
   ): Promise<ChatResponse> {
-    const { message, userId, conversationId, isVoice = false, customPrompt } = request;
+    const { message, userId, conversationId, isVoice = false, customPrompt, skipExtraction } = request;
     const toolsUsed: string[] = [];
 
     // 1. Load user's memory
@@ -274,16 +274,21 @@ export class OpenAIChatEngine implements IChatEngine {
     // misattributed fact cannot be untangled later, it simply becomes something
     // the assistant "knows" about the wrong person. A shared device still
     // learns how the house works — just nothing about who was talking.
-    extractAndStoreFacts(
-      this.memory,
-      this.extractor,
-      userId,
-      message,
-      responseText,
-      trustedIdentity,
-      SHARED_PROFILE_ID,
-      toolsUsed
-    ).catch((err) => console.error("Fact extraction failed:", err));
+    // Kontrole wewnetrzne (sprzecznosci regul, kontrola pamieci) podaja tu
+    // WLASNY prompt systemu jako wiadomosc. Ekstrakcja przepisalaby reguly do
+    // pamieci jako fakty, czyli sprawdzacz duplikatow produkowalby duplikaty.
+    if (!skipExtraction) {
+      extractAndStoreFacts(
+        this.memory,
+        this.extractor,
+        userId,
+        message,
+        responseText,
+        trustedIdentity,
+        SHARED_PROFILE_ID,
+        toolsUsed
+      ).catch((err) => console.error("Fact extraction failed:", err));
+    }
 
     // 8. If the model produced no usable response, attach a structured error
     // so the HA integration can surface a useful hint instead of the generic
