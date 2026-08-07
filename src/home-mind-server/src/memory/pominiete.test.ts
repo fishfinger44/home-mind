@@ -72,3 +72,34 @@ describe("trwaly slad po pominietych faktach", () => {
     expect(po[po.length - 1].tresc).toBe("najnowszy");
   });
 });
+
+describe("odczyt i usuwanie wpisow", () => {
+  it("zwraca wpisy od najnowszego, z nadanym id", async () => {
+    const { czytajPominiecia } = await import("./pominiete.js");
+    zapiszPominiecie({ rodzaj: "bramka", powod: "a", tresc: "pierwszy", userId: "lech" });
+    zapiszPominiecie({ rodzaj: "filtr", powod: "b", tresc: "drugi", userId: "lech" });
+
+    const wpisy = czytajPominiecia();
+    expect(wpisy.map((w) => w.tresc)).toEqual(["drugi", "pierwszy"]);
+    expect(wpisy[0].id).toMatch(/^[0-9a-f]{12}$/);
+  });
+
+  it("usuwa wskazany wpis, zostawiajac reszte", async () => {
+    const { czytajPominiecia, usunPominiecie } = await import("./pominiete.js");
+    zapiszPominiecie({ rodzaj: "bramka", powod: "a", tresc: "zostaje", userId: "lech" });
+    zapiszPominiecie({ rodzaj: "bramka", powod: "b", tresc: "do usuniecia", userId: "lech" });
+
+    const cel = czytajPominiecia().find((w) => w.tresc === "do usuniecia")!;
+    expect(usunPominiecie(cel.id)).toBe(true);
+    expect(czytajPominiecia().map((w) => w.tresc)).toEqual(["zostaje"]);
+    // Powtorne usuniecie nie moze udawac, ze cos zrobilo.
+    expect(usunPominiecie(cel.id)).toBe(false);
+  });
+
+  it("pomija uszkodzona linie zamiast wywracac odczyt", async () => {
+    const { czytajPominiecia } = await import("./pominiete.js");
+    zapiszPominiecie({ rodzaj: "bramka", powod: "a", tresc: "dobry", userId: "lech" });
+    writeFileSync(plik, readFileSync(plik, "utf-8") + "{to nie jest json\n", "utf-8");
+    expect(czytajPominiecia().map((w) => w.tresc)).toEqual(["dobry"]);
+  });
+});
