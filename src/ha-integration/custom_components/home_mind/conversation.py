@@ -79,22 +79,46 @@ CONTINUE_CONVERSATION = True
 #
 # Stad dwa progi dla dwoch roznych sytuacji:
 
-# Rozmowe zaczal ktos rozpoznany, a teraz kolejne tury nie naleza do nikogo
-# znanego — czyli albo odszedl, albo mikrofon nagrywa pokoj.
+# SESJA NALEZY DO JEDNEJ OSOBY (2026-08-07).
 #
-# Prog 2, nie 1, bo weryfikacja mowcy jest zawodna przy BARDZO KROTKICH
-# wypowiedziach („tak", „nie", „jeszcze jeden") — to byla diagnoza tamtego
-# wyniku 0,556. Jedno chybienie wolno; dwa pod rzad to juz nie przypadek.
-MAX_TUR_BEZ_ROZPOZNANIA = 2
+# Dotad kazda tura byla oceniana osobno, wiec glos z tla — telewizor albo drugi
+# domownik — wchodzil w otwarty mikrofon i dostawal swoje polecenie wykonane.
+# Liczniki ponizej zamykaly nasluch DOPIERO PO fakcie, czyli po turze, ktora juz
+# cos zrobila. 07.08 „Ok." nierozpoznanym glosem uruchomilo odkurzacz ponownie i
+# zatrzymala to dopiero bramka `ograniczenia.json`, nie ta funkcja.
+#
+# Teraz pierwsza rozpoznana tura ZAMYKA sesje na te osobe, a kazda nastepna tura
+# musi przyjsc od niej. Cudza — rozpoznana czy nie — jest po cichu ignorowana:
+# bez modelu, bez akcji, bez odpowiedzi. Nowe slowo budzace = nowa sesja i
+# rozpoznanie od zera.
+#
+# ⚠️ Slowo budzace NIE identyfikuje mowcy (microWakeWord zna fraze, nie barwe
+# glosu; ~1 s to za malo dla ECAPA), wiec kotwica to tura PIERWSZA, nie
+# wybudzenie. Ta jedna tura zostaje bez ochrony — jest tez najbezpieczniejsza,
+# bo beam wlasnie zatrzasnal sie na kierunku, z ktorego padlo slowo budzace.
 
-# Rozmowy, w ktorej NIKT nigdy nie zostal rozpoznany (gosc, albo voice-match
-# nie ma odcisku), nie da sie pilnowac tozsamoscia — nie ma czego porownywac.
-# Zostaje slabszy sygnal: tury, w ktorych nic sie w domu nie wydarzylo. Nie
-# dotyczy rozmow z rozpoznanym mowca, wiec nie kaleczy ciaglosci.
-MAX_TUR_BEZ_DZIALANIA = 2
+# Ile obcych tur z rzedu wolno przeczekac, zanim mikrofon sie zamknie.
+#
+# Ignorowanie jest tanie (zero tokenow, zero akcji), wiec limit jest po to, zeby
+# gadajacy telewizor nie trzymal mikrofonu otwartego w nieskonczonosc. Przy
+# oknie VAD 15 s trzy tury to najwyzej ~45 s.
+#
+# 3, nie 1, bo pod ten sam licznik podpada wlasciciel, ktorego voice-match
+# chybil: weryfikacja jest zawodna przy BARDZO KROTKICH wypowiedziach („tak",
+# „nie", „jeszcze jeden") — pomiar 07.08 dal 0.221 dla „Okej." (2,1 s). Dwie
+# proby powtorzenia to minimum, zeby ta zawodnosc nie kosztowala polecenia.
+MAX_TUR_OBCYCH = 3
 
-# Ponizej tego podobienstwa glosu dopasowanie liczy sie jako NIEPEWNE przy
-# decyzji o mikrofonie (tylko tam — tozsamosc dla pamieci zostaje bez zmian).
+# Ile trzeba, zeby OTWORZYC sesje na swoje nazwisko (tylko to — tozsamosc dla
+# pamieci zostaje bez zmian).
+#
+# Zostac w juz otwartej sesji jest LZEJ: wystarczy, ze znacznik od voice-match w
+# ogole przyszedl i wskazuje wlasciciela, czyli faktycznie prog 0.30
+# (`VERIFY_THRESHOLD` — ponizej niego znacznika nie ma wcale, wiec HA nie ma
+# czego porownywac i nizszego progu NIE DA SIE tu ustawic; trzeba by ruszyc
+# voice-match, a to zmienia takze przypisywanie faktow do pamieci). Asymetria
+# jest celowa i zasadna: wiemy juz, kto mowi, wiec slabsze dopasowanie niesie
+# wiecej informacji niz przy otwieraniu sesji.
 #
 # voice-match przepuszcza wszystko powyzej 0.30. Ale 0.31 i 0.95 to dwie rozne
 # rzeczy, a dotad byly nierozroznialne: liczba powstawala co ture i szla
@@ -135,11 +159,11 @@ class HomeMindConversationAgent(ConversationEntity):
         self._api_token = entry.data.get(CONF_API_TOKEN, "").strip() or None
         self._default_user_id = entry.data.get(CONF_USER_ID, DEFAULT_USER_ID)
         self._session = async_get_clientsession(hass)
-        # Stan ciaglej rozmowy, per conversation_id: ile tur z rzedu bez
-        # rozpoznanego mowcy, ile bez zadnego dzialania, i czy ktokolwiek w tej
-        # rozmowie zostal kiedykolwiek rozpoznany. Slownik, a nie pojedyncze
-        # liczniki, bo rozmowa pisana moze trwac obok glosowej; wpis znika, gdy
-        # tura sie domyka, wiec nie rosnie w nieskonczonosc.
+        # Stan ciaglej rozmowy, per conversation_id: do kogo nalezy sesja
+        # (`wlasciciel` — profil pamieci osoby, ktora ja otworzyla) i ile obcych
+        # tur z rzedu przeczekalismy. Slownik, a nie pojedyncze liczniki, bo
+        # rozmowa pisana moze trwac obok glosowej; wpis znika, gdy tura sie
+        # domyka, wiec nie rosnie w nieskonczonosc.
         self._stan_rozmowy: dict[str, dict[str, Any]] = {}
 
         self._attr_unique_id = entry.entry_id
@@ -247,6 +271,46 @@ class HomeMindConversationAgent(ConversationEntity):
         # Generate conversation ID if not provided
         conversation_id = user_input.conversation_id or ulid.ulid_now()
 
+        stan = self._stan_rozmowy.get(conversation_id, {"wlasciciel": None, "obce": 0})
+        wlasciciel = stan["wlasciciel"]
+
+        # Sesja nalezy do osoby, ktora ja otworzyla. Cudza tura — rozpoznana czy
+        # nie — konczy sie tutaj: bez modelu, bez akcji, bez odpowiedzi.
+        #
+        # Cisza, a nie „nie rozpoznaje Twojego glosu", bo to zdanie bylo dla
+        # kogos, kto do asystenta nie mowil, a przy telewizorze w tle sam by je
+        # wywolal w kolko. Mikrofon zostaje otwarty, wiec wlasciciel moze po
+        # prostu powtorzyc — az do MAX_TUR_OBCYCH.
+        #
+        # Ta bramka stoi PRZED skrotem `prefer_local` swiadomie: wbudowany agent
+        # HA rozumie „zapal swiatlo" i wykonalby polecenie z tla, nie docierajac
+        # ani tu, ani na serwer, gdzie leza reguly. Ta sama dziura wymagala juz
+        # raz osobnej latki przy ograniczeniach urzadzen.
+        if is_voice and wlasciciel is not None and user_id != wlasciciel:
+            stan = {"wlasciciel": wlasciciel, "obce": stan["obce"] + 1}
+            trzymaj = stan["obce"] < MAX_TUR_OBCYCH
+            _LOGGER.info(
+                "Sesja należy do '%s', a tura przyszła od '%s' (%s) — ignoruję "
+                "w ciszy (%d/%d)%s",
+                wlasciciel,
+                speaker or "nierozpoznany",
+                f"{podobienstwo:.3f}" if podobienstwo is not None else "bez znacznika",
+                stan["obce"],
+                MAX_TUR_OBCYCH,
+                "" if trzymaj else " — zamykam nasłuch",
+            )
+            if trzymaj:
+                self._stan_rozmowy[conversation_id] = stan
+            else:
+                self._stan_rozmowy.pop(conversation_id, None)
+            intent_response = intent.IntentResponse(language=user_input.language)
+            intent_response.async_set_speech("")
+            return ConversationResult(
+                response=intent_response,
+                conversation_id=conversation_id,
+                continue_conversation=trzymaj,
+            )
+
         # Local-first: try Home Assistant's built-in agent (0 tokens, no LLM).
         # Only when it can actually act on the command do we return its result;
         # anything it can't match/handle falls through to the Home Mind server.
@@ -256,13 +320,18 @@ class HomeMindConversationAgent(ConversationEntity):
         # would act on them without ever reaching the server, where the rules
         # about who may start what actually live — the saving is not worth a
         # door left open behind the lock.
+        # Pierwsza pewnie rozpoznana tura zamyka sesje na te osobe. Slabe
+        # dopasowanie (ponizej PEWNE_ROZPOZNANIE) polecenie owszem wykona, ale
+        # sesji nie otworzy — nie ma na czym oprzec blokady.
+        wlasciciel = wlasciciel or (user_id if pewnie_rozpoznany else None)
+
         if self.entry.options.get(CONF_PREFER_LOCAL) and rozpoznany:
-            local_result = await self._try_local(user_input)
+            local_result = await self._try_local(user_input, wlasciciel)
             if local_result is not None:
                 return local_result
 
         try:
-            response_text, tools_used = await self._call_api(
+            response_text, _tools_used = await self._call_api(
                 message=message,
                 user_id=user_id,
                 conversation_id=conversation_id,
@@ -274,26 +343,16 @@ class HomeMindConversationAgent(ConversationEntity):
                 "Got response: %s", response_text[:100] if response_text else "None"
             )
 
-            # Rozpoznany mowca zeruje wszystko: rozmowa moze trwac dowolnie
-            # dlugo, a to, ze pare tur temu ktos byl nierozpoznany, przestaje
-            # miec znaczenie, skoro znowu slychac czlowieka.
-            stan = self._stan_rozmowy.get(
-                conversation_id, {"bez_rozpoznania": 0, "jalowe": 0, "znany": False}
-            )
-            if pewnie_rozpoznany:
-                stan = {"bez_rozpoznania": 0, "jalowe": 0, "znany": True}
-            else:
-                stan = {
-                    "bez_rozpoznania": stan["bez_rozpoznania"] + 1,
-                    "jalowe": 0 if tools_used else stan["jalowe"] + 1,
-                    "znany": stan["znany"],
-                }
+            # Tura wlasciciela zeruje licznik obcych: rozmowa moze trwac
+            # dowolnie dlugo, a to, ze przed chwila cos gadalo w tle, przestaje
+            # miec znaczenie, skoro znowu slychac tego samego czlowieka.
+            stan = {"wlasciciel": wlasciciel, "obce": 0}
 
             intent_response = intent.IntentResponse(language=user_input.language)
             intent_response.async_set_speech(response_text)
 
             trzymaj = self._trzymaj_mikrofon(
-                response_text, is_voice, pewnie_rozpoznany, stan
+                response_text, is_voice, wlasciciel
             ) and not self._is_farewell(message)
 
             if trzymaj:
@@ -301,11 +360,6 @@ class HomeMindConversationAgent(ConversationEntity):
             else:
                 # Tura sie domyka — nie ma czego pamietac, a slownik ma nie rosnac.
                 self._stan_rozmowy.pop(conversation_id, None)
-                if not pewnie_rozpoznany and stan["znany"]:
-                    _LOGGER.debug(
-                        "%d tury bez rozpoznanego mowcy — zamykam nasluch",
-                        stan["bez_rozpoznania"],
-                    )
 
             return ConversationResult(
                 response=intent_response,
@@ -328,7 +382,7 @@ class HomeMindConversationAgent(ConversationEntity):
             )
 
     async def _try_local(
-        self, user_input: ConversationInput
+        self, user_input: ConversationInput, wlasciciel: str | None
     ) -> ConversationResult | None:
         """Try the built-in HA agent first. Return its result only if it acted
         on the command; return None to fall through to the Home Mind server.
@@ -365,17 +419,20 @@ class HomeMindConversationAgent(ConversationEntity):
             if (
                 CONTINUE_CONVERSATION
                 and user_input.agent_id is not None
+                and wlasciciel is not None
                 and not self._is_farewell(user_input.text)
             ):
                 result = replace(result, continue_conversation=True)
                 # Tu sie trafia wylacznie z rozpoznanym mowca (warunek przy
                 # wywolaniu) i wylacznie gdy agent WYKONAL akcje albo odpowiedzial
-                # na pytanie o dane. Obie rzeczy zeruja stan tak samo jak tura
+                # na pytanie o dane. Obie rzeczy zeruja licznik tak samo jak tura
                 # obsluzona na serwerze — bez tego lancuch „zapal, zgas, otworz"
-                # niosl by ze soba liczniki sprzed niego.
+                # niosl by ze soba stan sprzed niego. Wlasciciela trzeba tu
+                # PRZEPISAC, inaczej tura zalatwiona lokalnie kasowalaby blokade
+                # sesji i nastepna moglaby przyjsc od kogokolwiek.
                 if result.conversation_id:
                     self._stan_rozmowy[result.conversation_id] = {
-                        "bez_rozpoznania": 0, "jalowe": 0, "znany": True,
+                        "wlasciciel": wlasciciel, "obce": 0,
                     }
             return result
 
@@ -432,7 +489,7 @@ class HomeMindConversationAgent(ConversationEntity):
 
     @classmethod
     def _trzymaj_mikrofon(
-        cls, response: str, is_voice: bool, rozpoznany: bool, stan: dict[str, Any]
+        cls, response: str, is_voice: bool, wlasciciel: str | None
     ) -> bool:
         """Czy po tej turze mikrofon ma zostac otwarty.
 
@@ -446,9 +503,14 @@ class HomeMindConversationAgent(ConversationEntity):
 
         Ale lekiem NIE jest limit tur, bo to kaleczy ciaglosc, czyli cala
         wartosc tej funkcji. Lekiem jest pytanie „czy to nadal mowi ten sam
-        czlowiek": dopoki voice-match kogos rozpoznaje, mikrofon zostaje
-        otwarty BEZ ZADNEGO LIMITU. Progi wchodza dopiero wtedy, gdy tozsamosc
-        znika — i sa inne w zaleznosci od tego, czy bylo co tracic.
+        czlowiek". Odpowiada na nie sesja zamknieta na wlasciciela: dopoki tury
+        przychodza od niego, mikrofon zostaje otwarty BEZ ZADNEGO LIMITU, a
+        cudze sa odsiewane wczesniej i tu nigdy nie docieraja.
+
+        Rozmowa BEZ wlasciciela to strzal pojedynczy. Polecenie sie wykona (z
+        ograniczeniami po stronie serwera), ale ciagla rozmowa bez tozsamosci to
+        dokladnie ta petla, ktora juz raz zamykalismy: nie ma czego pilnowac,
+        wiec nie ma czym zatrzymac pokoju, ktory gada dalej.
         """
         if not (CONTINUE_CONVERSATION and is_voice and response):
             return False
@@ -456,14 +518,7 @@ class HomeMindConversationAgent(ConversationEntity):
         # podstawia mikrofon pod ten sam halas.
         if cls._przyznaje_niezrozumienie(response):
             return False
-        if rozpoznany:
-            return True
-        if stan["znany"]:
-            # Rozmowe zaczal ktos rozpoznany, a teraz nie wiadomo, kto mowi.
-            return stan["bez_rozpoznania"] < MAX_TUR_BEZ_ROZPOZNANIA
-        # Nikt w tej rozmowie nigdy nie zostal rozpoznany — tozsamosc nie jest
-        # dostepna jako sygnal, wiec zostaje slabszy: brak dzialan.
-        return stan["jalowe"] < MAX_TUR_BEZ_DZIALANIA
+        return wlasciciel is not None
 
     def _person_for_voiceprint(self, speaker: str) -> tuple[str, str] | None:
         """Find the household member a voiceprint belongs to.

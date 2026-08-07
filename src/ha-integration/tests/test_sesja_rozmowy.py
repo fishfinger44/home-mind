@@ -1,0 +1,301 @@
+"""Sesja rozmowy należy do jednej osoby — test maszyny stanów.
+
+Uruchamianie: `python3 src/ha-integration/tests/test_sesja_rozmowy.py`
+
+Bez pytest i bez Home Assistanta. Integracja żyje w HAOS-ie na osobnej maszynie,
+a na hoście nie ma z czego zbudować `homeassistant` — więc zamiast udawać, że da
+się ją zaimportować, podstawiamy zaślepki pod te nieliczne rzeczy, których
+`conversation.py` naprawdę używa, i wykonujemy PRAWDZIWY plik. Wzorzec znacznika
+mówcy czytamy z prawdziwego `const.py`, żeby test nie mógł się z nim rozjechać.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import importlib.util
+import itertools
+import re
+import sys
+import types
+from pathlib import Path
+from unittest.mock import MagicMock
+
+SKLADNIK = Path(__file__).resolve().parents[1] / "custom_components" / "home_mind"
+
+
+def modul(nazwa: str, **atrybuty) -> types.ModuleType:
+    m = types.ModuleType(nazwa)
+    for k, v in atrybuty.items():
+        setattr(m, k, v)
+    sys.modules[nazwa] = m
+    return m
+
+
+# --- Zaślepki Home Assistanta -------------------------------------------------
+
+
+class ConversationEntity:
+    def __init__(self, *a, **k):
+        pass
+
+
+class ConversationEntityFeature:
+    CONTROL = 1
+
+
+class ConversationResult:
+    def __init__(self, response=None, conversation_id=None, continue_conversation=False):
+        self.response = response
+        self.conversation_id = conversation_id
+        self.continue_conversation = continue_conversation
+
+
+class ConversationInput:
+    pass
+
+
+class IntentResponse:
+    def __init__(self, language=None):
+        self.speech = None
+
+    def async_set_speech(self, tekst):
+        self.speech = tekst
+
+    def async_set_error(self, *a, **k):
+        pass
+
+
+class IntentResponseType:
+    ACTION_DONE = "action_done"
+    QUERY_ANSWER = "query_answer"
+
+
+class IntentResponseErrorCode:
+    UNKNOWN = "unknown"
+
+
+def zbuduj_zaslepki() -> None:
+    intent_stub = modul(
+        "homeassistant.helpers.intent",
+        IntentResponse=IntentResponse,
+        IntentResponseType=IntentResponseType,
+        IntentResponseErrorCode=IntentResponseErrorCode,
+    )
+    modul("aiohttp", ClientTimeout=MagicMock(), ClientError=Exception)
+    modul("homeassistant")
+    modul("homeassistant.components")
+    modul(
+        "homeassistant.components.conversation",
+        ConversationEntity=ConversationEntity,
+        ConversationEntityFeature=ConversationEntityFeature,
+        ConversationInput=ConversationInput,
+        ConversationResult=ConversationResult,
+        async_converse=MagicMock(),
+    )
+    modul("homeassistant.config_entries", ConfigEntry=object)
+    modul("homeassistant.const", MATCH_ALL="*")
+    modul("homeassistant.core", HomeAssistant=object)
+    modul("homeassistant.helpers", device_registry=MagicMock(), intent=intent_stub)
+    modul(
+        "homeassistant.helpers.device_registry",
+        DeviceInfo=MagicMock(),
+        DeviceEntryType=MagicMock(),
+    )
+    modul("homeassistant.components.homeassistant")
+    modul(
+        "homeassistant.components.homeassistant.exposed_entities",
+        async_should_expose=lambda *a, **k: True,
+    )
+    modul("homeassistant.helpers.aiohttp_client", async_get_clientsession=lambda h: MagicMock())
+    modul("homeassistant.helpers.entity_platform", AddEntitiesCallback=object)
+    # `ulid_now` musi dawać ZA KAŻDYM RAZEM inną wartość: to ona odróżnia nowe
+    # wybudzenie od kolejnej tury tej samej rozmowy, czyli dokładnie to, co
+    # sprawdza przypadek 10.
+    licznik = itertools.count(1)
+    ulid = modul("homeassistant.util.ulid", ulid_now=lambda: f"ID{next(licznik)}")
+    modul("homeassistant.util", ulid=ulid)
+
+
+def zbuduj_const() -> None:
+    """Prawdziwy wzorzec znacznika z const.py, reszta byle jaka."""
+    tresc = (SKLADNIK / "const.py").read_text(encoding="utf-8")
+    wzorzec = re.search(r"^SPEAKER_TAG_PATTERN\s*=\s*(.+)$", tresc, re.M)
+    assert wzorzec, "SPEAKER_TAG_PATTERN zniknął z const.py"
+    modul(
+        "const",
+        SPEAKER_TAG_PATTERN=eval(wzorzec.group(1)),  # noqa: S307 — własny plik repo
+        DOMAIN="home_mind",
+        CONF_API_URL="api_url",
+        CONF_API_TOKEN="api_token",
+        CONF_USER_ID="user_id",
+        CONF_CUSTOM_PROMPT="custom_prompt",
+        CONF_PREFER_LOCAL="prefer_local",
+        CONF_WEB_SEARCH_LIMIT="web_search_limit",
+        DEFAULT_WEB_SEARCH_LIMIT=2,
+        CONF_MEMORY_TOKEN_LIMIT="memory_token_limit",
+        DEFAULT_MEMORY_TOKEN_LIMIT=4000,
+        CONF_WEB_SEARCH_MODE="web_search_mode",
+        DEFAULT_USER_ID="default",
+        DEFAULT_TIMEOUT=30,
+        API_CHAT_ENDPOINT="/api/chat",
+        HOME_ASSISTANT_AGENT="conversation.home_assistant",
+    )
+
+
+def wczytaj_agenta():
+    plik = SKLADNIK / "conversation.py"
+    spec = importlib.util.spec_from_file_location("conv", plik)
+    conv = importlib.util.module_from_spec(spec)
+    sys.modules["conv"] = conv
+    # Plik jest częścią pakietu (`from .const import …`), a my ładujemy go luzem.
+    zrodlo = plik.read_text(encoding="utf-8").replace("from .const import", "from const import")
+    exec(compile(zrodlo, str(plik), "exec"), conv.__dict__)  # noqa: S102
+    return conv
+
+
+# --- Scena --------------------------------------------------------------------
+
+OSOBY = {"lech": "Lech", "zuza": "Zuza"}
+
+
+class Kontekst:
+    def __init__(self, user_id=None):
+        self.user_id = user_id
+
+
+class Wejscie:
+    def __init__(self, text, cid=None, uid=None, agent_id="conversation.home_mind"):
+        self.text = text
+        self.conversation_id = cid
+        self.context = Kontekst(uid)
+        self.agent_id = agent_id
+        self.language = "pl"
+        self.device_id = None
+
+
+def agent(conv, prefer_local=False):
+    a = object.__new__(conv.HomeMindConversationAgent)
+    a._stan_rozmowy = {}
+    a._default_user_id = "default"
+    a.entry = MagicMock()
+    a.entry.options = {"prefer_local": prefer_local}
+    a.hass = MagicMock()
+    a.hass.states.async_all.return_value = []
+    a._person_for_voiceprint = lambda s: (s, OSOBY[s]) if s in OSOBY else None
+
+    async def call_api(**k):
+        return (a._odpowiedz, True)
+
+    a._call_api = call_api
+    a._odpowiedz = "Zrobione."
+
+    async def resolve(uid):
+        return "Lech"
+
+    a._resolve_user_name = resolve
+    return a
+
+
+async def uruchom(conv, a, tekst, cid=None, odpowiedz="Zrobione."):
+    a._odpowiedz = odpowiedz
+    return await a.async_process(Wejscie(tekst, cid))
+
+
+class Wynik:
+    def __init__(self):
+        self.ok = True
+
+    def __call__(self, nazwa, warunek):
+        print(("  ✅ " if warunek else "  ❌ ") + nazwa)
+        self.ok = self.ok and bool(warunek)
+
+
+async def main() -> int:
+    zbuduj_zaslepki()
+    zbuduj_const()
+    conv = wczytaj_agenta()
+
+    # `replace` z dataclasses nie ugryzie naszego prostego Wejscia.
+    def replace_stub(obj, **zmiany):
+        nowy = Wejscie(obj.text, obj.conversation_id, obj.context.user_id, obj.agent_id)
+        for k, v in zmiany.items():
+            setattr(nowy, k, v)
+        return nowy
+
+    conv.replace = replace_stub
+    sprawdz = Wynik()
+
+    print("\n1. Rozpoznany otwiera sesję, mikrofon zostaje otwarty")
+    a = agent(conv)
+    r = await uruchom(conv, a, "[lech:0.62] zapal światło")
+    cid = r.conversation_id
+    sprawdz("mikrofon otwarty", r.continue_conversation is True)
+    sprawdz("właściciel = lech", a._stan_rozmowy[cid]["wlasciciel"] == "lech")
+    sprawdz("asystent odpowiedział", r.response.speech == "Zrobione.")
+
+    print("\n2. Ta sama osoba w tej samej sesji — przechodzi")
+    r = await uruchom(conv, a, "[lech:0.41] a teraz zgaś", cid)
+    sprawdz("odpowiedź jest", r.response.speech == "Zrobione.")
+    sprawdz("mikrofon dalej otwarty", r.continue_conversation is True)
+    sprawdz("licznik obcych wyzerowany", a._stan_rozmowy[cid]["obce"] == 0)
+
+    print("\n3. Tło (bez znacznika) w cudzej sesji — cisza, mikrofon zostaje")
+    r = await uruchom(conv, a, "wyłącz wszystko w domu", cid)
+    sprawdz("CISZA (pusta odpowiedź)", r.response.speech == "")
+    sprawdz("mikrofon otwarty — właściciel może powtórzyć", r.continue_conversation is True)
+    sprawdz("obce = 1", a._stan_rozmowy[cid]["obce"] == 1)
+
+    print("\n4. Inny ROZPOZNANY domownik w cudzej sesji — też cisza")
+    r = await uruchom(conv, a, "[zuza:0.55] otwórz rolety", cid)
+    sprawdz("CISZA", r.response.speech == "")
+    sprawdz("obce = 2", a._stan_rozmowy[cid]["obce"] == 2)
+
+    print("\n5. Trzecia obca tura z rzędu — mikrofon się zamyka")
+    r = await uruchom(conv, a, "coś z telewizora", cid)
+    sprawdz("CISZA", r.response.speech == "")
+    sprawdz("mikrofon ZAMKNIĘTY", r.continue_conversation is False)
+    sprawdz("stan posprzątany", cid not in a._stan_rozmowy)
+
+    print("\n6. Właściciel wraca przed limitem — licznik się zeruje")
+    a = agent(conv)
+    r = await uruchom(conv, a, "[lech:0.62] zapal światło")
+    cid = r.conversation_id
+    await uruchom(conv, a, "szum z pokoju", cid)
+    sprawdz("obce = 1", a._stan_rozmowy[cid]["obce"] == 1)
+    r = await uruchom(conv, a, "[lech:0.44] zgaś", cid)
+    sprawdz("polecenie wykonane", r.response.speech == "Zrobione.")
+    sprawdz("obce z powrotem 0", a._stan_rozmowy[cid]["obce"] == 0)
+
+    print("\n7. Nierozpoznana pierwsza tura — wykonuje, ale zamyka sesję")
+    a = agent(conv)
+    r = await uruchom(conv, a, "zapal światło w kuchni")
+    sprawdz("polecenie WYKONANE", r.response.speech == "Zrobione.")
+    sprawdz("mikrofon ZAMKNIĘTY (strzał pojedynczy)", r.continue_conversation is False)
+    sprawdz("brak sesji", r.conversation_id not in a._stan_rozmowy)
+
+    print("\n8. Słabe dopasowanie (0.31 < 0.35) — wykonuje, sesji nie otwiera")
+    a = agent(conv)
+    r = await uruchom(conv, a, "[lech:0.31] zapal światło")
+    sprawdz("polecenie WYKONANE", r.response.speech == "Zrobione.")
+    sprawdz("mikrofon ZAMKNIĘTY", r.continue_conversation is False)
+
+    print("\n9. Pożegnanie właściciela zamyka sesję")
+    a = agent(conv)
+    cid = (await uruchom(conv, a, "[lech:0.62] zapal światło")).conversation_id
+    r = await uruchom(conv, a, "[lech:0.60] dziękuję", cid)
+    sprawdz("mikrofon ZAMKNIĘTY", r.continue_conversation is False)
+    sprawdz("stan posprzątany", cid not in a._stan_rozmowy)
+
+    print("\n10. Nowe wybudzenie = identyfikacja od zera")
+    a = agent(conv)
+    await uruchom(conv, a, "[lech:0.62] zapal światło")
+    r = await uruchom(conv, a, "[zuza:0.55] otwórz rolety")
+    sprawdz("Zuza dostaje SWOJĄ sesję", r.response.speech == "Zrobione.")
+    sprawdz("właściciel = zuza", a._stan_rozmowy[r.conversation_id]["wlasciciel"] == "zuza")
+
+    print("\n" + ("WSZYSTKO ZIELONE" if sprawdz.ok else "SĄ BŁĘDY"))
+    return 0 if sprawdz.ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(main()))
