@@ -196,7 +196,9 @@ describe("OpenAIChatEngine", () => {
       "get_state",
       { entity_id: "light.kitchen" },
       // 4th arg: per-request web-search settings (mode + billed search key).
-      expect.any(Object)
+      expect.any(Object),
+      // 5th: whether the voice was recognised, gating the restricted devices.
+      true
     );
     expect(result.response).toBe("The light is on");
     expect(result.toolsUsed).toEqual(["get_state"]);

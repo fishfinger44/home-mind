@@ -4,6 +4,7 @@ import type { IFactExtractor, WebSearchMode } from "./interface.js";
 import type { ExtractedFact, Fact } from "../memory/types.js";
 import { IMPERSONAL_FACT_CATEGORIES, isImpersonal } from "../memory/types.js";
 import { filterFacts } from "../memory/fact-patterns.js";
+import { checkRestriction } from "./restricted.js";
 import { envOrUndefined } from "../env.js";
 import {
   type SearchBackend,
@@ -464,7 +465,14 @@ export async function handleToolCall(
   ha: HomeAssistantClient,
   toolName: string,
   input: Record<string, unknown>,
-  search?: WebSearchSettings
+  search?: WebSearchSettings,
+  /**
+   * Whether the voiceprint matched a household member. Governs the devices
+   * that move, run for half an hour or change the temperature — see
+   * `restricted.ts`. Defaults to true so text sessions and older callers,
+   * which are already authenticated, are unaffected.
+   */
+  speakerRecognised: boolean = true
 ): Promise<unknown> {
   const start = Date.now();
   console.log(`[tool] ${toolName} called with: ${JSON.stringify(input)}`);
@@ -486,6 +494,20 @@ export async function handleToolCall(
         break;
 
       case "call_service": {
+        const zakaz = checkRestriction(
+          input.domain as string | undefined,
+          input.service as string | undefined,
+          entityIdFrom(input),
+          speakerRecognised
+        );
+        if (!zakaz.allowed) {
+          console.log(
+            `[tool] call_service ODMOWA (nierozpoznany glos): ${input.domain}.${input.service} ${entityIdFrom(input) ?? ""}`
+          );
+          result = { error: zakaz.reason };
+          break;
+        }
+
         // `return_response` belongs beside `domain`, but models routinely tuck
         // it into `data` alongside the service's own fields. Home Assistant
         // then refuses the call for not asking for a response — and, had it got

@@ -239,7 +239,7 @@ export class OpenAIChatEngine implements IChatEngine {
         const toolResult = await handleToolCall(this.ha, tc.function.name, args, {
           mode: request.webSearchMode ?? this.config.webSearchMode,
           searchApiKey: this.config.geminiSearchApiKey,
-        } satisfies WebSearchSettings);
+        } satisfies WebSearchSettings, trustedIdentity);
         return {
           role: "tool" as const,
           tool_call_id: tc.id,

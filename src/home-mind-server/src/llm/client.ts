@@ -150,7 +150,8 @@ export class LLMClient implements IChatEngine {
           {
             mode: request.webSearchMode ?? this.config.webSearchMode,
             searchApiKey: this.config.geminiSearchApiKey,
-          } satisfies WebSearchSettings
+          } satisfies WebSearchSettings,
+          trustedIdentity
         );
         return {
           type: "tool_result" as const,

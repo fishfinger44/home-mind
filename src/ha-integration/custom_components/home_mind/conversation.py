@@ -156,6 +156,14 @@ class HomeMindConversationAgent(ConversationEntity):
                     speaker,
                 )
 
+        # Who is asking, in one answer both the shortcut below and the payload
+        # can use. A logged-in session is proof; a matched voiceprint is strong
+        # evidence; anything else — including a satellite whose speaker matched
+        # nobody — is a stranger, whatever the default above says.
+        rozpoznany = bool(user_input.context and user_input.context.user_id) or (
+            identity_confidence == "asserted"
+        )
+
         # Determine if this is a voice request
         is_voice = user_input.agent_id is not None
 
@@ -165,7 +173,13 @@ class HomeMindConversationAgent(ConversationEntity):
         # Local-first: try Home Assistant's built-in agent (0 tokens, no LLM).
         # Only when it can actually act on the command do we return its result;
         # anything it can't match/handle falls through to the Home Mind server.
-        if self.entry.options.get(CONF_PREFER_LOCAL):
+        #
+        # An unrecognised voice never takes this shortcut. The built-in agent
+        # understands "otwórz rolety" and "odkurz kuchnię" perfectly well and
+        # would act on them without ever reaching the server, where the rules
+        # about who may start what actually live — the saving is not worth a
+        # door left open behind the lock.
+        if self.entry.options.get(CONF_PREFER_LOCAL) and rozpoznany:
             local_result = await self._try_local(user_input)
             if local_result is not None:
                 return local_result
@@ -177,7 +191,7 @@ class HomeMindConversationAgent(ConversationEntity):
                 conversation_id=conversation_id,
                 is_voice=is_voice,
                 user_name=user_name,
-                identity_confidence=identity_confidence,
+                identity_confidence=identity_confidence if rozpoznany else "unknown",
             )
             _LOGGER.debug(
                 "Got response: %s", response_text[:100] if response_text else "None"
@@ -389,19 +403,19 @@ class HomeMindConversationAgent(ConversationEntity):
 
         if user_name:
             payload["userName"] = user_name
-            # A logged-in Home Assistant session is proof of who is asking. A
-            # voiceprint is strong evidence rather than proof — the server
-            # trusts both with personal memory, but saying which one this was
-            # keeps the distinction visible if that ever needs to change.
-            payload["identityConfidence"] = identity_confidence
-        else:
-            # Say "unknown" rather than leaving the field out. The server reads a
-            # missing value as "certain" for compatibility with clients that
-            # predate the field, so silence here would quietly grant a voice
-            # satellite — which carries no user at all — the same trust as a
-            # logged-in session, and file whatever it heard as somebody's
-            # personal memory.
-            payload["identityConfidence"] = "unknown"
+
+        # A logged-in Home Assistant session is proof of who is asking. A
+        # voiceprint is strong evidence rather than proof — the server trusts
+        # both with personal memory and with the restricted devices, but saying
+        # which one this was keeps the distinction visible if that ever needs to
+        # change.
+        #
+        # The caller decides; this is never inferred from the presence of a
+        # name. It used to be, and a logged-in session whose display name failed
+        # to resolve would have been demoted to a stranger — refused the vacuum
+        # by its own owner. "unknown" is still said out loud rather than left
+        # out, because the server reads a missing value as "certain".
+        payload["identityConfidence"] = identity_confidence
 
         exposed = self._exposed_entities()
         if exposed is not None:

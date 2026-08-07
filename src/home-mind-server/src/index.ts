@@ -16,6 +16,7 @@ import { TopologyScanner } from "./ha/topology-scanner.js";
 import { createChatEngine, createFactExtractor } from "./llm/factory.js";
 import { createRouter } from "./api/routes.js";
 import { createRulesRouter, createRulesPage } from "./rules/routes.js";
+import { createRestrictionsRouter } from "./llm/restricted-routes.js";
 import type { IChatEngine } from "./llm/interface.js";
 import { loadLlmOverride, saveLlmOverride } from "./llm/runtime-config.js";
 import { createLlmConfigRouter } from "./api/llm-config-routes.js";
@@ -237,6 +238,7 @@ app.use("/api", createRouter(llm, memory, "shodh", version, config.customPrompt,
 // Reguly domowe: API pod /api, sama strona edytora poza nim, zeby pasek boczny
 // Home Assistanta mogl na nia wskazac zwyklym adresem.
 app.use("/api", createRulesRouter(llm));
+app.use("/api", createRestrictionsRouter());
 app.use(createRulesPage());
 
 // Root endpoint
