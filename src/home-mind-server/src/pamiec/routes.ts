@@ -23,11 +23,60 @@ import { SHARED_PROFILE_ID } from "../memory/types.js";
 import type { FactCategory } from "../memory/types.js";
 import { EDYTOR_PAMIECI_HTML } from "./editor.js";
 
+/**
+ * Zbierz listę profilów z tego, co wiemy — bo pamięć sama tego nie powie.
+ *
+ * Shodh przyjmuje `userId` w każdej metodzie i nie ma niczego w rodzaju
+ * „wymień wszystkich"; magazyn rozmów zna tylko tych, którzy odezwali się od
+ * ostatniego restartu, bo domyślnie żyje w pamięci. Zostają dwa źródła, które
+ * naprawdę coś wiedzą: osoby w Home Assistancie (stamtąd bierze się profil,
+ * gdy biometria kogoś rozpozna) i dziennik odrzuceń, który jest trwały i
+ * zapamiętuje `userId` każdej odrzuconej tury. Suma tych dwóch plus profil
+ * wspólny daje listę, która sama urośnie, gdy pojawi się drugi domownik.
+ */
+export function zbierzProfile(
+  osobyHA: { entity_id: string; attributes?: { friendly_name?: string } }[],
+  zDziennika: string[]
+): { id: string; nazwa: string }[] {
+  const profile = new Map<string, string>();
+  profile.set(SHARED_PROFILE_ID, "wspólny — wiedza o domu");
+
+  for (const osoba of osobyHA) {
+    const id = osoba.entity_id.split(".")[1];
+    if (id) profile.set(id, osoba.attributes?.friendly_name ?? id);
+  }
+  // Profil widziany w dzienniku na pewno jest w użyciu, nawet jeśli osoba
+  // zniknęła z HA albo nigdy nie była tam zdefiniowana.
+  for (const id of zDziennika) if (id && !profile.has(id)) profile.set(id, id);
+
+  return [...profile].map(([id, nazwa]) => ({ id, nazwa }));
+}
+
 export function createPamiecRouter(
   memory: IMemoryStore,
-  extractor: () => IFactExtractor
+  extractor: () => IFactExtractor,
+  ha: { getEntities(domain?: string): Promise<{ entity_id: string; attributes?: Record<string, unknown> }[]> }
 ): Router {
   const router = Router();
+
+  router.get("/pamiec/profile", async (_req: Request, res: Response) => {
+    let osoby: { entity_id: string; attributes?: { friendly_name?: string } }[] = [];
+    try {
+      osoby = (await ha.getEntities("person")) as typeof osoby;
+    } catch (err) {
+      // Brak łączności z HA ma zubożyć listę, a nie wywrócić stronę.
+      console.warn("[pamiec] nie udalo sie pobrac osob z HA:", err);
+    }
+
+    const profile = zbierzProfile(osoby, czytajPominiecia().map((w) => w.userId));
+    const zLicznikiem = await Promise.all(
+      profile.map(async (p) => ({
+        ...p,
+        faktow: await memory.getFactCount(p.id).catch(() => 0),
+      }))
+    );
+    res.json({ profile: zLicznikiem });
+  });
 
   router.get("/pominiete", (_req: Request, res: Response) => {
     res.json({ pominiete: czytajPominiecia() });

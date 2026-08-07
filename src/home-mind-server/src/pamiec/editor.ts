@@ -42,10 +42,7 @@ export const EDYTOR_PAMIECI_HTML = `<!doctype html>
 
 <div class="pasek">
   <label>Profil:
-    <select id="profil">
-      <option value="lech">lech (osobisty)</option>
-      <option value="default">default (wspólny — o domu)</option>
-    </select>
+    <select id="profil"></select>
   </label>
   <button id="odswiez">Odśwież</button>
   <span id="stan"></span>
@@ -62,6 +59,17 @@ export const EDYTOR_PAMIECI_HTML = `<!doctype html>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const stan = (t) => { $("stan").textContent = t; };
+
+async function wczytajProfile() {
+  // Lista rosnie sama: osoby z HA + profile widziane w dzienniku odrzucen.
+  // Drugi domownik z wlasnym odciskiem glosu pojawi sie tu bez zmiany kodu.
+  const { profile } = await fetch("/api/pamiec/profile").then(r => r.json());
+  const wybrany = $("profil").value;
+  $("profil").innerHTML = (profile || []).map(p =>
+    \`<option value="\${esc(p.id)}">\${esc(p.nazwa)} — \${esc(p.faktow)} faktów</option>\`
+  ).join("");
+  if (wybrany) $("profil").value = wybrany;
+}
 
 async function wczytaj() {
   stan("wczytuję…");
@@ -145,9 +153,9 @@ document.addEventListener("click", async (e) => {
   }
 });
 
-$("odswiez").addEventListener("click", wczytaj);
+$("odswiez").addEventListener("click", async () => { await wczytajProfile(); wczytaj(); });
 $("profil").addEventListener("change", wczytaj);
-wczytaj();
+wczytajProfile().then(wczytaj);
 </script>
 </body>
 </html>`;
