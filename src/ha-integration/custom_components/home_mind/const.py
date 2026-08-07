@@ -71,7 +71,10 @@ SEARCH_BACKEND_LABELS = {
 # identity inside the text is deliberate — it cannot be paired with the wrong
 # utterance the way a separate webhook could, since there is nothing to
 # correlate.
-SPEAKER_TAG_PATTERN = r"^\[([A-Za-z0-9_\- ]{1,32})\]\s+"
+# Znacznik mowcy dopisywany przez voice-match: `[lech] tekst` albo
+# `[lech:0.874] tekst`. Czesc po dwukropku to podobienstwo glosu i jest
+# OPCJONALNA — starszy mostek, ktory jej nie wysyla, ma dalej dzialac.
+SPEAKER_TAG_PATTERN = r"^\[([A-Za-z0-9_\- ]{1,32})(?::([0-9]*\.?[0-9]+))?\]\s+"
 
 # A voiceprint is matched to a household member by name: the enrolment panel
 # names each voiceprint after the Home Assistant person it belongs to, so

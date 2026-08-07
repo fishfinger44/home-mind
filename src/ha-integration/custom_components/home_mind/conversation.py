@@ -93,6 +93,22 @@ MAX_TUR_BEZ_ROZPOZNANIA = 2
 # dotyczy rozmow z rozpoznanym mowca, wiec nie kaleczy ciaglosci.
 MAX_TUR_BEZ_DZIALANIA = 2
 
+# Ponizej tego podobienstwa glosu dopasowanie liczy sie jako NIEPEWNE przy
+# decyzji o mikrofonie (tylko tam — tozsamosc dla pamieci zostaje bez zmian).
+#
+# voice-match przepuszcza wszystko powyzej 0.30. Ale 0.31 i 0.95 to dwie rozne
+# rzeczy, a dotad byly nierozroznialne: liczba powstawala co ture i szla
+# wylacznie do logu, a dalej jechal goly werdykt. Dopasowanie tuz nad progiem
+# rownie dobrze moze byc halasem, ktory przypadkiem trafil — i wtedy trzymanie
+# mikrofonu otwartego bez konca jest dokladnie ta petla, ktora zamykamy.
+#
+# 0.35 to prog OSTROZNY, nie zmierzony: jedyny znany pomiar prawdziwej mowy to
+# 0.556, danych o halasie tuz nad progiem nie ma wcale. Kazda tura ponizej tej
+# wartosci loguje sie na INFO wlasnie po to, zeby strojenie bylo pytaniem o
+# dane, a nie o przeczucie. Pojedyncza niepewna tura i tak niczego nie utnie —
+# licznik wybacza jedna.
+PEWNE_ROZPOZNANIE = 0.35
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -147,7 +163,7 @@ class HomeMindConversationAgent(ConversationEntity):
         # A speaker tag from voice-match has to come off before anything reads
         # the text: the built-in agent below would fail to match "[lech] zapal
         # światło" against any intent, and the model should never see it either.
-        message, speaker = self._split_speaker_tag(user_input.text)
+        message, speaker, podobienstwo = self._split_speaker_tag(user_input.text)
         if speaker:
             user_input = replace(user_input, text=message)
 
@@ -202,6 +218,29 @@ class HomeMindConversationAgent(ConversationEntity):
             identity_confidence == "asserted"
         )
 
+        # Osobna, ostrzejsza odpowiedz na to samo pytanie, uzywana WYLACZNIE do
+        # decyzji o mikrofonie. Tozsamosc wysylana na serwer zostaje nietknieta:
+        # slabe dopasowanie nadal jest dopasowaniem i pamiec ma sie zachowac tak
+        # samo. Ale trzymanie mikrofonu otwartego bez limitu to zaufanie
+        # wiekszego kalibru i wymaga wiekszej pewnosci.
+        #
+        # Zalogowana sesja nie ma podobienstwa (nie przeszla przez voice-match)
+        # i jest dowodem sama w sobie — stad `is None` po stronie pewnych.
+        pewnie_rozpoznany = rozpoznany and (
+            podobienstwo is None or podobienstwo >= PEWNE_ROZPOZNANIE
+        )
+        if podobienstwo is not None and not pewnie_rozpoznany:
+            # INFO, nie DEBUG: to jest material do strojenia progu i ma byc
+            # widoczny bez wlaczania diagnostyki. Przypadek jest rzadki, wiec
+            # nie zaleje logu.
+            _LOGGER.info(
+                "Głos '%s' dopasowany słabo (%.3f < %.2f) — do decyzji o "
+                "mikrofonie traktuję jak nierozpoznany",
+                speaker, podobienstwo, PEWNE_ROZPOZNANIE,
+            )
+        elif podobienstwo is not None:
+            _LOGGER.debug("Głos '%s' dopasowany na %.3f", speaker, podobienstwo)
+
         # Determine if this is a voice request
         is_voice = user_input.agent_id is not None
 
@@ -241,7 +280,7 @@ class HomeMindConversationAgent(ConversationEntity):
             stan = self._stan_rozmowy.get(
                 conversation_id, {"bez_rozpoznania": 0, "jalowe": 0, "znany": False}
             )
-            if rozpoznany:
+            if pewnie_rozpoznany:
                 stan = {"bez_rozpoznania": 0, "jalowe": 0, "znany": True}
             else:
                 stan = {
@@ -254,7 +293,7 @@ class HomeMindConversationAgent(ConversationEntity):
             intent_response.async_set_speech(response_text)
 
             trzymaj = self._trzymaj_mikrofon(
-                response_text, is_voice, rozpoznany, stan
+                response_text, is_voice, pewnie_rozpoznany, stan
             ) and not self._is_farewell(message)
 
             if trzymaj:
@@ -262,7 +301,7 @@ class HomeMindConversationAgent(ConversationEntity):
             else:
                 # Tura sie domyka — nie ma czego pamietac, a slownik ma nie rosnac.
                 self._stan_rozmowy.pop(conversation_id, None)
-                if not rozpoznany and stan["znany"]:
+                if not pewnie_rozpoznany and stan["znany"]:
                     _LOGGER.debug(
                         "%d tury bez rozpoznanego mowcy — zamykam nasluch",
                         stan["bez_rozpoznania"],
@@ -455,19 +494,30 @@ class HomeMindConversationAgent(ConversationEntity):
         return account_id
 
     @staticmethod
-    def _split_speaker_tag(text: str) -> tuple[str, str | None]:
-        """Split "[lech] zapal światło" into the command and the speaker.
+    def _split_speaker_tag(text: str) -> tuple[str, str | None, float | None]:
+        """Rozbierz "[lech:0.874] zapal światło" na polecenie, mowce i podobienstwo.
 
-        Returns the text unchanged with `None` when there is no tag, which is
-        every text conversation and every voice command whose speaker was not
-        recognised.
+        Zwraca tekst bez zmian i `None`, gdy znacznika nie ma — czyli w kazdej
+        rozmowie pisanej i w kazdym poleceniu glosowym, ktorego mowcy nie
+        rozpoznano.
+
+        Podobienstwo jest opcjonalne po obu stronach: starszy mostek wysyla samo
+        `[lech]`, i to ma dalej dzialac.
         """
         if not text:
-            return text, None
+            return text, None, None
         match = re.match(SPEAKER_TAG_PATTERN, text)
         if not match:
-            return text, None
-        return text[match.end():], match.group(1)
+            return text, None, None
+        podobienstwo = None
+        if match.group(2):
+            try:
+                podobienstwo = float(match.group(2))
+            except ValueError:
+                # Znacznik jest tylko wskazowka; jego uszkodzenie nie moze
+                # kosztowac polecenia, ktore czlowiek wlasnie wypowiedzial.
+                podobienstwo = None
+        return text[match.end():], match.group(1), podobienstwo
 
     async def _resolve_user_name(self, user_id: str) -> str | None:
         """Name of the Home Assistant user behind this request, if there is one.
