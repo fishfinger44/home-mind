@@ -307,7 +307,8 @@ export class GeminiChatEngine implements IChatEngine {
       message,
       responseText,
       trustedIdentity,
-      SHARED_PROFILE_ID
+      SHARED_PROFILE_ID,
+      toolsUsed
     ).catch((err) => console.error("Fact extraction failed:", err));
 
     // Deliver the whole answer to the streaming callback in one shot (this engine

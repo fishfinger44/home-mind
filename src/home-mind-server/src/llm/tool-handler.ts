@@ -4,6 +4,7 @@ import type { IFactExtractor, WebSearchMode } from "./interface.js";
 import type { ExtractedFact, Fact } from "../memory/types.js";
 import { IMPERSONAL_FACT_CATEGORIES, isImpersonal } from "../memory/types.js";
 import { filterFacts, SERVICE_PROCEDURE_REASON } from "../memory/fact-patterns.js";
+import { skipExtraction } from "../memory/extraction-gate.js";
 import { suggestRule } from "../rules/store.js";
 import { checkRestriction } from "./restricted.js";
 import { envOrUndefined } from "../env.js";
@@ -715,8 +716,24 @@ export async function extractAndStoreFacts(
    * as it is for the speaker, so it keeps going to the shared profile while
    * only statements about the person land in theirs.
    */
-  sharedUserId?: string
+  sharedUserId?: string,
+  /**
+   * What the assistant actually did this turn.
+   *
+   * Empty by default so a caller that does not pass it keeps the old
+   * behaviour — every turn extracted — rather than silently skipping.
+   */
+  toolsUsed: string[] = []
 ): Promise<number> {
+  const pominiecie = skipExtraction(userMessage, toolsUsed);
+  if (pominiecie) {
+    // Logged with the utterance on purpose: a fact that is never learned
+    // leaves no other trace, so this line is the only way to review later
+    // whether the filter cut something worth keeping.
+    console.log(`[extract] pominieto — ${pominiecie}: "${userMessage}"`);
+    return 0;
+  }
+
   const splitProfiles = Boolean(sharedUserId && sharedUserId !== userId);
 
   // Which profile a fact came from, so a replacement deletes the original

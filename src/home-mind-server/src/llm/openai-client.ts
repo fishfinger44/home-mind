@@ -281,7 +281,8 @@ export class OpenAIChatEngine implements IChatEngine {
       message,
       responseText,
       trustedIdentity,
-      SHARED_PROFILE_ID
+      SHARED_PROFILE_ID,
+      toolsUsed
     ).catch((err) => console.error("Fact extraction failed:", err));
 
     // 8. If the model produced no usable response, attach a structured error

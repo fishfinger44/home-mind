@@ -204,7 +204,8 @@ export class LLMClient implements IChatEngine {
       message,
       responseText,
       trustedIdentity,
-      SHARED_PROFILE_ID
+      SHARED_PROFILE_ID,
+      toolsUsed
     ).catch((err) => console.error("Fact extraction failed:", err));
 
     // Count facts learned (we don't wait for extraction, so return 0 for now)

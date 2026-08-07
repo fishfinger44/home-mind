@@ -481,6 +481,32 @@ describe("extractAndStoreFacts", () => {
     expect(count).toBe(1);
   });
 
+  it("nie wola ekstraktora, gdy tura byla czystym wykonaniem polecenia", async () => {
+    const count = await extractAndStoreFacts(
+      memory,
+      extractor,
+      "user-1",
+      "zapal swiatlo w kuchni",
+      "Zapalone.",
+      true,
+      undefined,
+      ["call_service"]
+    );
+
+    // Cala oszczednosc polega na tym, ze nie ma round-tripu ani po fakty, ani
+    // do modelu — samo pominiecie ekstrakcji nie wystarczyloby.
+    expect(extractor.extract).not.toHaveBeenCalled();
+    expect(memory.getFacts).not.toHaveBeenCalled();
+    expect(count).toBe(0);
+  });
+
+  it("ekstrahuje normalnie, gdy wywolujacy nie poda uzytych narzedzi", async () => {
+    // Domyslna pusta lista musi zachowywac stare zachowanie, a nie po cichu
+    // wlaczac pomijanie.
+    await extractAndStoreFacts(memory, extractor, "user-1", "zapal swiatlo", "Zapalone.");
+    expect(extractor.extract).toHaveBeenCalled();
+  });
+
   it("stores multiple facts via batch and returns correct count", async () => {
     (extractor.extract as ReturnType<typeof vi.fn>).mockResolvedValue([
       { content: "Fact A is a long enough preference", category: "preference", confidence: 0.8, replaces: [] },
