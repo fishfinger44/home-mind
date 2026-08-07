@@ -66,6 +66,17 @@ function buildActiveConfig() {
     // "gemini" (native) reuses openaiApiKey as its Gemini key, like "openai".
     else if (storedOverride.provider === "openai" || storedOverride.provider === "gemini")
       c.openaiApiKey = storedOverride.apiKey;
+  } else if (storedOverride.provider !== "ollama") {
+    // Bez klucza w nadpisaniu lecimy na tym z .env — i to jest cicha zmiana
+    // rachunku, bo .env jest wartoscia rozruchowa, ktorej nikt nie oglada od
+    // miesiecy. Koncowka wystarczy, zeby rozpoznac ktory to klucz, i nie
+    // wystarczy, zeby go uzyc.
+    const zEnv =
+      storedOverride.provider === "anthropic" ? config.anthropicApiKey : config.openaiApiKey;
+    console.warn(
+      `[llm-config] nadpisanie nie ma klucza dla providera "${storedOverride.provider}" — ` +
+        `uzywam klucza z .env (…${(zEnv ?? "").slice(-6) || "brak"})`
+    );
   }
   if (storedOverride.baseUrl && storedOverride.provider === "openai") {
     c.openaiBaseUrl = storedOverride.baseUrl;
