@@ -25,14 +25,20 @@ export const EDYTOR_PAMIECI_HTML = `<!doctype html>
   button { cursor:pointer; }
   button.usun { border-color:var(--bad); color:var(--bad); }
   button.przyjmij { border-color:var(--ok); color:var(--ok); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
   .wpis { border:1px solid var(--line); border-radius:8px; padding:.7rem .9rem; margin-bottom:.5rem; background:var(--tlo2); }
   .wpis .gora { display:flex; gap:.5rem; align-items:center; justify-content:space-between; }
   .tresc { margin:.2rem 0; overflow-wrap:anywhere; }
   .meta { color:var(--muted); font-size:.82rem; }
   .znacznik { font-size:.75rem; border:1px solid var(--line); border-radius:99px; padding:.05rem .5rem; color:var(--muted); white-space:nowrap; }
   .odrzucony { opacity:.72; }
+  .kontrola { border:1px solid var(--line); border-left-width:4px; border-radius:8px; padding:.7rem .9rem; margin-bottom:.5rem; background:var(--tlo2); }
+  .kontrola.sprzeczny { border-left-color:var(--bad); }
+  .kontrola.pokryty { border-left-color:var(--muted); }
+  .kontrola .czym { color:var(--muted); font-size:.85rem; margin-top:.2rem; }
   .pusto { color:var(--muted); font-style:italic; }
   .akcje { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; margin-top:.5rem; }
+  .gora .akcje { margin-top:0; }
   #stan { min-height:1.2em; color:var(--muted); font-size:.85rem; }
 </style>
 </head>
@@ -45,8 +51,11 @@ export const EDYTOR_PAMIECI_HTML = `<!doctype html>
     <select id="profil"></select>
   </label>
   <button id="odswiez">Odśwież</button>
+  <button id="kontrola">Sprawdź z regułami</button>
   <span id="stan"></span>
 </div>
+
+<div id="znaleziska"></div>
 
 <h2>Zapamiętane fakty (<span id="licznik-faktow">0</span>)</h2>
 <div id="fakty"></div>
@@ -83,17 +92,30 @@ async function wczytaj() {
   stan("");
 }
 
+// Profil wspolny trzyma tylko wiedze o domu — te same kategorie, ktore
+// przepuszcza zapis z rozmowy (IMPERSONAL_FACT_CATEGORIES na serwerze).
+const BEZOSOBOWE = ["device", "baseline", "correction"];
+
 function rysujFakty(fakty, profil) {
   $("licznik-faktow").textContent = fakty.length;
-  $("fakty").innerHTML = fakty.length ? fakty.map(f => \`
+  const wspolny = profil === "default";
+  $("fakty").innerHTML = fakty.length ? fakty.map(f => {
+    // W profilu wspolnym nie ma dokad przenosic; przy fakcie osobistym przycisk
+    // zostaje widoczny, ale wylaczony — inaczej regula bylaby niewidzialna.
+    const osobisty = !BEZOSOBOWE.includes(f.category);
+    const przenies = wspolny ? "" : \`<button class="przenies" data-przenies="\${esc(f.id)}" data-profil="\${esc(profil)}"\${
+      osobisty ? \` disabled title="Kategoria „\${esc(f.category)}” opisuje osobę — profil wspólny trzyma tylko wiedzę o domu."\` : ""
+    }>Przenieś do wspólnego</button>\`;
+    return \`
     <div class="wpis">
       <div class="gora">
         <span class="znacznik">\${esc(f.category)}</span>
-        <button class="usun" data-fakt="\${esc(f.id)}" data-profil="\${esc(profil)}">Usuń</button>
+        <span class="akcje">\${przenies}<button class="usun" data-fakt="\${esc(f.id)}" data-profil="\${esc(profil)}">Usuń</button></span>
       </div>
       <div class="tresc">\${esc(f.content)}</div>
       <div class="meta">użyć: \${esc(f.useCount ?? 0)} · dodany: \${esc((f.createdAt || "").slice(0,16).replace("T"," "))}</div>
-    </div>\`).join("") : '<p class="pusto">Brak faktów w tym profilu.</p>';
+    </div>\`;
+  }).join("") : '<p class="pusto">Brak faktów w tym profilu.</p>';
 }
 
 function rysujOdrzucone(wpisy) {
@@ -122,13 +144,56 @@ function rysujOdrzucone(wpisy) {
   }).join("") : '<p class="pusto">Nic nie zostało odrzucone.</p>';
 }
 
+function rysujZnaleziska(w) {
+  // Wynik NIE jest sporem do rozstrzygnięcia: reguła jest pisana ręcznie i
+  // pilnowana, fakt powstał sam. Dlatego jedyna akcja to skasowanie faktu.
+  if (w.blad) {
+    $("znaleziska").innerHTML = \`<div class="kontrola sprzeczny">Kontrola się nie powiodła: \${esc(w.blad)}</div>\`;
+    return;
+  }
+  if (!w.znaleziska.length) {
+    $("znaleziska").innerHTML = \`<p class="pusto">Sprawdzono \${esc(w.sprawdzono)} faktów — nic nie kłóci się z regułami ani ich nie powtarza.</p>\`;
+    return;
+  }
+  $("znaleziska").innerHTML = w.znaleziska.map(z => \`
+    <div class="kontrola \${esc(z.rodzaj)}">
+      <div class="gora">
+        <span class="znacznik">\${z.rodzaj === "sprzeczny" ? "sprzeczny z regułą" : "powtarza regułę"} · \${esc(z.regula)}</span>
+        <button class="usun" data-fakt="\${esc(z.factId)}" data-profil="\${esc(z.userId)}">Skasuj fakt</button>
+      </div>
+      <div class="tresc">\${esc(z.tresc)}</div>
+      <div class="czym">profil \${esc(z.userId)} · \${esc(z.dlaczego)}</div>
+    </div>\`).join("");
+}
+
 document.addEventListener("click", async (e) => {
   const t = e.target;
   if (t.dataset.fakt) {
     if (!confirm("Usunąć ten fakt z pamięci? Tego nie da się cofnąć.")) return;
     stan("usuwam…");
     await fetch(\`/api/memory/\${encodeURIComponent(t.dataset.profil)}/facts/\${encodeURIComponent(t.dataset.fakt)}\`, { method: "DELETE" });
+    // Ten sam przycisk stoi w liście faktów i w wyniku kontroli. Skasowany
+    // wpis musi zniknąć z obu, a nie tylko z tej listy, którą i tak wczytujemy
+    // na nowo — inaczej znalezisko zostaje i kusi drugim kliknięciem.
+    t.closest(".kontrola")?.remove();
+    await wczytajProfile();
     return wczytaj();
+  }
+  if (t.dataset.przenies) {
+    // Shodh nie zna zmiany wlasciciela: to zapis pod nowym profilem i usuniecie
+    // starego, wiec licznik uzyc i waga faktu przepadaja. Trzeba to powiedziec.
+    if (!confirm("Przenieść ten fakt do profilu wspólnego?\\n\\nFakt zacznie liczyć użycia od zera — pamięć nie umie przenieść wpisu, tylko zapisać go na nowo.")) return;
+    stan("przenoszę…");
+    const r = await fetch(\`/api/pamiec/\${encodeURIComponent(t.dataset.profil)}/fakty/\${encodeURIComponent(t.dataset.przenies)}/przenies\`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ docelowy: "default" }),
+    });
+    const o = await r.json();
+    if (!r.ok) return stan("Błąd: " + (o.error || r.status));
+    await wczytajProfile();
+    await wczytaj();
+    return stan(o.wynik === "scalony" ? "Profil wspólny już to wiedział — usunięto kopię z tego profilu." : "Przeniesiono do profilu wspólnego.");
   }
   if (t.dataset.odrzuc) {
     stan("usuwam z listy…");
@@ -150,6 +215,20 @@ document.addEventListener("click", async (e) => {
     if (!r.ok) return stan("Błąd: " + (o.error || r.status));
     await wczytaj();
     stan(o.zapisane ? \`Zapisano faktów: \${o.zapisane}.\` : "Ekstrakcja nie znalazła nic wartego zapamiętania.");
+  }
+});
+
+$("kontrola").addEventListener("click", async () => {
+  $("kontrola").disabled = true;
+  stan("sprawdzam pamięć z regułami…");
+  try {
+    const w = await fetch("/api/pamiec/kontrola", { method: "POST" }).then(r => r.json());
+    rysujZnaleziska(w);
+    stan(w.blad ? "" : \`Sprawdzono \${w.sprawdzono} faktów, znalezisk: \${w.znaleziska.length}.\`);
+  } catch (err) {
+    stan("Kontrola się nie powiodła: " + err);
+  } finally {
+    $("kontrola").disabled = false;
   }
 });
 

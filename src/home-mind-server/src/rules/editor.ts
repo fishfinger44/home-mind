@@ -197,8 +197,35 @@ $("btn-zapisz").onclick = function(){
     if (d.error) { pokazKomunikat("Nie zapisano: " + d.error, "blad"); return; }
     reguly = d.rules; brudne = false; rysuj();
     pokazKomunikat("Zapisane. Działa od następnego pytania — bez restartu.", "ok");
+    sprawdzPamiec();
   }).catch(function(e){ pokazKomunikat("Nie zapisano: " + e, "blad"); });
 };
+
+/**
+ * Po zapisie skonfrontuj reguły z pamięcią.
+ *
+ * To jest moment, w którym rozjazd POWSTAJE: zmieniasz mapę odkurzacza w
+ * regule, a fakt ze starą mapą zostaje w pamięci i trafia do promptu jeszcze
+ * niżej, czyli z przewagą pozycji. Sprawdzacz sprzeczności obok tego nie widzi
+ * — porównuje reguły z regułami.
+ *
+ * Uruchamiane PO zapisie i osobno, żeby wolne wywołanie modelu nie opóźniało
+ * samego zapisu ani nie mogło go wywrócić. Kasowanie faktów zostaje w pulpicie
+ * Pamięć — tu jest tylko wiadomość, że jest co sprzątać.
+ */
+function sprawdzPamiec(){
+  fetch("/api/pamiec/kontrola", { method: "POST" })
+    .then(function(o){ return o.json(); }).then(function(d){
+      if (d.error || d.blad || !d.znaleziska || !d.znaleziska.length) return;
+      var opis = d.znaleziska.slice(0, 5).map(function(z){
+        return "• " + (z.rodzaj === "sprzeczny" ? "SPRZECZNY" : "powtarza") +
+               " [" + z.regula + "] — " + z.tresc;
+      }).join("\n");
+      var reszta = d.znaleziska.length > 5 ? "\n…i jeszcze " + (d.znaleziska.length - 5) : "";
+      pokazKomunikat("Pamięć kłóci się z regułami (" + d.znaleziska.length + "):\n" +
+        opis + reszta + "\nSkasujesz je w pulpicie „Pamięć asystenta”.", "uwaga");
+    }).catch(function(){ /* Kontrola jest dodatkiem — jej awaria nie dotyczy zapisu. */ });
+}
 
 $("btn-sprawdz").onclick = function(){
   var b = $("btn-sprawdz");

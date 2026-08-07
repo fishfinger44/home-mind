@@ -253,7 +253,7 @@ app.use("/api", createRulesRouter(llm));
 app.use("/api", createRestrictionsRouter());
 // Ekstraktor bierzemy funkcją, bo przełączenie providera w UI podmienia go w
 // locie — złapany raz przy montowaniu zostałby tym sprzed przełączenia.
-app.use("/api", createPamiecRouter(memory, () => currentExtractor, ha));
+app.use("/api", createPamiecRouter(memory, () => currentExtractor, ha, llm));
 app.use(createRulesPage());
 app.use(createPamiecPage());
 
