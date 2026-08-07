@@ -5,6 +5,7 @@ import type { ExtractedFact, Fact } from "../memory/types.js";
 import { IMPERSONAL_FACT_CATEGORIES, isImpersonal } from "../memory/types.js";
 import { filterFacts, SERVICE_PROCEDURE_REASON } from "../memory/fact-patterns.js";
 import { skipExtraction } from "../memory/extraction-gate.js";
+import { zapiszPominiecie } from "../memory/pominiete.js";
 import { suggestRule } from "../rules/store.js";
 import { checkRestriction } from "./restricted.js";
 import { envOrUndefined } from "../env.js";
@@ -731,6 +732,15 @@ export async function extractAndStoreFacts(
     // leaves no other trace, so this line is the only way to review later
     // whether the filter cut something worth keeping.
     console.log(`[extract] pominieto — ${pominiecie}: "${userMessage}"`);
+    // Log kontenera znika przy kazdym wdrozeniu, a to jest jedyny slad po
+    // fakcie, ktorego nie nauczylismy sie po cichu.
+    zapiszPominiecie({
+      rodzaj: "bramka",
+      powod: pominiecie,
+      tresc: userMessage,
+      userId,
+      narzedzia: toolsUsed,
+    });
     return 0;
   }
 
@@ -766,6 +776,10 @@ export async function extractAndStoreFacts(
     // can read it against the other rules before anything acts on it.
     if (reason === SERVICE_PROCEDURE_REASON) {
       suggestRule(suggestionTitle(fact.content), fact.content);
+    } else {
+      // Procedury maja juz swoje miejsce — lista regul. Reszta odrzuconych
+      // faktow nie miala zadnego poza logiem kontenera.
+      zapiszPominiecie({ rodzaj: "filtr", powod: reason, tresc: fact.content, userId });
     }
   }
 
