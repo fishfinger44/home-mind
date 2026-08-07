@@ -37,6 +37,17 @@ export const COMMAND_ECHO_PATTERNS =
   /\b(was set to|was changed to|was turned|has been set|has been turned|has been changed)\b/i;
 
 /**
+ * The reason string for a rejected service-call procedure.
+ *
+ * Named rather than inlined because the caller acts on this one specifically:
+ * a procedure is not garbage, it is an instruction filed in the wrong place, so
+ * it is offered as a house rule instead of being dropped. The other reasons
+ * describe facts that are simply wrong to keep.
+ */
+export const SERVICE_PROCEDURE_REASON =
+  "service-call procedure (belongs in the system prompt, not memory)";
+
+/**
  * Check if a fact's content matches any garbage pattern.
  * Returns the reason string if it's garbage, or null if it's clean.
  */
@@ -58,7 +69,7 @@ export function matchesGarbagePattern(content: string, confidence?: number): str
   }
 
   if (SERVICE_PROCEDURE_PATTERNS.test(content)) {
-    return "service-call procedure (belongs in the system prompt, not memory)";
+    return SERVICE_PROCEDURE_REASON;
   }
 
   if (typeof confidence === "number" && confidence < 0.5) {

@@ -97,6 +97,34 @@ describe("magazyn regul domowych", () => {
     expect(loadRules()).toHaveLength(1);
   });
 
+  it("uznaje za duplikat to samo zdanie inaczej zlozone", async () => {
+    const { suggestRule, loadRules } = await swiezyModul();
+    suggestRule("Radio", "Radio graj przez HEOS.");
+    // Ekstraktor rzadko powtarza wypowiedz znak w znak — inna wielkosc liter
+    // albo zlamany wiersz to ta sama rada, nie druga.
+    const druga = suggestRule("Radio", "radio graj\n  przez HEOS.");
+    expect(druga).toBeNull();
+    expect(loadRules()).toHaveLength(1);
+  });
+
+  it("przestaje przyjmowac sugestie, gdy kolejka jest pelna", async () => {
+    const { suggestRule, loadRules } = await swiezyModul();
+    for (let i = 0; i < 20; i++) suggestRule(`S${i}`, `Sugestia numer ${i}.`);
+    // Ekstrakcja chodzi co ture, wiec bez sufitu tydzien gadania zasypalby
+    // reguly napisane przez czlowieka.
+    expect(suggestRule("Nadmiar", "Ta juz sie nie miesci.")).toBeNull();
+    expect(loadRules()).toHaveLength(20);
+  });
+
+  it("wlaczona sugestia zwalnia miejsce w kolejce", async () => {
+    const { suggestRule, saveRules, loadRules } = await swiezyModul();
+    for (let i = 0; i < 20; i++) suggestRule(`S${i}`, `Sugestia numer ${i}.`);
+    // Sufit dotyczy CZEKAJACYCH na przejrzenie — przyjeta regula juz nie czeka.
+    saveRules(loadRules().map((r, i) => (i === 0 ? { ...r, enabled: true } : r)));
+    expect(suggestRule("Nowa", "Ta juz sie miesci.")).not.toBeNull();
+    expect(loadRules()).toHaveLength(21);
+  });
+
   it("przycina biale znaki przy zapisie", async () => {
     const { saveRules } = await swiezyModul();
     const [zapisana] = saveRules([regula({ title: "  Muzyka  ", text: "  Tresc.  " })]);

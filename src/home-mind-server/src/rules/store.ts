@@ -20,7 +20,16 @@ import { dirname } from "node:path";
 
 import { envOrUndefined } from "../env.js";
 
-const RULES_PATH = envOrUndefined("RULES_PATH") ?? "/data/rules.json";
+/**
+ * Read per call, not once at import.
+ *
+ * A module-level constant cannot be redirected by a test, so the suite would
+ * write to the real `/data` — which is either the running system's rules or, on
+ * a machine without that directory, a crash inside fact extraction.
+ */
+function rulesPath(): string {
+  return envOrUndefined("RULES_PATH") ?? "/data/rules.json";
+}
 
 export interface HouseRule {
   id: string;
@@ -52,20 +61,22 @@ export interface HouseRule {
 
 /** In-memory copy so prompt building stays synchronous and cheap. */
 let cache: HouseRule[] | null = null;
+/** Which file the cache belongs to, so a redirected path is never served stale. */
+let cachedPath: string | null = null;
 
-function readFromDisk(): HouseRule[] {
-  if (!existsSync(RULES_PATH)) return [];
+function readFromDisk(path: string): HouseRule[] {
+  if (!existsSync(path)) return [];
   try {
-    const parsed = JSON.parse(readFileSync(RULES_PATH, "utf-8"));
+    const parsed = JSON.parse(readFileSync(path, "utf-8"));
     if (!Array.isArray(parsed)) {
-      console.warn(`[rules] ${RULES_PATH} is not a list — ignoring it`);
+      console.warn(`[rules] ${path} is not a list — ignoring it`);
       return [];
     }
     return parsed.filter(isRule);
   } catch (err) {
     // A broken file must not take the assistant down with it: without rules it
     // still answers, and the custom prompt still applies.
-    console.error(`[rules] cannot read ${RULES_PATH}:`, err);
+    console.error(`[rules] cannot read ${path}:`, err);
     return [];
   }
 }
@@ -83,7 +94,11 @@ function isRule(value: unknown): value is HouseRule {
 }
 
 export function loadRules(): HouseRule[] {
-  if (cache === null) cache = readFromDisk();
+  const path = rulesPath();
+  if (cache === null || cachedPath !== path) {
+    cache = readFromDisk(path);
+    cachedPath = path;
+  }
   return cache;
 }
 
@@ -98,9 +113,11 @@ export function saveRules(rules: HouseRule[]): HouseRule[] {
     suggested: r.suggested === true,
   }));
 
-  mkdirSync(dirname(RULES_PATH), { recursive: true });
-  writeFileSync(RULES_PATH, JSON.stringify(clean, null, 2), "utf-8");
+  const path = rulesPath();
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(clean, null, 2), "utf-8");
   cache = clean;
+  cachedPath = path;
   console.log(`[rules] saved ${clean.length} rules (${clean.filter((r) => r.enabled).length} enabled)`);
   return clean;
 }
@@ -118,6 +135,21 @@ export function rulesForPrompt(): string | undefined {
 }
 
 /**
+ * How many unreviewed suggestions may wait at once.
+ *
+ * The extractor runs on every turn, so without a ceiling a week of chatter
+ * could bury the handful of rules a person actually wrote. When the queue is
+ * full new proposals are dropped rather than rotated: the older ones have been
+ * waiting longer and nothing here can tell which is the better advice.
+ */
+const MAX_PENDING_SUGGESTIONS = 20;
+
+/** Same wording, different spacing or case, is the same rule. */
+function normalize(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
  * File a rule proposed by the assistant, disabled and marked as such.
  *
  * Silently ignores a proposal whose text already exists, so the same advice
@@ -128,7 +160,16 @@ export function suggestRule(title: string, text: string): HouseRule | null {
   if (!trimmed) return null;
 
   const existing = loadRules();
-  if (existing.some((r) => r.text.trim() === trimmed)) return null;
+  const wzorzec = normalize(trimmed);
+  if (existing.some((r) => normalize(r.text) === wzorzec)) return null;
+
+  const czekajace = existing.filter((r) => r.suggested && !r.enabled).length;
+  if (czekajace >= MAX_PENDING_SUGGESTIONS) {
+    console.warn(
+      `[rules] ${czekajace} suggestions already waiting — dropping "${title}"`
+    );
+    return null;
+  }
 
   const rule: HouseRule = {
     id: `s${Date.now().toString(36)}`,
@@ -138,7 +179,15 @@ export function suggestRule(title: string, text: string): HouseRule | null {
     protected: false,
     suggested: true,
   };
-  saveRules([...existing, rule]);
+  try {
+    saveRules([...existing, rule]);
+  } catch (err) {
+    // Filing a suggestion runs inside fact extraction. A write that fails —
+    // a read-only volume, a full disk — must cost us the suggestion and
+    // nothing else; the facts from that same turn still have to be stored.
+    console.error(`[rules] could not file a suggestion:`, err);
+    return null;
+  }
   console.log(`[rules] assistant suggested a rule: ${rule.title}`);
   return rule;
 }
@@ -146,4 +195,5 @@ export function suggestRule(title: string, text: string): HouseRule | null {
 /** Test seam: drop the cache so the next read hits the disk again. */
 export function resetRulesCache(): void {
   cache = null;
+  cachedPath = null;
 }

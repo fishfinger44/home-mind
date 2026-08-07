@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleToolCall, entityIdFrom, extractAndStoreFacts, filterExtractedFacts, normalizeTimestamp, truncateHistory, recallFacts, resolveSearchMode, groundedGeminiSearch, readBraveQuotaHeaders, QuotaError } from "./tool-handler.js";
+import { handleToolCall, entityIdFrom, extractAndStoreFacts, filterExtractedFacts, normalizeTimestamp, truncateHistory, recallFacts, resolveSearchMode, groundedGeminiSearch, readBraveQuotaHeaders, QuotaError, suggestionTitle } from "./tool-handler.js";
+import { loadRules, resetRulesCache } from "../rules/store.js";
 import type { HomeAssistantClient } from "../ha/client.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { IFactExtractor } from "./interface.js";
@@ -188,6 +189,99 @@ describe("filtering service-call procedures out of memory", () => {
     );
     expect(skipped).toHaveLength(0);
     expect(kept).toHaveLength(zachowywane.length);
+  });
+});
+
+describe("odrzucona procedura trafia na liste regul jako sugestia", () => {
+  let katalog: string;
+  let memory: IMemoryStore;
+  let extractor: IFactExtractor;
+
+  const procedura =
+    "Radio graj przez HEOS: wywołaj media_player.select_source na encji media_player.denon";
+
+  beforeEach(() => {
+    katalog = mkdtempSync(join(tmpdir(), "rules-hook-"));
+    process.env.RULES_PATH = join(katalog, "rules.json");
+    resetRulesCache();
+
+    memory = {
+      getFacts: vi.fn().mockResolvedValue([]),
+      addFacts: vi.fn().mockResolvedValue(["id-1"]),
+      deleteFact: vi.fn().mockResolvedValue(true),
+    } as unknown as IMemoryStore;
+
+    extractor = {
+      extract: vi.fn().mockResolvedValue([
+        { content: procedura, category: "device", confidence: 0.9 },
+        { content: "Main light in the kitchen is light.wled_kitchen", category: "device", confidence: 0.9 },
+      ]),
+    } as unknown as IFactExtractor;
+  });
+
+  afterEach(() => {
+    rmSync(katalog, { recursive: true, force: true });
+    delete process.env.RULES_PATH;
+    resetRulesCache();
+    vi.clearAllMocks();
+  });
+
+  it("zapisuje sugestie WYLACZONA, a fakt zwykly trafia do pamieci", async () => {
+    await extractAndStoreFacts(memory, extractor, "user-1", "msg", "resp");
+
+    const reguly = loadRules();
+    expect(reguly).toHaveLength(1);
+    expect(reguly[0].text).toBe(procedura);
+    expect(reguly[0].suggested).toBe(true);
+    // Nic nie dziala, dopoki czlowiek tego nie wlaczy — to cala roznica
+    // miedzy sugestia a tym, co pamiec robila wczesniej sama z siebie.
+    expect(reguly[0].enabled).toBe(false);
+
+    // Procedura nadal NIE idzie do pamieci — zmienil sie tylko jej los.
+    expect(memory.addFacts).toHaveBeenCalledWith("user-1", [
+      { content: "Main light in the kitchen is light.wled_kitchen", category: "device", confidence: 0.9 },
+    ]);
+  });
+
+  it("nieudany zapis sugestii nie blokuje zapisu faktow", async () => {
+    // Sciezka przez plik zamiast katalogu = mkdir pada (ENOTDIR). Zapis regul
+    // dzieje sie w srodku ekstrakcji, wiec jego awaria nie moze zabrac ze soba
+    // faktow z tej samej tury.
+    writeFileSync(join(katalog, "blokada"), "x", "utf-8");
+    process.env.RULES_PATH = join(katalog, "blokada", "rules.json");
+    resetRulesCache();
+
+    await extractAndStoreFacts(memory, extractor, "user-1", "msg", "resp");
+
+    expect(memory.addFacts).toHaveBeenCalledWith("user-1", [
+      { content: "Main light in the kitchen is light.wled_kitchen", category: "device", confidence: 0.9 },
+    ]);
+  });
+});
+
+describe("suggestionTitle", () => {
+  it("bierze pierwsze zdanie jako etykiete", () => {
+    expect(suggestionTitle("Radio graj przez HEOS: wywołaj select_source")).toBe(
+      "Radio graj przez HEOS"
+    );
+  });
+
+  it("nie lamie etykiety na kropce w id encji", () => {
+    // Pierwsza wersja urwala sie na "media_player" — a sugestie skladaja sie
+    // wlasnie z identyfikatorow encji.
+    expect(suggestionTitle("Radio graj przez media_player.select_source na denonie.")).toBe(
+      "Radio graj przez media_player.select_source n…"
+    );
+  });
+
+  it("skraca dluga tresc zamiast rozpychac liste", () => {
+    const tytul = suggestionTitle("a".repeat(80));
+    expect(tytul).toHaveLength(46);
+    expect(tytul.endsWith("…")).toBe(true);
+  });
+
+  it("ma zapasowa etykiete, gdy nie ma z czego jej zrobic", () => {
+    expect(suggestionTitle(". reszta")).toBe("Sugestia asystenta");
   });
 });
 

@@ -3,7 +3,8 @@ import type { IMemoryStore } from "../memory/interface.js";
 import type { IFactExtractor, WebSearchMode } from "./interface.js";
 import type { ExtractedFact, Fact } from "../memory/types.js";
 import { IMPERSONAL_FACT_CATEGORIES, isImpersonal } from "../memory/types.js";
-import { filterFacts } from "../memory/fact-patterns.js";
+import { filterFacts, SERVICE_PROCEDURE_REASON } from "../memory/fact-patterns.js";
+import { suggestRule } from "../rules/store.js";
 import { checkRestriction } from "./restricted.js";
 import { envOrUndefined } from "../env.js";
 import {
@@ -570,6 +571,22 @@ export function filterExtractedFacts(facts: ExtractedFact[]): { kept: ExtractedF
 }
 
 /**
+ * A short label for a suggested rule, for the editor's list.
+ *
+ * The rule text carries the detail; this only has to be recognisable at a
+ * glance, so it is the opening clause rather than a summary — summarising would
+ * mean another model call for something nobody reads twice.
+ */
+export function suggestionTitle(content: string): string {
+  // A full stop only ends a sentence when whitespace or the end follows it —
+  // otherwise the first `media_player.select_source` would cut the label in
+  // half, and these suggestions are made of entity ids.
+  const opening = content.split(/\.(?=\s|$)|[:;\n]/)[0].trim();
+  if (!opening) return "Sugestia asystenta";
+  return opening.length > 48 ? `${opening.slice(0, 45).trimEnd()}…` : opening;
+}
+
+/**
  * Recall the user's facts for this turn, honouring a per-request token budget.
  *
  * The budget is what the user set in HA (`memory_token_limit`), falling back to
@@ -725,6 +742,14 @@ export async function extractAndStoreFacts(
 
   for (const { fact, reason } of skipped) {
     console.debug(`[filter] Skipped fact for ${userId}: "${fact.content}" — ${reason}`);
+
+    // A procedure is not rubbish — it is an instruction filed in the wrong
+    // drawer. Memory made it dangerous (it goes stale and then argues with the
+    // prompt), so it goes to the house rules instead, disabled, where a person
+    // can read it against the other rules before anything acts on it.
+    if (reason === SERVICE_PROCEDURE_REASON) {
+      suggestRule(suggestionTitle(fact.content), fact.content);
+    }
   }
 
   // On a shared profile, keep only what is true of the house rather than of
