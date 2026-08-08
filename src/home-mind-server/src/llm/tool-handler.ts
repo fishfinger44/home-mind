@@ -666,7 +666,7 @@ export async function recallFacts(
 
   if (!sharedUserId || sharedUserId === userId) {
     const facts = await memory.getFactsWithinTokenLimit(userId, limit, message);
-    return personalOnly(facts).map((f) => f.content);
+    return personalOnly(facts).map(zData);
   }
 
   // Each profile is asked for the full budget and the merged result is trimmed
@@ -694,10 +694,32 @@ export async function recallFacts(
     const factTokens = Math.ceil(fact.content.length / 4);
     if (tokens + factTokens > limit) break;
     seen.add(fact.content);
-    contents.push(fact.content);
+    contents.push(zData(fact));
     tokens += factTokens;
   }
   return contents;
+}
+
+/**
+ * A fact as the prompt sees it: the wording, plus when it was learned.
+ *
+ * Without the date a memory is read as a statement about NOW, and some of them
+ * quietly stop being true. Two live examples from this house: "the neighbour's
+ * yews are 30 centimetres tall" (learned 08.08.2026, undated in its own
+ * wording) and a child's age. Neither is wrong when stored; both become
+ * confident falsehoods with nothing in the text to warn anyone. Shodh's decay
+ * does not help here — it forgets what is rarely used, which is the opposite
+ * axis to content going stale.
+ *
+ * The date is not counted against the token budget on purpose. Trimming a fact
+ * to fit its own timestamp would drop memories to make room for metadata; the
+ * budget stays a budget for *what* is remembered.
+ */
+function zData(fact: Fact): string {
+  const kiedy = fact.createdAt instanceof Date
+    ? fact.createdAt.toISOString().slice(0, 10)
+    : String(fact.createdAt).slice(0, 10);
+  return kiedy ? `${fact.content} [learned ${kiedy}]` : fact.content;
 }
 
 export async function extractAndStoreFacts(

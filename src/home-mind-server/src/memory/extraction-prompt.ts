@@ -63,7 +63,11 @@ export function fillExtractionPrompt(values: {
 }): string {
   return EXTRACTION_PROMPT.replace("{existing_facts_section}", () => values.existingFactsSection)
     .replace("{user_message}", () => values.userMessage)
-    .replace("{assistant_response}", () => values.assistantResponse);
+    .replace("{assistant_response}", () => values.assistantResponse)
+    // Today's date is computed here rather than passed in: the extractor has no
+    // business deciding what day it is, and a caller that forgot the argument
+    // would silently produce anchors dated to nothing.
+    .replace("{today}", () => new Date().toISOString().slice(0, 10));
 }
 
 export const EXTRACTION_PROMPT = `You are a memory extraction assistant for a smart home AI. Analyze this conversation and extract ONLY long-term facts worth remembering about the user and their home.
@@ -104,6 +108,16 @@ BAD extractions (never store these):
 [{{"content": "SNZB sensor is located in the living room", ...}}]  <- inferred from context, user never said this
 
 If in doubt, return [] — it is better to miss a fact than to store garbage.
+
+ANCHOR ANYTHING THAT AGES. Today is {today}. A fact is stored for years, so a
+number that only holds for a while must be written so that it cannot rot into a
+confident falsehood. Never store a bare age, size, count, duration or "recently";
+store what stays true instead, or pin the reading to its date:
+- "my son is 5 months old" -> "Son Tadeusz was born around March 2026" (a birth date never ages; the age is derived)
+- "the neighbour's yews are 30 cm tall" -> "Neighbour's yew trees were 30 cm tall in August 2026" (a growing plant is a snapshot, so it carries its date)
+- "I've been learning Spanish for two years" -> "Started learning Spanish around 2024"
+- A stable trait needs no anchor: "prefers 22°C", "dog is a German Shepherd mix", "name is Lech".
+Prefer the anchor to the snapshot: derived-from-a-date is worth more than dated-and-frozen, because it stays correct without anyone revisiting it.
 
 {existing_facts_section}
 

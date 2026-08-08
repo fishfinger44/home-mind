@@ -21,6 +21,20 @@ function rulesSection(houseRules?: string): string {
   return `\n\n## HOUSE RULES\n${houseRules.trim()}`;
 }
 
+/**
+ * The memory section's heading, with the one instruction that makes a
+ * timestamp worth its tokens.
+ *
+ * Recalled memories arrive stamped with the day they were learned (see
+ * `zData()` in tool-handler.ts). The stamp alone changes nothing — a model
+ * reads a dated line as a fact about now just as readily as an undated one — so
+ * the rule to recompute against today has to be stated. Shared by both prompt
+ * builders: the same text drifting apart in two places is how one provider
+ * quietly loses a rule the other has.
+ */
+const MEMORY_HEADING = `## What You Remember:
+Each memory ends with [learned YYYY-MM-DD]: the day you recorded it, not a claim about today. Ages, sizes, counts and "recently" describe THAT day — work the present out from it against the current date above, and say plainly when something has likely changed since.`;
+
 const SYSTEM_INSTRUCTIONS = `
 
 ## WHEN TO USE TOOLS vs ANSWER DIRECTLY
@@ -313,7 +327,7 @@ ${speakerSection(speaker, trusted)}
 - ISO Timestamp (now, UTC): ${isoTimestamp}
 - Local midnight today (UTC): ${localMidnightIso}  ← use this as start_time for "today" history queries, NOT 00:00:00Z
 
-## What You Remember:
+${MEMORY_HEADING}
 ${factsText}`;
 
   // The cache_control marker caches everything up to and including its block,
@@ -379,6 +393,6 @@ ${speakerSection(speaker, trusted)}
 - ISO Timestamp (now, UTC): ${isoTimestamp}
 - Local midnight today (UTC): ${localMidnightIso}  ← use this as start_time for "today" history queries, NOT 00:00:00Z
 
-## What You Remember:
+${MEMORY_HEADING}
 ${factsText}`;
 }

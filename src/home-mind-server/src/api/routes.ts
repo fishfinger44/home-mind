@@ -10,6 +10,33 @@ import { usageSnapshot } from "../llm/search-usage.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
+/**
+ * Whether a stored conversation may be read (or deleted) under this profile.
+ *
+ * The route always carried `:userId` and never looked at it: the history was
+ * fetched by `conversationId` alone, so the same messages came back under any
+ * profile in the path. Audit 07.08 confirmed it by asking for one conversation
+ * as `lech` and as `default` and getting the same turns — which is how an
+ * unrecognised speaker could read what a household member had said.
+ *
+ * Ownership is a SET, not one profile, and that is deliberate. A voice session
+ * can start before biometrics has anything to go on: the first turn is stored
+ * under the shared profile, and once the speaker is recognised the rest of the
+ * same `conversationId` is stored under theirs. Demanding a single owner would
+ * make such a conversation unreadable by anybody; taking the first message's
+ * owner would hand the whole thing to whoever happened to speak first.
+ *
+ * An empty history is not "everyone's": a conversation that does not exist and
+ * one that is not yours answer alike (404), so the route cannot be used to
+ * probe which conversation ids are real.
+ */
+export function belongsTo(
+  messages: readonly { userId: string }[],
+  userId: string
+): boolean {
+  return messages.some((m) => m.userId === userId);
+}
+
 // Request validation schemas
 const ChatRequestSchema = z.object({
   message: z.string().min(1, "Message is required"),
@@ -292,8 +319,12 @@ export function createRouter(
     }
 
     try {
+      const userId = req.params.userId as string;
       const conversationId = req.params.conversationId as string;
       const messages = await conversations.getConversationHistory(conversationId, 20);
+      if (!belongsTo(messages, userId)) {
+        return res.status(404).json({ error: "Conversation not found" });
+      }
       res.json({ conversationId, messages });
     } catch (error) {
       console.error("Get conversation error:", error);
@@ -312,7 +343,12 @@ export function createRouter(
     }
 
     try {
+      const userId = req.params.userId as string;
       const conversationId = req.params.conversationId as string;
+      const existing = await conversations.getConversationHistory(conversationId, 20);
+      if (!belongsTo(existing, userId)) {
+        return res.status(404).json({ error: "Conversation not found" });
+      }
       const deleted = await conversations.deleteConversation(conversationId);
 
       if (deleted > 0) {
