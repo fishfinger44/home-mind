@@ -44,10 +44,13 @@ describe("urzadzenia tylko dla rozpoznanych domownikow", () => {
     expect(checkRestriction("climate", "set_hvac_mode", "climate.580d0d2f9e31", nierozpoznany).allowed).toBe(false);
   });
 
-  it("POZWALA kazdemu zatrzymac i wylaczyc — poza klimatyzacja", () => {
-    // Kierunek dzialania niesie ryzyko: uruchomienie budzi dom, zatrzymanie nie.
-    expect(checkRestriction("vacuum", "stop", "vacuum.roborock", nierozpoznany).allowed).toBe(true);
-    expect(checkRestriction("cover", "stop_cover", "cover.salon_lewa", nierozpoznany).allowed).toBe(true);
+  it("NIE POZWALA zatrzymac ani wylaczyc — grupa zamknieta w obie strony", () => {
+    // Do 08.08 obcy mogl zatrzymac to, czego nie mogl uruchomic. Dom te ulge
+    // odrzucil: zatrzymanie rolet w polowie drogi albo wylaczenie klimy w upal
+    // jest tak samo dotkliwe jak wlaczenie, wiec regula jest jedna dla obu osi.
+    expect(checkRestriction("vacuum", "stop", "vacuum.roborock", nierozpoznany).allowed).toBe(false);
+    expect(checkRestriction("cover", "stop_cover", "cover.salon_lewa", nierozpoznany).allowed).toBe(false);
+    expect(checkRestriction("vacuum", "return_to_base", "vacuum.roborock", nierozpoznany).allowed).toBe(false);
   });
 
   it("blokuje klimatyzacje w OBIE strony", () => {
@@ -93,16 +96,15 @@ describe("urzadzenia tylko dla rozpoznanych domownikow", () => {
   });
 
   it("gospodarstwo moze otworzyc odkurzacz dla wszystkich", () => {
-    zapiszOgraniczenia({ grupy: ["rolety", "klimatyzacja"], wolnoZatrzymywac: true });
+    zapiszOgraniczenia({ grupy: ["rolety", "klimatyzacja"] });
     expect(checkRestriction("vacuum", "start", "vacuum.roborock", nierozpoznany).allowed).toBe(true);
     expect(checkRestriction("button", "press", "button.roborock_kuchnia", nierozpoznany).allowed).toBe(true);
     expect(checkRestriction("cover", "open_cover", "cover.salon", nierozpoznany).allowed).toBe(false);
   });
 
-  it("gospodarstwo moze domknac swiatlo i zablokowac zatrzymywanie", () => {
-    zapiszOgraniczenia({ grupy: ["swiatlo"], wolnoZatrzymywac: false });
+  it("gospodarstwo moze domknac swiatlo — takze gaszenie", () => {
+    zapiszOgraniczenia({ grupy: ["swiatlo"] });
     expect(checkRestriction("light", "turn_on", "light.kitchen", nierozpoznany).allowed).toBe(false);
-    // Bez wyjatku uspokajajacego nawet gaszenie wymaga rozpoznania.
     expect(checkRestriction("light", "turn_off", "light.kitchen", nierozpoznany).allowed).toBe(false);
     expect(checkRestriction("vacuum", "start", "vacuum.roborock", nierozpoznany).allowed).toBe(true);
   });
@@ -119,7 +121,6 @@ describe("uprawnienia per domownik", () => {
   const zOdebranymi = () =>
     zapiszOgraniczenia({
       grupy: ["odkurzacz", "rolety", "klimatyzacja", "zamki"],
-      wolnoZatrzymywac: true,
       osoby: { wladek: ["odkurzacz", "klimatyzacja"] },
     });
 
@@ -130,9 +131,6 @@ describe("uprawnienia per domownik", () => {
   });
 
   it("zamyka odebrana grupe w OBIE strony — takze zatrzymanie", () => {
-    // Decyzja domu 08.08: ulga „wolno zatrzymywac" byla pomyslana dla OBCEGO,
-    // o ktorym nie wiemy nic. Tu wiemy, kto pyta, i odebralismy mu ta grupe
-    // swiadomie — mimo `wolnoZatrzymywac: true` w ustawieniach ogolnych.
     zOdebranymi();
     expect(checkRestriction("vacuum", "stop", "vacuum.roborock", rozpoznany, "wladek").allowed).toBe(false);
     expect(checkRestriction("vacuum", "return_to_base", "vacuum.roborock", rozpoznany, "wladek").allowed).toBe(false);
@@ -178,7 +176,6 @@ describe("uprawnienia per domownik", () => {
   it("ignoruje wymyslone id grupy w zapisie", () => {
     zapiszOgraniczenia({
       grupy: ["odkurzacz"],
-      wolnoZatrzymywac: true,
       osoby: { wladek: ["odkurzacz", "czajnik-ktorego-nie-ma"] },
     });
     expect(checkRestriction("vacuum", "start", "vacuum.roborock", rozpoznany, "wladek").allowed).toBe(false);

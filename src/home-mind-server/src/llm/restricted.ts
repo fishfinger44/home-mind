@@ -49,17 +49,6 @@ export interface GrupaUrzadzen {
   wzory?: RegExp[];
   /** Restricted unless the household says otherwise. */
   domyslnie: boolean;
-  /**
-   * Whether the calming-services exemption is withheld from this group.
-   *
-   * That exemption rests on an assumption — that risk travels in one
-   * direction, because starting a machine wakes a household and stopping one
-   * does not. For the air conditioning the assumption simply fails: switching
-   * it off during a heatwave, or in the middle of the night, is as disruptive
-   * as switching it on. Where the assumption does not hold, the group is
-   * closed in both directions rather than split.
-   */
-  bezUlgi?: boolean;
 }
 
 export const GRUPY_URZADZEN: GrupaUrzadzen[] = [
@@ -74,18 +63,17 @@ export const GRUPY_URZADZEN: GrupaUrzadzen[] = [
   {
     id: "rolety",
     nazwa: "Rolety",
-    opis: "Otwieranie i zamykanie; zatrzymanie zależy od ustawienia niżej.",
+    opis: "Otwieranie, zamykanie i zatrzymanie w połowie drogi.",
     domeny: ["cover"],
     domyslnie: true,
   },
   {
     id: "klimatyzacja",
     nazwa: "Klimatyzacja",
-    opis: "Włączanie ORAZ wyłączanie — oba dotkliwe. Odczyt temperatury zostaje dla wszystkich.",
+    opis: "Wyłączenie w upał boli tak samo jak włączenie. Odczyt temperatury zostaje dla wszystkich.",
     domeny: ["climate"],
     wzory: [/^switch\.580d0d2f9e31/i],
     domyslnie: true,
-    bezUlgi: true,
   },
   {
     id: "swiatlo",
@@ -111,37 +99,9 @@ export const GRUPY_URZADZEN: GrupaUrzadzen[] = [
   },
 ];
 
-/**
- * Services that only ever calm a device down.
- *
- * Anyone may stop what is already running — a guest who wants the vacuum out
- * of the way, someone who simply finds it too loud. Refusing that would be
- * obstruction rather than safety, and it is the direction of travel that
- * carries the risk: starting a machine is what wakes a household, not stopping
- * one.
- *
- * That reasoning is not universal, which is why `bezUlgi` exists. It does not
- * hold for the air conditioning, where turning it off on a hot night is as
- * unwelcome as turning it on — so that group is closed both ways.
- *
- * Reading is unaffected either way — these rules apply to call_service only,
- * so anyone can still ask what the temperature is.
- */
-const USLUGI_USPOKAJAJACE = new Set([
-  "turn_off",
-  "stop",
-  "pause",
-  "return_to_base",
-  "stop_cover",
-  "media_pause",
-  "media_stop",
-]);
-
 export interface Ograniczenia {
   /** Ids of the groups a stranger's voice may not operate. */
   grupy: string[];
-  /** Whether stopping and turning off stay open to everyone. */
-  wolnoZatrzymywac: boolean;
   /**
    * Groups taken away from a specific household member, keyed by the id the
    * assistant receives as `userId`.
@@ -166,7 +126,6 @@ export interface Ograniczenia {
 export function domyslneOgraniczenia(): Ograniczenia {
   return {
     grupy: GRUPY_URZADZEN.filter((g) => g.domyslnie).map((g) => g.id),
-    wolnoZatrzymywac: true,
     osoby: {},
   };
 }
@@ -197,7 +156,6 @@ export function wczytajOgraniczenia(): Ograniczenia {
       grupy: Array.isArray(parsed?.grupy)
         ? parsed.grupy.filter((id: unknown) => GRUPY_URZADZEN.some((g) => g.id === id))
         : domyslneOgraniczenia().grupy,
-      wolnoZatrzymywac: parsed?.wolnoZatrzymywac !== false,
       osoby: czysteOsoby(parsed?.osoby),
     };
     return cache;
@@ -213,7 +171,6 @@ export function wczytajOgraniczenia(): Ograniczenia {
 export function zapiszOgraniczenia(nowe: Ograniczenia): Ograniczenia {
   const czyste: Ograniczenia = {
     grupy: GRUPY_URZADZEN.filter((g) => nowe.grupy?.includes(g.id)).map((g) => g.id),
-    wolnoZatrzymywac: nowe.wolnoZatrzymywac !== false,
     osoby: czysteOsoby(nowe.osoby),
   };
   mkdirSync(dirname(sciezka()), { recursive: true });
@@ -259,6 +216,13 @@ function trafionaGrupa(
 
 export function checkRestriction(
   domain: string | undefined,
+  /**
+   * Nieużywane od 08.08, zostaje świadomie. Póki żyła ulga „wolno zatrzymywać",
+   * to ono o niej decydowało; dziś zamknięta grupa jest zamknięta w obie
+   * strony, więc nazwa usługi niczego nie zmienia. Parametr zostaje, bo jest
+   * naturalną częścią tożsamości wywołania i usunięcie go przestawiłoby
+   * pozycyjnie wszystkie wywołania oraz testy — za cenę zera.
+   */
   service: string | undefined,
   entityId: string | undefined,
   speakerRecognised: boolean,
@@ -270,61 +234,46 @@ export function checkRestriction(
 ): RestrictionVerdict {
   const ustawienia = wczytajOgraniczenia();
 
-  if (speakerRecognised) {
-    // Being recognised is no longer a master key. It still means "not the
-    // television", which is what `grupy` guards; this second list is about
-    // which household member, and exists so the children can be enrolled —
-    // for their own memory and personality — without that enrolment handing
-    // them the vacuum and the air conditioning.
-    const odebrane = mowca ? (ustawienia.osoby?.[mowca] ?? []) : [];
-    if (odebrane.length === 0) return { allowed: true };
+  // Obie osie działają tak samo: zamknięta grupa jest zamknięta w OBIE STRONY.
+  //
+  // Do 08.08 obcy głos miał ulgę — wolno mu było zatrzymać i wyłączyć to,
+  // czego nie wolno mu było uruchomić. Uzasadnieniem był kierunek ryzyka:
+  // uruchomienie budzi dom, zatrzymanie nie, a odmowa wyłączenia to
+  // utrudnianie, nie ostrożność. Dom to odrzucił i ma rację, bo założenie
+  // trzymało się tylko dla części sprzętu: wyłączenie klimatyzacji w upał albo
+  // zatrzymanie rolet w połowie drogi jest równie dotkliwe jak włączenie —
+  // wyjątek `bezUlgi` istniał właśnie po to, żeby to łatać. Reguła z jednym
+  // wyjątkiem na sześć grup nie jest regułą, tylko zgadywanką, a lista, którą
+  // dom sam odklika, mówi wprost, czego ma nie ruszać nikt niepowołany.
+  //
+  // Odczyt stanu jest nietknięty w obu wypadkach — te reguły dotyczą wyłącznie
+  // `call_service`, więc o temperaturę może zapytać każdy.
+  const zamkniete = speakerRecognised
+    ? (mowca ? (ustawienia.osoby?.[mowca] ?? []) : [])
+    : ustawienia.grupy;
 
-    const zabroniona = trafionaGrupa(
-      domain,
-      entityId,
-      GRUPY_URZADZEN.filter((g) => odebrane.includes(g.id))
-    );
-    if (!zabroniona) return { allowed: true };
-
-    // Bez ulgi „wolno zatrzymywać" — decyzja domu z 08.08: brak uprawnienia do
-    // grupy znaczy brak dotyku w obie strony. Ulga została pomyślana dla
-    // OBCEGO, o którym nie wiemy nic poza tym, że stoi w pokoju; tutaj wiemy
-    // dokładnie, kto pyta, i to jemu ta grupa została odebrana świadomie.
-    return {
-      allowed: false,
-      reason:
-        `Odmowa: „${zabroniona.nazwa}” nie jest dostępna dla tego domownika. ` +
-        "Dotyczy to zarówno włączania, jak i wyłączania; odczyt stanu jest dozwolony. " +
-        "Powiedz to użytkownikowi wprost, nie tłumacz się nierozpoznaniem głosu " +
-        "i nie szukaj innej drogi do tego samego urządzenia.",
-    };
-  }
+  if (zamkniete.length === 0) return { allowed: true };
 
   const trafiona = trafionaGrupa(
     domain,
     entityId,
-    GRUPY_URZADZEN.filter((g) => ustawienia.grupy.includes(g.id))
+    GRUPY_URZADZEN.filter((g) => zamkniete.includes(g.id))
   );
-
   if (!trafiona) return { allowed: true };
 
-  // Ulga rozstrzyga się dopiero tutaj, bo zależy od grupy: klimatyzacja jest
-  // zamknięta w obie strony, reszta tylko w kierunku uruchomienia.
-  const uspokajajaca = !!service && USLUGI_USPOKAJAJACE.has(service.toLowerCase());
-  if (uspokajajaca && ustawienia.wolnoZatrzymywac && !trafiona.bezUlgi) {
-    return { allowed: true };
-  }
-
+  // Powód odmowy MUSI się różnić. Powiedzenie komuś, kogo właśnie
+  // rozpoznaliśmy, że go nie rozpoznajemy, jest nieprawdą i wysyła go w
+  // powtarzanie polecenia bez końca.
   return {
     allowed: false,
-    reason:
-      `Odmowa: „${trafiona.nazwa}” obsługuje tylko rozpoznany domownik, ` +
-      "a tego głosu nie rozpoznałem. " +
-      (trafiona.bezUlgi
-        ? "Dotyczy to zarówno włączania, jak i wyłączania. Odczyt stanu jest dozwolony dla każdego. "
-        : ustawienia.wolnoZatrzymywac
-          ? "Zatrzymanie i wyłączenie są dozwolone dla każdego, podobnie jak odczyt stanu. "
-          : "Odczyt stanu jest dozwolony dla każdego. ") +
-      "Powiedz to użytkownikowi wprost i nie szukaj innej drogi do tego samego urządzenia.",
+    reason: speakerRecognised
+      ? `Odmowa: „${trafiona.nazwa}” nie jest dostępna dla tego domownika. ` +
+        "Dotyczy to zarówno włączania, jak i wyłączania; odczyt stanu jest dozwolony. " +
+        "Powiedz to użytkownikowi wprost, nie tłumacz się nierozpoznaniem głosu " +
+        "i nie szukaj innej drogi do tego samego urządzenia."
+      : `Odmowa: „${trafiona.nazwa}” obsługuje tylko rozpoznany domownik, ` +
+        "a tego głosu nie rozpoznałem. Dotyczy to zarówno włączania, jak i " +
+        "wyłączania; odczyt stanu jest dozwolony dla każdego. " +
+        "Powiedz to użytkownikowi wprost i nie szukaj innej drogi do tego samego urządzenia.",
   };
 }
