@@ -198,7 +198,9 @@ describe("OpenAIChatEngine", () => {
       // 4th arg: per-request web-search settings (mode + billed search key).
       expect.any(Object),
       // 5th: whether the voice was recognised, gating the restricted devices.
-      true
+      true,
+      // 6th: WHO was recognised, for the groups taken away from that person.
+      "user-1"
     );
     expect(result.response).toBe("The light is on");
     expect(result.toolsUsed).toEqual(["get_state"]);

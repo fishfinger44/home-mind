@@ -142,13 +142,45 @@ export interface Ograniczenia {
   grupy: string[];
   /** Whether stopping and turning off stay open to everyone. */
   wolnoZatrzymywac: boolean;
+  /**
+   * Groups taken away from a specific household member, keyed by the id the
+   * assistant receives as `userId`.
+   *
+   * A DENY list, not an allow list, and the household chose it that way
+   * (2026-08-08): being recognised keeps meaning what it has always meant, so
+   * enrolling somebody never quietly narrows what they could already do, and
+   * existing people needed no migration. The cost is the other direction —
+   * enrolling a child opens everything to them until somebody unticks a box —
+   * so the panel says so on the tab of anyone with no entry here.
+   *
+   * The key is whatever `userId` the request carries. For voice that is the
+   * Home Assistant person id (`lech`, `wladek`), because the integration maps
+   * the voiceprint through `person.*`. A phone logged into Home Assistant
+   * sends the account uuid instead and so has no entry — which is correct: an
+   * account holder has already authenticated themselves, and this list is
+   * about voices.
+   */
+  osoby?: Record<string, string[]>;
 }
 
 export function domyslneOgraniczenia(): Ograniczenia {
   return {
     grupy: GRUPY_URZADZEN.filter((g) => g.domyslnie).map((g) => g.id),
     wolnoZatrzymywac: true,
+    osoby: {},
   };
+}
+
+/** Keep only real group ids, and drop people left with nothing taken away. */
+function czysteOsoby(surowe: unknown): Record<string, string[]> {
+  if (!surowe || typeof surowe !== "object" || Array.isArray(surowe)) return {};
+  const wynik: Record<string, string[]> = {};
+  for (const [osoba, grupy] of Object.entries(surowe as Record<string, unknown>)) {
+    if (!osoba || !Array.isArray(grupy)) continue;
+    const znane = GRUPY_URZADZEN.filter((g) => grupy.includes(g.id)).map((g) => g.id);
+    if (znane.length > 0) wynik[osoba] = znane;
+  }
+  return wynik;
 }
 
 let cache: Ograniczenia | null = null;
@@ -166,6 +198,7 @@ export function wczytajOgraniczenia(): Ograniczenia {
         ? parsed.grupy.filter((id: unknown) => GRUPY_URZADZEN.some((g) => g.id === id))
         : domyslneOgraniczenia().grupy,
       wolnoZatrzymywac: parsed?.wolnoZatrzymywac !== false,
+      osoby: czysteOsoby(parsed?.osoby),
     };
     return cache;
   } catch (err) {
@@ -181,11 +214,18 @@ export function zapiszOgraniczenia(nowe: Ograniczenia): Ograniczenia {
   const czyste: Ograniczenia = {
     grupy: GRUPY_URZADZEN.filter((g) => nowe.grupy?.includes(g.id)).map((g) => g.id),
     wolnoZatrzymywac: nowe.wolnoZatrzymywac !== false,
+    osoby: czysteOsoby(nowe.osoby),
   };
   mkdirSync(dirname(sciezka()), { recursive: true });
   writeFileSync(sciezka(), JSON.stringify(czyste, null, 2), "utf-8");
   cache = czyste;
-  console.log(`[ograniczenia] zapisane: ${czyste.grupy.join(", ") || "brak"}`);
+  const odebrane = Object.entries(czyste.osoby ?? {})
+    .map(([osoba, grupy]) => `${osoba}: -${grupy.join("/")}`)
+    .join(", ");
+  console.log(
+    `[ograniczenia] zapisane: ${czyste.grupy.join(", ") || "brak"}` +
+      (odebrane ? ` | odebrane osobom — ${odebrane}` : "")
+  );
   return czyste;
 }
 
@@ -200,19 +240,14 @@ export interface RestrictionVerdict {
   reason?: string;
 }
 
-export function checkRestriction(
+/** Which of `kandydaci` this call touches, by domain, entity domain or pattern. */
+function trafionaGrupa(
   domain: string | undefined,
-  service: string | undefined,
   entityId: string | undefined,
-  speakerRecognised: boolean
-): RestrictionVerdict {
-  if (speakerRecognised) return { allowed: true };
-
-  const ustawienia = wczytajOgraniczenia();
-  const zamkniete = GRUPY_URZADZEN.filter((g) => ustawienia.grupy.includes(g.id));
+  kandydaci: GrupaUrzadzen[]
+): GrupaUrzadzen | undefined {
   const encje = (entityId ?? "").split(",").map((e) => e.trim()).filter(Boolean);
-
-  const trafiona = zamkniete.find((g) => {
+  return kandydaci.find((g) => {
     if (domain && g.domeny.includes(domain.toLowerCase())) return true;
     return encje.some(
       (e) =>
@@ -220,6 +255,56 @@ export function checkRestriction(
         (g.wzory ?? []).some((w) => w.test(e))
     );
   });
+}
+
+export function checkRestriction(
+  domain: string | undefined,
+  service: string | undefined,
+  entityId: string | undefined,
+  speakerRecognised: boolean,
+  /**
+   * Who is asking, when we know. Only consulted for a recognised speaker —
+   * an unrecognised voice is judged by `grupy` alone, whoever it claims to be.
+   */
+  mowca?: string
+): RestrictionVerdict {
+  const ustawienia = wczytajOgraniczenia();
+
+  if (speakerRecognised) {
+    // Being recognised is no longer a master key. It still means "not the
+    // television", which is what `grupy` guards; this second list is about
+    // which household member, and exists so the children can be enrolled —
+    // for their own memory and personality — without that enrolment handing
+    // them the vacuum and the air conditioning.
+    const odebrane = mowca ? (ustawienia.osoby?.[mowca] ?? []) : [];
+    if (odebrane.length === 0) return { allowed: true };
+
+    const zabroniona = trafionaGrupa(
+      domain,
+      entityId,
+      GRUPY_URZADZEN.filter((g) => odebrane.includes(g.id))
+    );
+    if (!zabroniona) return { allowed: true };
+
+    // Bez ulgi „wolno zatrzymywać" — decyzja domu z 08.08: brak uprawnienia do
+    // grupy znaczy brak dotyku w obie strony. Ulga została pomyślana dla
+    // OBCEGO, o którym nie wiemy nic poza tym, że stoi w pokoju; tutaj wiemy
+    // dokładnie, kto pyta, i to jemu ta grupa została odebrana świadomie.
+    return {
+      allowed: false,
+      reason:
+        `Odmowa: „${zabroniona.nazwa}” nie jest dostępna dla tego domownika. ` +
+        "Dotyczy to zarówno włączania, jak i wyłączania; odczyt stanu jest dozwolony. " +
+        "Powiedz to użytkownikowi wprost, nie tłumacz się nierozpoznaniem głosu " +
+        "i nie szukaj innej drogi do tego samego urządzenia.",
+    };
+  }
+
+  const trafiona = trafionaGrupa(
+    domain,
+    entityId,
+    GRUPY_URZADZEN.filter((g) => ustawienia.grupy.includes(g.id))
+  );
 
   if (!trafiona) return { allowed: true };
 

@@ -475,7 +475,13 @@ export async function handleToolCall(
    * `restricted.ts`. Defaults to true so text sessions and older callers,
    * which are already authenticated, are unaffected.
    */
-  speakerRecognised: boolean = true
+  speakerRecognised: boolean = true,
+  /**
+   * Who the recognised speaker is, so `restricted.ts` can apply what this
+   * household member specifically may not touch. Undefined means "we only
+   * know it was somebody known", which keeps the old, group-wide behaviour.
+   */
+  mowca?: string
 ): Promise<unknown> {
   const start = Date.now();
   console.log(`[tool] ${toolName} called with: ${JSON.stringify(input)}`);
@@ -501,11 +507,12 @@ export async function handleToolCall(
           input.domain as string | undefined,
           input.service as string | undefined,
           entityIdFrom(input),
-          speakerRecognised
+          speakerRecognised,
+          mowca
         );
         if (!zakaz.allowed) {
           console.log(
-            `[tool] call_service ODMOWA (nierozpoznany glos): ${input.domain}.${input.service} ${entityIdFrom(input) ?? ""}`
+            `[tool] call_service ODMOWA (${speakerRecognised ? `bez uprawnień: ${mowca ?? "?"}` : "nierozpoznany glos"}): ${input.domain}.${input.service} ${entityIdFrom(input) ?? ""}`
           );
           result = { error: zakaz.reason };
           break;

@@ -271,7 +271,7 @@ export class GeminiChatEngine implements IChatEngine {
       for (const p of functionCalls) {
         const fc = p.functionCall!;
         toolsUsed.push(fc.name);
-        const result = await handleToolCall(this.ha, fc.name, fc.args ?? {}, searchSettings, trustedIdentity);
+        const result = await handleToolCall(this.ha, fc.name, fc.args ?? {}, searchSettings, trustedIdentity, userId);
         responseParts.push({
           functionResponse: {
             name: fc.name,

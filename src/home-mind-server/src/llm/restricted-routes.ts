@@ -19,6 +19,8 @@ import {
 const ZapisSchema = z.object({
   grupy: z.array(z.string()),
   wolnoZatrzymywac: z.boolean().optional().default(true),
+  /** Per person, the groups taken away from them. Absent = nothing taken away. */
+  osoby: z.record(z.string(), z.array(z.string())).optional().default({}),
 });
 
 /** The catalogue plus the current choice, so the panel needs no copy of either. */
@@ -30,8 +32,13 @@ function widok() {
       nazwa: g.nazwa,
       opis: g.opis,
       ograniczona: ustawienia.grupy.includes(g.id),
+      // The panel draws a per-person tick box for every group, not only the
+      // restricted ones: taking the music away from a child is a reasonable
+      // thing to want, and it has nothing to do with what a stranger may do.
+      bezUlgi: !!g.bezUlgi,
     })),
     wolnoZatrzymywac: ustawienia.wolnoZatrzymywac,
+    osoby: ustawienia.osoby,
   };
 }
 

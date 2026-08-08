@@ -112,3 +112,76 @@ describe("urzadzenia tylko dla rozpoznanych domownikow", () => {
       .toContain("Rolety");
   });
 });
+
+describe("uprawnienia per domownik", () => {
+  // Powod istnienia tej osi: dzieci maja byc zarejestrowane (wlasna pamiec,
+  // wlasna osobowosc), a rejestracja nie ma im wrecza odkurzacza i klimy.
+  const zOdebranymi = () =>
+    zapiszOgraniczenia({
+      grupy: ["odkurzacz", "rolety", "klimatyzacja", "zamki"],
+      wolnoZatrzymywac: true,
+      osoby: { wladek: ["odkurzacz", "klimatyzacja"] },
+    });
+
+  it("odbiera odkurzacz i klimatyzacje Wladkowi, choc jest rozpoznany", () => {
+    zOdebranymi();
+    expect(checkRestriction("vacuum", "start", "vacuum.roborock", rozpoznany, "wladek").allowed).toBe(false);
+    expect(checkRestriction("climate", "set_hvac_mode", "climate.580d0d2f9e31", rozpoznany, "wladek").allowed).toBe(false);
+  });
+
+  it("zamyka odebrana grupe w OBIE strony — takze zatrzymanie", () => {
+    // Decyzja domu 08.08: ulga „wolno zatrzymywac" byla pomyslana dla OBCEGO,
+    // o ktorym nie wiemy nic. Tu wiemy, kto pyta, i odebralismy mu ta grupe
+    // swiadomie — mimo `wolnoZatrzymywac: true` w ustawieniach ogolnych.
+    zOdebranymi();
+    expect(checkRestriction("vacuum", "stop", "vacuum.roborock", rozpoznany, "wladek").allowed).toBe(false);
+    expect(checkRestriction("vacuum", "return_to_base", "vacuum.roborock", rozpoznany, "wladek").allowed).toBe(false);
+  });
+
+  it("lapie skrot rutyny Roborocka takze na tej osi", () => {
+    // Ta sama dziura co przy nierozpoznanych: rutyna startuje odkurzacz nie
+    // dotykajac domeny vacuum.
+    zOdebranymi();
+    expect(checkRestriction("button", "press", "button.roborock_kuchnia", rozpoznany, "wladek").allowed).toBe(false);
+  });
+
+  it("zostawia Wladkowi wszystko, czego mu nie odebrano", () => {
+    zOdebranymi();
+    expect(checkRestriction("light", "turn_on", "light.kuchnia", rozpoznany, "wladek").allowed).toBe(true);
+    expect(checkRestriction("cover", "open_cover", "cover.salon", rozpoznany, "wladek").allowed).toBe(true);
+    expect(checkRestriction("media_player", "media_play", "media_player.denon", rozpoznany, "wladek").allowed).toBe(true);
+  });
+
+  it("nie rusza domownikow bez wpisu — rozpoznanie znaczy to, co znaczylo", () => {
+    // Wsteczna zgodnosc jest cala umowa: nikomu nic nie ubylo przy wdrozeniu.
+    zOdebranymi();
+    expect(checkRestriction("vacuum", "start", "vacuum.roborock", rozpoznany, "lech").allowed).toBe(true);
+    expect(checkRestriction("climate", "set_hvac_mode", "climate.580d0d2f9e31", rozpoznany, "zuza").allowed).toBe(true);
+  });
+
+  it("bez podanego mowcy zachowuje sie jak dotad", () => {
+    // Sesje pisane i starsi wolajacy nie przekazuja tozsamosci, a sa juz
+    // uwierzytelnieni — nie wolno ich zablokowac przy okazji.
+    zOdebranymi();
+    expect(checkRestriction("vacuum", "start", "vacuum.roborock", rozpoznany).allowed).toBe(true);
+  });
+
+  it("odmowa NIE tlumaczy sie nierozpoznaniem glosu", () => {
+    // Wladek zostal rozpoznany. Powiedzenie mu „nie poznaje Twojego glosu"
+    // byloby nieprawda i wyslaloby go w powtarzanie polecenia bez konca.
+    zOdebranymi();
+    const w = checkRestriction("vacuum", "start", "vacuum.roborock", rozpoznany, "wladek");
+    expect(w.reason).toContain("Odkurzacz");
+    expect(w.reason).not.toContain("nie rozpoznałem");
+  });
+
+  it("ignoruje wymyslone id grupy w zapisie", () => {
+    zapiszOgraniczenia({
+      grupy: ["odkurzacz"],
+      wolnoZatrzymywac: true,
+      osoby: { wladek: ["odkurzacz", "czajnik-ktorego-nie-ma"] },
+    });
+    expect(checkRestriction("vacuum", "start", "vacuum.roborock", rozpoznany, "wladek").allowed).toBe(false);
+    expect(checkRestriction("light", "turn_on", "light.kuchnia", rozpoznany, "wladek").allowed).toBe(true);
+  });
+});
