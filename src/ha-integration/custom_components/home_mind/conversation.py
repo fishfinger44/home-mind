@@ -99,9 +99,16 @@ CONTINUE_CONVERSATION = True
 
 # Ile obcych tur z rzedu wolno przeczekac, zanim mikrofon sie zamknie.
 #
-# Ignorowanie jest tanie (zero tokenow, zero akcji), wiec limit jest po to, zeby
-# gadajacy telewizor nie trzymal mikrofonu otwartego w nieskonczonosc. Przy
-# oknie VAD 15 s trzy tury to najwyzej ~45 s.
+# Ignorowanie jest tanie po stronie modelu (zero tokenow, zero akcji), ale NIE po
+# stronie ASR: obca tura zostaje najpierw nagrana i przetranskrybowana, dopiero
+# potem tu odrzucona. Limit jest wiec po to, zeby gadajacy telewizor ani nie
+# trzymal mikrofonu otwartego w nieskonczonosc, ani nie przejadal kredytow
+# ElevenLabs. Przy suficie tury 15 s (`__init__.py`: `SUFIT_TURY_S`) trzy tury to
+# najwyzej ~45 s nagrania na sesje.
+#
+# UWAGA: od 08.08 okno nasluchu to nie jest juz jedna liczba — 8 s CISZY konczy
+# ture, a 15 s to bezwzgledny sufit dla dzwieku bez przerw. Ten rachunek opiera
+# sie na suficie, bo tylko on ogranicza ture, w ktorej cos gada non stop.
 #
 # 3, nie 1, bo pod ten sam licznik podpada wlasciciel, ktorego voice-match
 # chybil: weryfikacja jest zawodna przy BARDZO KROTKICH wypowiedziach („tak",
