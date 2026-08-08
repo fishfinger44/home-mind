@@ -353,7 +353,16 @@ class HomeMindConversationAgent(ConversationEntity):
             # Tura wlasciciela zeruje licznik obcych: rozmowa moze trwac
             # dowolnie dlugo, a to, ze przed chwila cos gadalo w tle, przestaje
             # miec znaczenie, skoro znowu slychac tego samego czlowieka.
-            stan = {"wlasciciel": wlasciciel, "obce": 0}
+            # Licznik pytan zwrotnych w rozmowie bez wlasciciela. Zeruje sie za
+            # kazdym razem, gdy asystent NIE odda glosu pytaniem — wiec rosnie
+            # tylko w prawdziwym lancuchu pytanie-odpowiedz, a nie przez sam
+            # uplyw rozmowy.
+            pytania = stan.get("pytania", 0)
+            if wlasciciel is None and self._oddaje_glos(response_text):
+                pytania += 1
+            else:
+                pytania = 0
+            stan = {"wlasciciel": wlasciciel, "obce": 0, "pytania": pytania}
 
             intent_response = intent.IntentResponse(language=user_input.language)
             intent_response.async_set_speech(response_text)
@@ -361,6 +370,14 @@ class HomeMindConversationAgent(ConversationEntity):
             trzymaj = self._trzymaj_mikrofon(
                 response_text, is_voice, wlasciciel
             ) and not self._is_farewell(message)
+
+            if trzymaj and wlasciciel is None and pytania > self.MAX_PYTAN_BEZ_WLASCICIELA:
+                _LOGGER.info(
+                    "Rozmowa bez rozpoznanego mówcy trzymała mikrofon %d pytaniami "
+                    "z rzędu — zamykam nasłuch",
+                    pytania - 1,
+                )
+                trzymaj = False
 
             if trzymaj:
                 self._stan_rozmowy[conversation_id] = stan
@@ -494,6 +511,32 @@ class HomeMindConversationAgent(ConversationEntity):
         tekst = (response or "").strip().lower()
         return any(f in tekst for f in cls.NIEZROZUMIENIE)
 
+    # Ile razy z rzedu wolno przedluzyc nasluch w rozmowie BEZ wlasciciela,
+    # dlatego ze asystent sam zadal pytanie.
+    #
+    # Zagadki (08.08): asystent pyta „co to?", a mikrofon zamyka sie w tej samej
+    # chwili, wiec dziecko odpowiada w prozne powietrze i musi powtarzac slowo
+    # budzace przed kazda odpowiedzia. Gra, ktora ma byc zabawa, staje sie
+    # walka z urzadzeniem. Wladek i Tadek nie maja jeszcze odciskow glosu, wiec
+    # kazda ich tura jest wlasnie taka rozmowa bez wlasciciela.
+    #
+    # Limit, a nie „bez konca", bo to jest ta sama petla, ktora zamykalismy
+    # 07.08: odpowiedz otwiera mikrofon, halas go wypelnia, dostaje odpowiedz.
+    # Drugi hamulec juz stoi i jest wazniejszy — `_przyznaje_niezrozumienie()`
+    # konczy ture natychmiast, a szum produkuje wlasnie niezrozumienie. Zeby
+    # dobic do tego limitu, halas musialby ZA KAZDYM RAZEM byc zrozumialy i za
+    # kazdym razem sprowokowac pytanie zwrotne.
+    #
+    # 10, bo runda zagadek to realnie kilkanascie tur, a licznik zeruje sie przy
+    # kazdej turze, po ktorej asystent NIE pyta — czyli przy zwyklej rozmowie
+    # nigdy nie dochodzi nawet blisko.
+    MAX_PYTAN_BEZ_WLASCICIELA = 10
+
+    @staticmethod
+    def _oddaje_glos(response: str) -> bool:
+        """Czy asystent skonczyl pytaniem, czyli czeka na odpowiedz."""
+        return (response or "").strip().rstrip("”\"')]").endswith("?")
+
     @classmethod
     def _trzymaj_mikrofon(
         cls, response: str, is_voice: bool, wlasciciel: str | None
@@ -514,10 +557,12 @@ class HomeMindConversationAgent(ConversationEntity):
         przychodza od niego, mikrofon zostaje otwarty BEZ ZADNEGO LIMITU, a
         cudze sa odsiewane wczesniej i tu nigdy nie docieraja.
 
-        Rozmowa BEZ wlasciciela to strzal pojedynczy. Polecenie sie wykona (z
-        ograniczeniami po stronie serwera), ale ciagla rozmowa bez tozsamosci to
-        dokladnie ta petla, ktora juz raz zamykalismy: nie ma czego pilnowac,
-        wiec nie ma czym zatrzymac pokoju, ktory gada dalej.
+        Rozmowa BEZ wlasciciela to strzal pojedynczy — Z JEDNYM WYJATKIEM.
+        Ciagla rozmowa bez tozsamosci to dokladnie ta petla, ktora juz raz
+        zamykalismy: nie ma czego pilnowac, wiec nie ma czym zatrzymac pokoju,
+        ktory gada dalej. Ale gdy asystent sam skonczyl PYTANIEM, zamkniecie
+        mikrofonu jest po prostu bledem: zapytal i nie sluchal odpowiedzi.
+        Wtedy trzymamy, licznikowo (`MAX_PYTAN_BEZ_WLASCICIELA`) — patrz zagadki.
         """
         if not (CONTINUE_CONVERSATION and is_voice and response):
             return False
@@ -525,7 +570,7 @@ class HomeMindConversationAgent(ConversationEntity):
         # podstawia mikrofon pod ten sam halas.
         if cls._przyznaje_niezrozumienie(response):
             return False
-        return wlasciciel is not None
+        return wlasciciel is not None or cls._oddaje_glos(response)
 
     def _person_for_voiceprint(self, speaker: str) -> tuple[str, str] | None:
         """Find the household member a voiceprint belongs to.
