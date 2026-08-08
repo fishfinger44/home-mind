@@ -1389,10 +1389,21 @@ media_player:
               duration: 1.0s
 
 external_components:
+  # PRZYPIETE DO COMMITU, nie do galezi (2026-08-08). `ref: respeaker_microphone`
+  # + `refresh: 0s` znaczylo „pobieraj przy KAZDEJ kompilacji z galezi cudzego
+  # forka" — czyli firmware moglo sie zmienic samo, bez zadnej naszej zmiany, i
+  # bez sladu w gicie. Ten SHA to tip tamtej galezi z 2026-07-22, czyli dokladnie
+  # ten kod, na ktorym urzadzenie dzis dziala.
+  #
+  # Dziala, bo ESPHome robi `git fetch --depth=1 origin <ref>` + `reset --hard
+  # FETCH_HEAD` (sprawdzone w zrodle dodatku 2026.7.4), a GitHub pozwala pobrac
+  # konkretny commit. NIE `clone --branch`, ktore z hashem by padlo.
+  #
+  # Aktualizacja i2s_audio jest teraz decyzja: podmienic SHA i skompilowac.
   - source:
       type: git
       url: https://github.com/formatBCE/esphome
-      ref: respeaker_microphone
+      ref: fd9f46bfbb79718d5b0d0ae246339e1fd3ebbeeb
     components:
       - i2s_audio
     refresh: 0s
@@ -1691,21 +1702,48 @@ voice_assistant:
         duration: 0.0s  # The duration of the transition (default is no transition)
   on_listening:
     - lambda: id(voice_assistant_phase) = ${voice_assist_waiting_for_command_phase_id};
-    # Zaczyna sie kolejna tura ciaglej rozmowy — odwolaj zwolnienie beamu, zeby
-    # pin z chwili slowa budzacego przetrwal.
-    - script.stop: zwolnij_beam_po_rozmowie
-    # ...a jesli odliczanie zdazylo dobiec do konca, przypnij z powrotem. Samo
-    # `script.stop` niczego nie przywraca, a POMIAR (07.08) pokazal, ze miedzy
-    # on_end a on_listening mija 4-7 s, wiec 3-sekundowe odliczanie wygrywalo
-    # ZAWSZE: pierwsza tura po slowie budzacym byla przypieta, a cala reszta
-    # rozmowy szla juz mikrofonem dookolnym. Stad wejscia obcych glosow.
+    # Trzymanie beamu przez cala rozmowe jest tu WARUNKOWE i to jest cala roznica
+    # miedzy rozmowa a nagrywaniem probek glosu (2026-08-08).
     #
-    # relock_beam(), nie lock_beam(): lock przypina do azymutu BIEZACEGO, a ten
-    # po odtworzeniu odpowiedzi mogl juz uciec w strone halasu — przyszpililibysmy
-    # mikrofon OD mowiacego. relock tylko wlacza z powrotem stale wiazki na
-    # azymucie ZAPAMIETANYM przy slowie budzacym (unlock_beam() go nie kasuje).
-    # Gdy beam wciaz trzyma, relock jest pusta operacja.
-    - lambda: id(respeaker).relock_beam();
+    # Rozmowa: pin ma przetrwac cala wymiane — tracimy mozliwosc zmiany miejsca,
+    # ale nie wpuszczamy szumu i obcych glosow, i to byla swiadoma cena.
+    #
+    # Rejestracja odcisku: dokladnie odwrotnie. Slowo budzace NIE PADA (satelita
+    # otwiera mikrofon sam przez `start_conversation`), a nagrywanego CELOWO
+    # przesuwamy po pokoju — pin jest wtedy przypiety do kierunku SPRZED sesji i
+    # nagrywa nie tego, kto mowi. POMIAR 08.08: tura bez slowa budzacego dala
+    # `Beam re-locked at the captured wake-word azimuth`, bo relock nie ogladal
+    # sie na ten przelacznik. Panel biometrii (:10303) zdejmuje `beam_lock` na
+    # czas sesji i przywraca go na kazdej drodze wyjscia.
+    #
+    # ⚠️ Warunek MUSI obejmowac takze `script.stop`, nie tylko relock: bez tego
+    # odwolane odliczanie zwalniajace zostawiloby beam przypiety z poprzedniej
+    # rozmowy NA STALE — czyli dokladnie ten stan, ktorego chcemy uniknac.
+    - if:
+        condition:
+          switch.is_on: beam_lock_enabled
+        then:
+          # Zaczyna sie kolejna tura ciaglej rozmowy — odwolaj zwolnienie beamu,
+          # zeby pin z chwili slowa budzacego przetrwal.
+          - script.stop: zwolnij_beam_po_rozmowie
+          # ...a jesli odliczanie zdazylo dobiec do konca, przypnij z powrotem. Samo
+          # `script.stop` niczego nie przywraca, a POMIAR (07.08) pokazal, ze miedzy
+          # on_end a on_listening mija 4-7 s, wiec 3-sekundowe odliczanie wygrywalo
+          # ZAWSZE: pierwsza tura po slowie budzacym byla przypieta, a cala reszta
+          # rozmowy szla juz mikrofonem dookolnym. Stad wejscia obcych glosow.
+          #
+          # relock_beam(), nie lock_beam(): lock przypina do azymutu BIEZACEGO, a ten
+          # po odtworzeniu odpowiedzi mogl juz uciec w strone halasu — przyszpililibysmy
+          # mikrofon OD mowiacego. relock tylko wlacza z powrotem stale wiazki na
+          # azymucie ZAPAMIETANYM przy slowie budzacym (unlock_beam() go nie kasuje).
+          # Gdy beam wciaz trzyma, relock jest pusta operacja.
+          - lambda: id(respeaker).relock_beam();
+        else:
+          # Wylaczony przelacznik znaczy „zwolnij", nie „nie ruszaj". Bez tego
+          # rejestracja zalezalaby od tego, czy 3-sekundowe odliczanie zdazylo
+          # dobiec do konca przed pierwszym zdaniem. Gdy beam nie trzyma,
+          # unlock_beam() jest pusta operacja.
+          - lambda: id(respeaker).unlock_beam();
     - script.execute: control_leds
   on_stt_vad_start:
     - lambda: id(voice_assistant_phase) = ${voice_assist_listening_for_command_phase_id};

@@ -64,3 +64,30 @@ Podgląd tylko z logów urządzenia — sensor kierunku (`led_beam_sensor`) jest
 `internal: true`, więc w HA go nie ma. API satelity (192.168.88.127:6053) jest
 bez szyfrowania, więc wystarczy `aioesphomeapi` i `subscribe_logs`; szukać
 `Beam locked at …`, `Beam re-locked …`, `Beam lock released`.
+
+### Rozmowa trzyma beam, rejestracja odcisku go zwalnia (2026-08-08)
+
+Trzymanie wiązki przez całą rozmowę zostaje — to świadoma cena: tracimy
+możliwość zmiany miejsca w trakcie wymiany, ale nie wpuszczamy szumu i obcych
+głosów. **Nagrywanie próbek głosu jest jedynym przypadkiem, w którym ta cena jest
+czystą stratą** i dlatego `on_listening` jest teraz warunkowe.
+
+Dlaczego rejestracja jest inna: słowo budzące tam **nie pada wcale** (panel
+biometrii prowadzi sesję przez `assist_satellite.start_conversation`, satelita
+sam otwiera mikrofon po każdym zdaniu), a nagrywanego **celowo przesuwamy po
+pokoju**. Wiązka przypina się więc do kierunku sprzed sesji i nagrywa nie tego,
+kto mówi. Zmierzone 08.08: tura bez żadnego słowa budzącego dała w logu
+`Beam re-locked at the captured wake-word azimuth` — `relock_beam()` nie oglądał
+się na przełącznik `beam_lock`.
+
+Rozróżnieniem jest **przełącznik `beam_lock`**, który panel (:10303) zdejmuje na
+czas sesji i przywraca na każdej drodze wyjścia (zakończ / przerwij / dozorca),
+tak samo jak przywraca proxy.
+
+⚠️ Warunek obejmuje **także `script.stop: zwolnij_beam_po_rozmowie`**, nie tylko
+relock. Objęcie samego relocka jest pułapką: odwołane odliczanie zwalniające
+zostawiłoby wiązkę przypiętą z poprzedniej rozmowy **na stałe**, czyli dokładnie
+ten stan, którego rejestracja ma uniknąć. Gałąź `else` woła wprost
+`unlock_beam()` — wyłączony przełącznik znaczy „zwolnij", nie „nie ruszaj", żeby
+nie zależeć od tego, czy 3-sekundowe odliczanie zdążyło dobiec przed pierwszym
+zdaniem.
