@@ -61,7 +61,7 @@ export const EDYTOR_PAMIECI_HTML = `<!doctype html>
 <div id="fakty"></div>
 
 <h2>Odrzucone — nie ma ich w pamięci (<span id="licznik-odrzuconych">0</span>)</h2>
-<p class="sub">Wpisy z filtrów. <strong>Nic z tego nie działa</strong>, dopóki nie przyjmiesz tego świadomie.</p>
+<p class="sub">Tury, których ekstrakcja nie przyjęła. <strong>Procedury domowe wyławiane są z nich automatycznie</strong> — lądują w Regułach, wyłączone. Fakt odzyskasz tylko ręcznie, przyciskiem obok.</p>
 <div id="odrzucone"></div>
 
 <script>

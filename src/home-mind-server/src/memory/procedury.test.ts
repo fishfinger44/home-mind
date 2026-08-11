@@ -49,12 +49,65 @@ describe("rozbior odpowiedzi modelu", () => {
 });
 
 describe("wsad dla modelu", () => {
+  let katalog: string;
+
+  // Wsad czyta obowiazujace reguly, wiec musi je czytac z katalogu tymczasowego,
+  // a nie z /data prawdziwego domu.
+  beforeEach(() => {
+    katalog = mkdtempSync(join(tmpdir(), "wsad-"));
+    process.env.RULES_PATH = join(katalog, "rules.json");
+    resetRulesCache();
+  });
+
+  afterEach(() => {
+    delete process.env.RULES_PATH;
+    resetRulesCache();
+    rmSync(katalog, { recursive: true, force: true });
+  });
+
   it("zawiera wypowiedz, odpowiedz i argumenty wywolan", () => {
     const wsad = zbudujWsad("Zamknij do końca lewą roletę", "Zamknąłem.", ZAMKNIJ);
     expect(wsad).toContain("Zamknij do końca lewą roletę");
     expect(wsad).toContain("Zamknąłem.");
     expect(wsad).toContain("cover.set_cover_position");
     expect(wsad).toContain('"position":0');
+  });
+
+  it("pokazuje modelowi obowiazujace reguly, zeby ich nie powtarzal", () => {
+    // Trzy pierwsze propozycje automatu byly powtorzeniami juz napisanych regul,
+    // bo przebieg ich nie widzial i nie mial jak tego stwierdzic.
+    saveRules([
+      { id: "r04", title: "Muzyka", text: "MUZYKA — wyłącznie przez script.zagraj_muzyke. " + "x".repeat(400), enabled: true, protected: false, suggested: false },
+      { id: "rX", title: "Wyłączona", text: "Tej nie ma w promptcie.", enabled: false, protected: false, suggested: false },
+    ]);
+
+    const wsad = zbudujWsad("Zagraj muzykę", "Gra.", ZAMKNIJ);
+
+    expect(wsad).toContain("[Muzyka]");
+    expect(wsad).toContain("script.zagraj_muzyke");
+    // Wyłączona regula nie obowiazuje, wiec nie ma powodu jej pokazywac.
+    expect(wsad).not.toContain("Tej nie ma w promptcie");
+  });
+
+  it("pokazuje regule W CALOSCI, takze to co stoi daleko w tresci", () => {
+    // Regresja z zywego przebiegu: przycinanie do 140 znakow ukrylo fragment
+    // „zamknij = 0" stojacy na 356. znaku r03, wiec automat zaproponowal go
+    // ponownie jako nowa regule.
+    const dlugaRegula =
+      "WARTOŚĆ, NIE STAN. " + "wypełniacz ".repeat(30) + "Rolety: „zamknij” = pozycja 0.";
+    saveRules([
+      { id: "r03", title: "Wartość, nie stan", text: dlugaRegula, enabled: true, protected: false, suggested: false },
+    ]);
+
+    const wsad = zbudujWsad("Zamknij do końca roletę", "Zamknąłem.", ZAMKNIJ);
+
+    expect(dlugaRegula.indexOf("zamknij")).toBeGreaterThan(300);
+    expect(wsad).toContain("„zamknij” = pozycja 0.");
+  });
+
+  it("radzi sobie, gdy nie ma jeszcze zadnej reguly", () => {
+    saveRules([]);
+    expect(zbudujWsad("x", "y", ZAMKNIJ)).toContain("(brak reguł)");
   });
 
   it("przycina wielkie argumenty — to ma byc tani przebieg", () => {

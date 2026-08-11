@@ -20,7 +20,7 @@
  */
 
 import type { IFactExtractor, UzyteNarzedzie } from "../llm/interface.js";
-import { suggestRule } from "../rules/store.js";
+import { loadRules, suggestRule } from "../rules/store.js";
 
 /**
  * Narzędzia, które coś ZMIENIAJĄ.
@@ -44,6 +44,38 @@ const BRAK = "BRAK";
  */
 const LIMIT_ZNAKOW_ARGUMENTOW = 400;
 
+/**
+ * Sufit na CAŁY blok reguł, nie na pojedynczą regułę.
+ *
+ * Pierwsza wersja przycinała każdą regułę do 140 znaków, żeby przebieg został
+ * tani — i przez to nie zadziałała. Zmierzone na żywo: automat zaproponował
+ * „position: 0 dla «zamknij do końca»", choć r03 mówi to wprost — ale słowo
+ * „zamknij" stoi w niej na **356. znaku**, czyli daleko za obcięciem. Model
+ * dostał sam nagłówek („WARTOŚĆ, NIE STAN. Home Assistant raportuje…") i nie
+ * miał jak stwierdzić, że temat jest pokryty.
+ *
+ * Więc reguły idą w całości. To około 1200 tokenów doklejonych do
+ * 350-tokenowego przebiegu, ale przebieg odpala się tylko na turach zmieniających
+ * stan (kilkanaście dziennie), a jego jedynym zadaniem jest ODRZUCIĆ to, co już
+ * jest napisane. Oszczędzanie akurat na materiale do tej decyzji jest
+ * oszczędzaniem na jedynej rzeczy, którą ten przebieg robi.
+ */
+const LIMIT_BLOKU_REGUL = 6000;
+
+/** Włączone reguły w całości — po to, żeby model nie proponował ich na nowo. */
+function istniejaceReguly(): string {
+  const linie = loadRules()
+    .filter((r) => r.enabled && r.text.trim())
+    .map((r) => `- [${r.title}] ${r.text.trim().replace(/\s+/g, " ")}`);
+
+  if (linie.length === 0) return "(brak reguł)";
+
+  const blok = linie.join("\n");
+  return blok.length > LIMIT_BLOKU_REGUL
+    ? blok.slice(0, LIMIT_BLOKU_REGUL) + "\n…(dalsze reguły pominięte)"
+    : blok;
+}
+
 const PROMPT = `Jesteś obserwatorem asystenta domowego. Dostajesz JEDNĄ turę: co powiedział domownik,
 co asystent odpowiedział i jakie usługi naprawdę wywołał (z argumentami).
 
@@ -60,6 +92,14 @@ To NIE jest procedura — odpowiedz wtedy ${BRAK}:
 - jednorazowa wartość, którą domownik podał wprost ("ustaw na 40%")
 - cokolwiek o stanie urządzenia teraz
 - upodobanie domownika (to jest fakt, nie procedura)
+- 🔁 TEMAT JUŻ POKRYTY przez którąś z reguł poniżej. Nie liczy się, czy powiedziałbyś
+  to lepiej albo krócej — jeśli reguła już o tym mówi, odpowiedz ${BRAK}.
+
+Nie wymyślaj encji ani usług. Wolno ci wymienić WYŁĄCZNIE takie, które widnieją
+w wywołaniach z tej tury. Jeśli reguła wymagałaby innej, odpowiedz ${BRAK}.
+
+Uogólniaj ostrożnie: jedna tura to jeden przypadek. Nie pisz reguły "zawsze rób X",
+jeśli z tej jednej tury nie wynika, że X jest właściwe także w pozostałych.
 
 Jeśli masz wątpliwość, odpowiedz ${BRAK}. Fałszywa reguła kosztuje więcej niż przeoczona.
 
@@ -82,6 +122,9 @@ export function zbudujWsad(
     .join("\n");
 
   return `${PROMPT}
+
+REGUŁY, KTÓRE JUŻ OBOWIĄZUJĄ (nie proponuj niczego, co już tu jest):
+${istniejaceReguly()}
 
 Domownik: ${userMessage}
 Asystent: ${assistantResponse || "(bez odpowiedzi)"}
