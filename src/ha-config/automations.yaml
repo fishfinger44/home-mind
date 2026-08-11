@@ -1,0 +1,1035 @@
+- id: '1776277919553'
+  alias: Govee - Główny Przełącznik Max
+  description: Włącza na 100% jeśli zgaszone, gasi jeśli zapalone - niezależnie od
+    Siri
+  triggers:
+  - trigger: state
+    entity_id: input_boolean.govee_max_warm_trigger
+    to: 'on'
+  actions:
+  - if:
+    - condition: state
+      entity_id: light.h60c1
+      state: 'off'
+    then:
+    - action: light.turn_on
+      target:
+        entity_id:
+        - light.h60c1
+        - light.h60c1_2
+      data:
+        brightness_pct: 100
+        color_temp_kelvin: 2700
+    else:
+    - action: light.turn_off
+      target:
+        entity_id:
+        - light.h60c1
+        - light.h60c1_2
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.govee_max_warm_trigger
+  mode: restart
+- id: '1776288696342'
+  alias: Govee - Sciemnij o 20
+  triggers:
+  - trigger: state
+    entity_id: input_boolean.govee_ciemniej
+    to: 'on'
+  actions:
+  - action: light.turn_on
+    target:
+      entity_id:
+      - light.h60c1
+      - light.h60c1_2
+    data:
+      brightness_pct: '{% set current = state_attr(''light.h60c1'', ''brightness'')
+        | int(0) / 2.55 %} {{ [current - 20, 10] | max | int }}
+
+        '
+      color_temp_kelvin: 2700
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.govee_ciemniej
+  mode: restart
+- id: '1776288820265'
+  alias: Govee - Jasniej o 20
+  triggers:
+  - trigger: state
+    entity_id: input_boolean.govee_jasniej
+    to: 'on'
+  actions:
+  - action: light.turn_on
+    target:
+      entity_id:
+      - light.h60c1
+      - light.h60c1_2
+    data:
+      brightness_pct: '{% set current = state_attr(''light.h60c1'', ''brightness'')
+        | int(0) / 2.55 %} {{ [current + 20, 100] | min | int }}
+
+        '
+      color_temp_kelvin: 2700
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.govee_jasniej
+  mode: restart
+- id: '1776290136990'
+  alias: Govee - Ustaw 10 procent
+  triggers:
+  - trigger: state
+    entity_id: input_boolean.govee_10_procent
+    to: 'on'
+  actions:
+  - action: light.turn_on
+    target:
+      entity_id:
+      - light.h60c1
+      - light.h60c1_2
+    data:
+      brightness_pct: 10
+      color_temp_kelvin: 2700
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.govee_10_procent
+  mode: single
+- id: '1776290169616'
+  alias: Govee - Ustaw 50 procent
+  triggers:
+  - trigger: state
+    entity_id: input_boolean.govee_50_procent
+    to: 'on'
+  actions:
+  - action: light.turn_on
+    target:
+      entity_id:
+      - light.h60c1
+      - light.h60c1_2
+    data:
+      brightness_pct: 50
+      color_temp_kelvin: 2700
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.govee_50_procent
+  mode: single
+- id: '1776357904124'
+  alias: 'Lustro: Inteligentne oszczędzanie (Dzień/Noc) - FINAL v2'
+  description: Dzień -> 90%/OFF, Noc -> 90%/20%, gaszenie o wschodzie, obsługa ręcznego
+    zapalenia
+  triggers:
+  - trigger: state
+    entity_id: binary_sensor.myggspray_wrlss_mtn_sensor_zajetosc
+    to: 'on'
+    id: ruch_wykryty
+  - trigger: state
+    entity_id: binary_sensor.myggspray_wrlss_mtn_sensor_zajetosc
+    to: 'off'
+    for:
+      seconds: 120
+    id: brak_ruchu
+  - trigger: state
+    entity_id: light.ikea_of_sweden_silverglans_ip44_led_driver
+    to: 'on'
+    for:
+      minutes: 5
+    id: brak_ruchu
+  - trigger: sun
+    event: sunrise
+    id: wschod
+  actions:
+  - choose:
+    - conditions:
+      - condition: trigger
+        id: ruch_wykryty
+      sequence:
+      - action: light.turn_on
+        target:
+          entity_id: light.ikea_of_sweden_silverglans_ip44_led_driver
+        data:
+          brightness_pct: 90
+          transition: 2
+    - conditions:
+      - condition: trigger
+        id: brak_ruchu
+      - condition: state
+        entity_id: binary_sensor.myggspray_wrlss_mtn_sensor_zajetosc
+        state: 'off'
+      sequence:
+      - choose:
+        - conditions:
+          - condition: state
+            entity_id: sun.sun
+            state: below_horizon
+          sequence:
+          - action: light.turn_on
+            target:
+              entity_id: light.ikea_of_sweden_silverglans_ip44_led_driver
+            data:
+              brightness_pct: 20
+              transition: 5
+        default:
+        - action: light.turn_off
+          target:
+            entity_id: light.ikea_of_sweden_silverglans_ip44_led_driver
+    - conditions:
+      - condition: trigger
+        id: wschod
+      - condition: state
+        entity_id: binary_sensor.myggspray_wrlss_mtn_sensor_zajetosc
+        state: 'off'
+      sequence:
+      - action: light.turn_off
+        target:
+          entity_id: light.ikea_of_sweden_silverglans_ip44_led_driver
+        data:
+          transition: 10
+  mode: restart
+- id: '1776610114205'
+  alias: Przełącznik KOŁYSKOWY - Govee Jasność
+  description: Obsługa fizycznego przełącznika bistabilnego z inteligentną jasnością
+  triggers:
+  - trigger: state
+    entity_id: switch.wifi_smart_switch
+    from: 'off'
+    to: 'on'
+  - trigger: state
+    entity_id: switch.wifi_smart_switch
+    from: 'on'
+    to: 'off'
+  actions:
+  - if:
+    - condition: state
+      entity_id: light.h60c1
+      state: 'on'
+    then:
+    - action: light.turn_off
+      target:
+        entity_id:
+        - light.h60c1
+        - light.h60c1_2
+    else:
+    - choose:
+      - conditions:
+        - condition: or
+          conditions:
+          - condition: time
+            after: '23:00:00'
+          - condition: sun
+            before: sunrise
+        sequence:
+        - action: light.turn_on
+          data:
+            brightness_pct: 10
+          target:
+            entity_id:
+            - light.h60c1
+            - light.h60c1_2
+      - conditions:
+        - condition: sun
+          after: sunrise
+        sequence:
+        - action: light.turn_on
+          data:
+            brightness_pct: 100
+          target:
+            entity_id:
+            - light.h60c1
+            - light.h60c1_2
+      default:
+      - action: light.turn_on
+        data:
+          brightness_pct: 100
+        target:
+          entity_id:
+          - light.h60c1
+          - light.h60c1_2
+  mode: restart
+- id: '1776624883699'
+  alias: 'Łazienka: Sterowanie Lustrem (Rodret + Stan)'
+  description: Obsługa pilota RODRET z wymuszeniem aktualizacji stanu w HA
+  triggers:
+  - domain: zha
+    device_id: ef980776e694fadbbac9b74b3dcb96c2
+    type: remote_button_short_press
+    subtype: turn_on
+    id: wlacz
+    trigger: device
+  - domain: zha
+    device_id: ef980776e694fadbbac9b74b3dcb96c2
+    type: remote_button_short_press
+    subtype: turn_off
+    id: wylacz
+    trigger: device
+  actions:
+  - choose:
+    - conditions:
+      - condition: trigger
+        id: wlacz
+      sequence:
+      - action: light.turn_on
+        target:
+          entity_id: light.ikea_of_sweden_silverglans_ip44_led_driver
+    - conditions:
+      - condition: trigger
+        id: wylacz
+      sequence:
+      - action: light.turn_off
+        target:
+          entity_id: light.ikea_of_sweden_silverglans_ip44_led_driver
+  mode: restart
+- id: '1783250593306'
+  alias: Govee - gaś po powrocie zasilania
+  description: Restart HA = był zanik prądu -> zgaś lampy gdy wstaną
+  triggers:
+  - trigger: homeassistant
+    event: start
+  actions:
+  - wait_for_trigger:
+    - trigger: state
+      entity_id: light.h60c1
+      from: unavailable
+    timeout:
+      minutes: 5
+  - delay:
+      seconds: 5
+  - action: light.turn_off
+    target:
+      entity_id:
+      - light.h60c1
+      - light.h60c1_2
+  mode: single
+- id: '1784230097353'
+  alias: 'Kino: Włącz projektor z Apple TV'
+  description: Błyskawicznie odpala kino, reagując na natychmiastowy skok stanu odtwarzacza
+    przy wybudzeniu pilotem.
+  triggers:
+  - entity_id: media_player.pokoj_dzienny
+    from: 'off'
+    trigger: state
+  - entity_id: media_player.pokoj_dzienny
+    from: standby
+    trigger: state
+  - trigger: state
+    entity_id:
+    - remote.pokoj_dzienny
+    to:
+    - 'on'
+  - trigger: media_player.turned_on
+    target:
+      entity_id: media_player.pokoj_dzienny
+    options:
+      behavior: each
+      for: 00:00:00
+  conditions: []
+  actions:
+  - action: media_player.turn_on
+    target:
+      entity_id: media_player.denon_2
+    data: {}
+    enabled: false
+  - delay: 00:00:02
+    enabled: false
+  - if:
+    - condition: state
+      entity_id: switch.sonoff_projektor
+      state: 'off'
+    then:
+    - action: switch.turn_on
+      target:
+        entity_id: switch.sonoff_projektor
+    - delay:
+        hours: 0
+        minutes: 0
+        seconds: 0
+        milliseconds: 50
+      enabled: true
+    else:
+    - condition: numeric_state
+      entity_id: sensor.sonoff_projektor_moc
+      below: 30
+    - target:
+        entity_id: remote.remote_ir
+      data:
+        device: viewsonic_x1
+        command: power
+      action: remote.send_command
+    - delay: 00:00:02
+    - repeat:
+        count: 2
+        sequence:
+        - condition: numeric_state
+          entity_id: sensor.sonoff_projektor_moc
+          below: 30
+        - target:
+            entity_id: remote.remote_ir
+          data:
+            device: viewsonic_x1
+            command: power
+          action: remote.send_command
+        - delay: 00:00:03
+    - action: media_player.select_source
+      target:
+        entity_id: media_player.denon_2
+      data:
+        source: Media Player
+  mode: single
+- id: '1784230213015'
+  alias: 'Kino: Wyłącz projektor z Apple TV'
+  description: Bezpiecznie wyłącza projektor przy uśpieniu Apple TV LUB przyciskiem
+    zasilania z pilota,  ignorując błędy sieciowe integracji.
+  triggers:
+  - entity_id:
+    - media_player.pokoj_dzienny
+    to:
+    - 'off'
+    trigger: state
+    enabled: true
+  - entity_id:
+    - remote.pokoj_dzienny
+    to:
+    - 'off'
+    trigger: state
+  - trigger: media_player.turned_off
+    target:
+      entity_id: media_player.pokoj_dzienny
+    options:
+      behavior: each
+      for: 00:00:00
+  conditions:
+  - condition: state
+    entity_id: input_boolean.ha_zamykanie
+    state: 'off'
+  - condition: numeric_state
+    entity_id: sensor.sonoff_projektor_moc
+    above: 50
+  - condition: template
+    value_template: '{{ trigger.from_state is not none and trigger.from_state.state
+      not in [''unknown'', ''unavailable'', ''none''] and (now() - trigger.from_state.last_changed).total_seconds()
+      > 120 }}'
+  actions:
+  - delay:
+      hours: 0
+      minutes: 0
+      seconds: 2
+      milliseconds: 0
+  - repeat:
+      count: 1
+      sequence:
+      - condition: state
+        entity_id: remote.pokoj_dzienny
+        state: 'off'
+        enabled: false
+      - condition: numeric_state
+        entity_id: sensor.sonoff_projektor_moc
+        above: 50
+      - delay:
+          hours: 0
+          minutes: 0
+          seconds: 5
+          milliseconds: 0
+      - action: script.projektor_on_duplikuj
+        metadata: {}
+        data: {}
+  - if:
+    - condition: numeric_state
+      entity_id: sensor.sonoff_projektor_moc
+      above: 50
+    then:
+    - action: switch.turn_off
+      target:
+        entity_id: switch.sonoff_projektor
+    enabled: false
+  mode: single
+- id: '1784448976219'
+  alias: Projektor OFF
+  description: IR power to TOGGLE, wiec bez warunku na moc wywolanie przy zgaszonym
+    projektorze WLACZYLOBY go. Warunek jest krokiem akcji, bo switch.projektor wola
+    te automatyzacje ze skip_condition=true (sekcja conditions bylaby pominieta).
+  triggers: []
+  conditions: []
+  actions:
+  - alias: Tylko gdy projektor faktycznie swieci
+    condition: numeric_state
+    entity_id: sensor.sonoff_projektor_moc
+    above: 50
+  - target:
+      entity_id: remote.remote_ir
+    data:
+      device: viewsonic_x1
+      command: power
+      num_repeats: 2
+      delay_secs: 2
+      hold_secs: 1
+    action: remote.send_command
+- id: '1784449239148'
+  alias: Projektor ON
+  description: IR power to TOGGLE, wiec bez warunku na moc wywolanie przy swiecacym
+    projektorze ZGASILOBY go. Warunek jest krokiem akcji, bo switch.projektor wola
+    te automatyzacje ze skip_condition=true (sekcja conditions bylaby pominieta).
+  triggers: []
+  conditions: []
+  actions:
+  - alias: Tylko gdy projektor jest zgaszony
+    condition: numeric_state
+    entity_id: sensor.sonoff_projektor_moc
+    below: 30
+  - delay:
+      hours: 0
+      minutes: 0
+      seconds: 1
+      milliseconds: 0
+  - target:
+      entity_id: remote.remote_ir
+    data:
+      device: viewsonic_x1
+      command: power
+    action: remote.send_command
+  mode: single
+- id: '1784631360431'
+  alias: 'Denon: Przełączanie źródeł z pomocnika'
+  description: Przełącza fizyczne wejście HDMI w Denonie po zmianie pomocnika
+  triggers:
+  - entity_id: input_select.source_amplituner
+    trigger: state
+  conditions: []
+  actions:
+  - action: media_player.select_source
+    target:
+      entity_id: media_player.denon_2
+    data:
+      source: '{{ trigger.to_state.state }}'
+  mode: single
+- id: '1785567000001'
+  alias: 'Denon: Wejście Media Player gdy Apple TV aktywne'
+  description: Gdy użytkownik cokolwiek robi na Apple TV (wybudzenie, menu, play/pause,
+    zmiana aplikacji), amplituner przełącza się na wejście HDMI z Apple TV — BEZWARUNKOWO,
+    także gdy na innym źródle (NET/HEOS/Music Assistant) coś leci; decyzja usera 2026-07-30.
+    Pojedynczych przycisków pilota wykryć nie można (integracja apple_tv nie emituje
+    żadnych eventów), więc reagujemy na zmiany stanu/atrybutów media_playera — sama
+    nawigacja w menu bez zmiany stanu nie odpali (do tego trzeba CEC).
+  triggers:
+  - entity_id: media_player.pokoj_dzienny
+    trigger: state
+  conditions:
+  - condition: template
+    alias: Nie zaraz po restarcie HA (RestoreState zeruje last_changed)
+    value_template: '{{ trigger.from_state is not none and trigger.from_state.state
+      not in [''unknown'', ''unavailable'', ''none''] and (now() - trigger.from_state.last_changed).total_seconds()
+      > 120 }}'
+  - condition: state
+    alias: Apple TV używane (idle = menu, nie tylko odtwarzanie)
+    entity_id: media_player.pokoj_dzienny
+    state:
+    - playing
+    - paused
+    - idle
+  - condition: template
+    alias: Amplituner jest włączony
+    value_template: '{{ states(''media_player.denon_2'') not in [''off'', ''unavailable'',
+      ''unknown''] }}'
+  - condition: template
+    alias: Amplituner nie jest już na właściwym wejściu
+    value_template: '{{ state_attr(''media_player.denon_2'', ''source'') != ''Media
+      Player'' }}'
+  actions:
+  - action: media_player.select_source
+    target:
+      entity_id: media_player.denon_2
+    data:
+      source: Media Player
+  - alias: Sync pomocnika w UI
+    action: input_select.select_option
+    target:
+      entity_id: input_select.source_amplituner
+    data:
+      option: Media Player
+  mode: single
+  max_exceeded: silent
+- id: '1785603000001'
+  alias: 'System: flaga zamykania HA'
+  description: Zapala flage na starcie zamykania core. Encje gasna przy restarcie
+    HA, a automaty (np. gaszenie projektora) nie moga tego brac za realne wylaczenie.
+  triggers:
+  - trigger: homeassistant
+    event: shutdown
+  conditions: []
+  actions:
+  - action: input_boolean.turn_on
+    target:
+      entity_id: input_boolean.ha_zamykanie
+  mode: single
+- id: '1785606000001'
+  alias: 'Kino: Pilnuj wejscia Apple TV po zapaleniu projektora'
+  description: Po zapaleniu projektora amplituner sam przeskakuje na Blu-ray (Kodi)
+    - to nie pochodzi z HA, tylko z auto-wyboru wejscia/CEC. Wracamy na Media Player
+    (Apple TV), ale TYLKO gdy Apple TV faktycznie gra, a Kodi nie.
+  triggers:
+  - trigger: numeric_state
+    entity_id: sensor.sonoff_projektor_moc
+    above: 50
+    for:
+      hours: 0
+      minutes: 0
+      seconds: 45
+  conditions:
+  - condition: state
+    entity_id: input_boolean.ha_zamykanie
+    state: 'off'
+  - condition: state
+    entity_id: media_player.pokoj_dzienny
+    state:
+    - playing
+    - paused
+  - condition: not
+    conditions:
+    - condition: state
+      entity_id: media_player.mediaserwer
+      state: playing
+  - condition: not
+    conditions:
+    - condition: state
+      entity_id: media_player.denon_2
+      attribute: source
+      state: Media Player
+  actions:
+  - action: media_player.select_source
+    target:
+      entity_id: media_player.denon_2
+    data:
+      source: Media Player
+  mode: single
+- id: '1785936600001'
+  alias: Satelita XVF3800 - odpowiedz na glosniku Google
+  description: Przekierowuje odpowiedz TTS z satelity reSpeaker na glosnik Google Cast
+  triggers:
+  - trigger: event
+    event_type: esphome.tts_uri
+  conditions:
+  - condition: template
+    value_template: >-
+      {{ states('input_text.satelita_google_glosnosc') in
+         ['', 'unknown', 'unavailable'] }}
+    alias: Glosnik Google nie jest zajety wlasna muzyka
+  actions:
+  - action: media_player.play_media
+    target:
+      entity_id: media_player.google_asystent
+    data:
+      media_content_id: '{{ trigger.event.data.uri }}'
+      media_content_type: music
+  mode: queued
+  max: 5
+- id: '1785936600002'
+  alias: Satelita XVF3800 - kontynuacja rozmowy bez wake worda
+  description: Po zakonczeniu odpowiedzi na glosniku Google otwiera nasluch, zeby nie
+    trzeba bylo powtarzac Okay Nabu
+  triggers:
+  - trigger: state
+    entity_id: media_player.google_asystent
+    from: playing
+    to: idle
+  conditions:
+  - condition: template
+    value_template: '{{ (now().timestamp() - (state_attr(''automation.satelita_xvf3800_odpowiedz_na_glosniku_google'',
+      ''last_triggered'') | as_timestamp(0))) < 60 }}'
+  - condition: state
+    entity_id: switch.respeaker_xvf3800_assistant_microphone_mute
+    state: 'off'
+  actions:
+  - delay:
+      milliseconds: 300
+  - action: esphome.respeaker_xvf3800_assistant_start_va
+    data: {}
+  mode: single
+- id: '1785936600010'
+  alias: Satelita XVF3800 - pauza na czas komendy
+  description: >-
+    Po wybudzeniu satelity ucisza to, co gra. Nic nie jest pauzowane poza
+    muzyką Music Assistant na głośniku Google — reszta tylko cichnie.
+    Denon i Apple TV to JEDNA gałka: Apple TV gra przez wzmacniacz, więc
+    ścisza się sam wzmacniacz. Pauza kłóciła się z prośbą o włączenie muzyki
+    (zatrzymanie i start biły się o ten sam odtwarzacz); głośność nie zmienia
+    stanu odtwarzacza, więc ten konflikt znika. Głośnik Google z tego samego
+    powodu co zawsze: jego sesji Cast nie kontrolujemy.
+  triggers:
+  - trigger: state
+    entity_id: assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego
+    to: listening
+  conditions:
+  - condition: template
+    value_template: >-
+      {{ ['media_player.denon_avr_x2400h', 'media_player.denon',
+          'media_player.google_asystent_2', 'media_player.pokoj_dzienny',
+          'media_player.google_asystent']
+         | select('is_state', 'playing') | list | count > 0 }}
+    alias: Cokolwiek gra
+  actions:
+  - variables:
+      # Zostaje tu tylko muzyka Music Assistant na glosniku Google. Denon
+      # i Apple TV wyszly do przyciszania nizej.
+      do_pauzy: >-
+        {{ ['media_player.google_asystent_2']
+           | select('is_state', 'playing') | list }}
+      google_gra: "{{ is_state('media_player.google_asystent', 'playing') }}"
+      # Wszystko, co slychac z tej strony pokoju, idzie przez wzmacniacz:
+      # muzyka z Music Assistant, radio z HEOS i dzwiek z Apple TV po HDMI.
+      # Dlatego jedna galka — media_player.denon_2 (integracja denonavr) —
+      # a nie glosnosc kazdego zrodla z osobna. Glosnosc Apple TV przez pyatv
+      # nie ruszalaby wzmacniacza, wiec nie ma po co jej dotykac.
+      avr_zrodla: >-
+        {{ ['media_player.denon_avr_x2400h', 'media_player.denon',
+            'media_player.pokoj_dzienny', 'media_player.denon_2'] }}
+      avr_gra: >-
+        {{ states('media_player.denon_2') not in ['off', 'unavailable', 'unknown']
+           and state_attr('media_player.denon_2', 'volume_level') is not none
+           and (avr_zrodla | select('is_state', 'playing') | list | count > 0) }}
+      # Para "pierwotna|przyciszona" policzona RAZ, tutaj. Wczesniej pomocnik byl
+      # zapisywany, a nastepny krok odczytywal go z powrotem — niepotrzebny wyscig
+      # o to, czy stan zdazyl sie odswiezyc, przy wartosci, ktora i tak znamy.
+      # Gdy pomocnik juz cos trzyma (drugie wybudzenie na przyciszonym
+      # wzmacniaczu), zostaje stara para — inaczej polowa utrwalilaby sie jako
+      # nowa "pierwotna" i kazda komenda sciszalaby dom o kolejna polowe.
+      avr_zapis: >-
+        {% set zapisana = states('input_text.satelita_denon_glosnosc') %}
+        {%- if zapisana not in ['', 'unknown', 'unavailable'] -%}
+        {{ zapisana }}
+        {%- else -%}
+        {%- set teraz = state_attr('media_player.denon_2', 'volume_level') | float(0) -%}
+        {{ teraz | round(3) }}|{{ (teraz * 0.5) | round(3) }}
+        {%- endif -%}
+      avr_docelowa: "{{ avr_zapis.split('|')[1] | float(0) }}"
+  # Remember exactly what was paused, so nothing the user paused earlier gets
+  # resumed by accident.
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.satelita_pauza_lista
+    data:
+      value: "{{ do_pauzy | join(',') }}"
+  - if:
+    - condition: template
+      value_template: "{{ do_pauzy | count > 0 }}"
+    then:
+    - action: media_player.media_pause
+      target:
+        entity_id: "{{ do_pauzy }}"
+      continue_on_error: true
+  # Wzmacniacz: przyciszenie do polowy, nigdy pauza.
+  - if:
+    - condition: template
+      value_template: "{{ avr_gra }}"
+    then:
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.satelita_denon_glosnosc
+      data:
+        # Para "pierwotna|przyciszona", nie sama pierwotna: przywracanie musi
+        # umiec rozpoznac, ze ktos ruszyl glosnoscia w trakcie okna, a to widac
+        # tylko po porownaniu z wartoscia, ktora sami ustawilismy.
+        value: "{{ avr_zapis }}"
+    - action: media_player.volume_set
+      target:
+        entity_id: media_player.denon_2
+      data:
+        # Polowa poprzedniej glosnosci — decyzja Lecha 11.08. Nie zero jak przy
+        # glosniku Google: tam mikrofon satelity stoi tuz obok. Jesli komendy
+        # zaczna sie przekrecac przy glosnej muzyce, to jest pierwszy podejrzany.
+        volume_level: "{{ avr_docelowa }}"
+      continue_on_error: true
+  # Google speaker: duck instead of pausing, and remember the level to restore.
+  # Its own volume is not managed by Music Assistant here, so the ducked value
+  # is not overwritten on track change.
+  - if:
+    - condition: template
+      value_template: "{{ google_gra }}"
+    then:
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.satelita_google_glosnosc
+      data:
+        # Zapisz TYLKO gdy jeszcze nic nie zapisano. Drugie wybudzenie na juz
+        # przyciszonym glosniku nadpisywalo oryginal wartoscia przyciszona i
+        # przywracanie oddawalo 0.05 zamiast 0.25.
+        value: >-
+          {% set zapisana = states('input_text.satelita_google_glosnosc') %}
+          {% if zapisana not in ['', 'unknown', 'unavailable'] %}{{ zapisana }}
+          {% else %}{{ state_attr('media_player.google_asystent', 'volume_level')
+             | float(0.4) | round(3) }}{% endif %}
+    - action: media_player.volume_set
+      target:
+        entity_id: media_player.google_asystent
+      data:
+        # Zero, nie 20%: mikrofon satelity stoi tuz obok tego glosnika, wiec
+        # nawet cichy podklad ladowal w nagraniu komendy. Glosnosc 0 to NIE
+        # pauza — sesja Cast leci dalej nietknieta, wiec powod, dla ktorego
+        # tego glosnika nie pauzujemy, pozostaje spelniony. Oryginalny poziom
+        # jest zapamietany wyzej i wraca przy wznawianiu.
+        volume_level: 0
+      continue_on_error: true
+  mode: single
+
+- id: '1785936600012'
+  alias: Satelita XVF3800 - nie wznawiaj gdy komenda kazała wyłączyć
+  description: >-
+    Gdy komendą było zatrzymanie muzyki, kasuje listę do wznowienia. Bez tego
+    prośba "wyłącz muzykę" kończyła się jej ponownym włączeniem.
+  triggers:
+  - trigger: event
+    event_type: esphome.stt_text
+  conditions:
+  - condition: template
+    value_template: >-
+      {% set t = (trigger.event.data.text | default('')) | lower %}
+      {% set stop = ['wyłącz', 'wylacz', 'zatrzymaj', 'stop', 'przestań',
+                     'przestan', 'wystarczy', 'zgaś', 'zgas', 'ucisz',
+                     'cisza', 'zamilcz'] %}
+      {% set media = ['muzyk', 'utwór', 'utwor', 'piosenk', 'grani', 'graj',
+                      'odtwarza', 'radio', 'album', 'playlist', 'film',
+                      'seans', 'apple tv', 'głośnik', 'glosnik', 'denon'] %}
+      {{ (stop | select('in', t) | list | count > 0)
+         and (media | select('in', t) | list | count > 0) }}
+    alias: Komenda o zatrzymaniu czegoś, co gra
+  actions:
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.satelita_pauza_lista
+    data:
+      value: ''
+  mode: single
+
+- id: '1785936600011'
+  alias: Satelita XVF3800 - wznów odtwarzanie po odpowiedzi
+  description: >-
+    Wznawia to, co zostało zapauzowane, i przywraca głośność głośnika Google —
+    dopiero gdy HAL skończy mówić.
+  triggers:
+  - trigger: state
+    entity_id: assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego
+    to: idle
+    # Ciagla rozmowa przechodzi responding -> idle -> listening, a w tym
+    # idle siedzi 66-85 ms (zmierzone). Bez tego progu wznawianie odpalalo
+    # sie w kazdej przerwie miedzyturowej, nie na koncu rozmowy.
+    for:
+      seconds: 1
+  conditions:
+  - condition: or
+    conditions:
+    - condition: template
+      value_template: >-
+        {{ states('input_text.satelita_pauza_lista') not in
+           ['', 'unknown', 'unavailable'] }}
+    - condition: template
+      value_template: >-
+        {{ states('input_text.satelita_google_glosnosc') not in
+           ['', 'unknown', 'unavailable'] }}
+    - condition: template
+      value_template: >-
+        {{ states('input_text.satelita_denon_glosnosc') not in
+           ['', 'unknown', 'unavailable'] }}
+    alias: Było co uciszać
+  actions:
+  # The answer plays through the Cast entity; restoring mid-sentence would talk
+  # over HAL and fight over the single Cast session.
+  # Gdy przyciszalismy glosnik, znaczy ze gral na nim wlasna muzyke — a wtedy
+  # odpowiedz HAL-a nie jest tam wysylana, wiec nie ma na co czekac. Czekanie
+  # na koniec cudzej muzyki nie konczy sie nigdy.
+  - wait_template: >-
+      {{ states('input_text.satelita_google_glosnosc') not in ['', 'unknown', 'unavailable']
+         or states('media_player.google_asystent') not in ['playing', 'buffering'] }}
+    timeout:
+      seconds: 30
+    continue_on_timeout: true
+  - delay:
+      seconds: 1
+  - variables:
+      # Only entities still on pause were paused by us. Anything the assistant
+      # stopped in the meantime sits in idle/off and must stay that way.
+      do_wznowienia: >-
+        {{ states('input_text.satelita_pauza_lista').split(',')
+           | select('is_state', 'paused') | list }}
+  - if:
+    - condition: template
+      value_template: "{{ do_wznowienia | count > 0 }}"
+    then:
+    - action: media_player.media_play
+      target:
+        entity_id: "{{ do_wznowienia }}"
+      continue_on_error: true
+  - if:
+    - condition: template
+      value_template: >-
+        {{ states('input_text.satelita_google_glosnosc') not in
+           ['', 'unknown', 'unavailable'] }}
+    then:
+    - action: media_player.volume_set
+      target:
+        entity_id: media_player.google_asystent
+      data:
+        volume_level: "{{ states('input_text.satelita_google_glosnosc') | float(0.4) }}"
+      continue_on_error: true
+  # Wzmacniacz: oddaj poprzednia glosnosc, ale TYLKO jesli nikt jej w
+  # miedzyczasie nie ruszyl. Komenda "zrob glosniej" albo skrypt muzyczny
+  # (podbija do 0.3, gdy zastanie ponizej 0.1) zmieniaja poziom w trakcie
+  # okna — przywracanie na slepo cofaloby to, o co user wlasnie poprosil.
+  - variables:
+      denon_zapis: "{{ states('input_text.satelita_denon_glosnosc') }}"
+      denon_pierwotna: >-
+        {{ denon_zapis.split('|')[0] | float(-1) if '|' in denon_zapis else -1 }}
+      denon_przyciszona: >-
+        {{ denon_zapis.split('|')[1] | float(-1) if '|' in denon_zapis else -1 }}
+      denon_teraz: >-
+        {{ state_attr('media_player.denon_2', 'volume_level') | float(-1) }}
+  - if:
+    - condition: template
+      value_template: >-
+        {{ denon_pierwotna >= 0 and denon_teraz >= 0
+           and (denon_teraz - denon_przyciszona) | abs < 0.02 }}
+    then:
+    - action: media_player.volume_set
+      target:
+        entity_id: media_player.denon_2
+      data:
+        volume_level: "{{ denon_pierwotna }}"
+      continue_on_error: true
+    else:
+    - action: logbook.log
+      data:
+        name: Satelita
+        message: >-
+          Nie przywracam glosnosci Denona — zmienila sie w trakcie komendy
+          (bylo {{ denon_przyciszona }}, jest {{ denon_teraz }}).
+      continue_on_error: true
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.satelita_pauza_lista
+    data:
+      value: ''
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.satelita_google_glosnosc
+    data:
+      value: ''
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.satelita_denon_glosnosc
+    data:
+      value: ''
+  # restart, nie single: druga komenda w trakcie trwajacego przywracania
+  # konczyla sie `failed_single` i tracila przywrocenie w calosci.
+  mode: restart
+- id: satelita_xvf3800_uzbroj_slowo_budzace
+  alias: Satelita XVF3800 - uzbroj slowo budzace po restarcie
+  description: >-
+    Wybor slowa budzacego nie jest nigdzie utrwalany: tworzy go komponent
+    micro_wake_word, ktory po kazdym starcie urzadzenia wraca do no_wake_word.
+    Czulosc przezywa, bo jej select ma restore_value w firmwarze - ten nie ma
+    gdzie tego zapisac. Bez tej automatyzacji kazdy zanik zasilania zostawia
+    satelite gluchym, a widac to dopiero wtedy, gdy ktos do niego przemowi.
+    Wyzwalamy sie na powrocie urzadzenia, nie na wartosci selecta, zeby nie
+    nadpisywac swiadomej zmiany na no_wake_word.
+  trigger:
+    - platform: state
+      entity_id: assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego
+      from: unavailable
+      id: satelita_wrocil
+    - platform: homeassistant
+      event: start
+      id: start_ha
+  condition: []
+  action:
+    # Encje urzadzenia pojawiaja sie chwile po samym satelicie.
+    - wait_template: >-
+        {{ states("select.respeaker_xvf3800_assistant_wake_word")
+           not in ["unavailable", "unknown"] }}
+      timeout: "00:02:00"
+      continue_on_timeout: false
+    - delay: "00:00:03"
+    - if:
+        - condition: template
+          value_template: >-
+            {{ states("select.respeaker_xvf3800_assistant_wake_word") == "no_wake_word" }}
+      then:
+        - service: select.select_option
+          target:
+            entity_id: select.respeaker_xvf3800_assistant_wake_word
+          data:
+            option: Okay Nabu
+        - service: logbook.log
+          data:
+            name: Satelita XVF3800
+            message: >-
+              Slowo budzace bylo puste po restarcie - ustawione z powrotem na
+              "Okay Nabu".
+  mode: single
+- id: satelita_xvf3800_ciszej_w_nocy
+  alias: Satelita XVF3800 - ciszej po 22
+  description: >-
+    Po 22:00 asystent mowi ciszej o 30 procent (1.0 -> 0.7), o 6:00 wraca do
+    pelnej glosnosci. Regulujemy zrodlo, bo glosnik w trybie AUX nie ma wlasnego
+    pokretla - poziom sygnalu jest tam jedyna regulacja.
+    Obie encje media_player satelity ustawiane razem: odpowiedzi asystenta i
+    odtwarzanie mediow ida osobnymi torami.
+  trigger:
+    - platform: time
+      at: "22:00:00"
+      id: noc
+    - platform: time
+      at: "06:00:00"
+      id: dzien
+  condition: []
+  action:
+    - variables:
+        poziom: "{{ 0.7 if trigger.id == 'noc' else 1.0 }}"
+    - service: media_player.volume_set
+      target:
+        entity_id:
+          - media_player.respeaker_xvf3800_assistant
+          - media_player.respeaker_xvf3800_assistant_media_player
+      data:
+        volume_level: "{{ poziom | float }}"
+      continue_on_error: true
+    - service: logbook.log
+      data:
+        name: Satelita XVF3800
+        message: "Glosnosc asystenta ustawiona na {{ (poziom | float * 100) | round }}%."
+  mode: single
+- id: satelita_xvf3800_uzbroj_beam_lock
+  alias: Satelita XVF3800 - uzbroj beam lock po restarcie
+  description: >-
+    Beam lock to template switch z restore_mode RESTORE_DEFAULT_OFF, wiec kazdy
+    restart urzadzenia gasi go po cichu - a widac to dopiero po tym, ze satelita
+    gorzej rozumie przy kilku osobach w pokoju. Osobna automatyzacja, a nie
+    dopisek do tej od slowa budzacego, zeby dalo sie wylaczyc samo uzbrajanie
+    beama na czas testow, nie ruszajac przywracania slowa budzacego.
+    Wyzwalamy sie na powrocie urzadzenia, nie na wartosci przelacznika, zeby nie
+    nadpisywac swiadomego wylaczenia w trakcie pracy.
+  trigger:
+    - platform: state
+      entity_id: assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego
+      from: unavailable
+      id: satelita_wrocil
+    - platform: homeassistant
+      event: start
+      id: start_ha
+  condition: []
+  action:
+    # Encje urzadzenia pojawiaja sie chwile po samym satelicie.
+    - wait_template: >-
+        {{ states("switch.respeaker_xvf3800_assistant_beam_lock")
+           not in ["unavailable", "unknown"] }}
+      timeout: "00:02:00"
+      continue_on_timeout: false
+    - delay: "00:00:03"
+    - if:
+        - condition: state
+          entity_id: switch.respeaker_xvf3800_assistant_beam_lock
+          state: "off"
+      then:
+        - service: switch.turn_on
+          target:
+            entity_id: switch.respeaker_xvf3800_assistant_beam_lock
+        - service: logbook.log
+          data:
+            name: Satelita XVF3800
+            message: >-
+              Beam lock byl wylaczony po restarcie - wlaczony z powrotem.
+  mode: single

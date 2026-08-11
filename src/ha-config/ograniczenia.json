@@ -1,0 +1,16 @@
+{
+  "grupy": [
+    "odkurzacz",
+    "rolety",
+    "klimatyzacja",
+    "zamki"
+  ],
+  "osoby": {
+    "wladek": [
+      "odkurzacz",
+      "rolety",
+      "klimatyzacja",
+      "zamki"
+    ]
+  }
+}

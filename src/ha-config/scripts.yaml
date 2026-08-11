@@ -1,0 +1,405 @@
+source_pc:
+  alias: Source PC
+  sequence:
+  - action: input_select.select_option
+    target:
+      entity_id: input_select.source_amplituner
+    data:
+      option: PC
+  description: ''
+source_games:
+  alias: Source Games
+  sequence:
+  - action: input_select.select_option
+    target:
+      entity_id: input_select.source_amplituner
+    data:
+      option: Game
+  description: ''
+source_blu_ray:
+  alias: Source Blu-ray
+  sequence:
+  - action: input_select.select_option
+    target:
+      entity_id: input_select.source_amplituner
+    data:
+      option: Blu-ray
+  description: ''
+source_media_player:
+  alias: Source Media Player
+  sequence:
+  - action: input_select.select_option
+    target:
+      entity_id: input_select.source_amplituner
+    data:
+      option: Media Player
+  description: ''
+source_pc_duplikuj:
+  sequence:
+  - action: input_select.select_option
+    target:
+      entity_id: input_select.source_amplituner
+    data:
+      option: NET
+  alias: Radio
+  description: ''
+zagraj_losowy_album:
+  alias: Zagraj losowy album
+  sequence:
+  - action: music_assistant.get_library
+    data:
+      config_entry_id: 01KYJ11CQWBFF1B6VRZSMZTQE9
+      media_type: album
+      limit: 1
+      order_by: random
+    response_variable: biblioteka_albumow
+  - action: music_assistant.play_media
+    target:
+      entity_id: media_player.denon_avr_x2400h
+    data:
+      media_type: album
+      media_id: '{{ biblioteka_albumow[''items''][0][''uri''] }}'
+  mode: single
+  icon: mdi:music-box-multiple
+zagraj_losowego_artyste:
+  alias: Zagraj losowego artystę
+  sequence:
+  - action: music_assistant.get_library
+    data:
+      config_entry_id: 01KYJ11CQWBFF1B6VRZSMZTQE9
+      media_type: artist
+      limit: 1
+      order_by: random
+    response_variable: biblioteka_artystow
+  - action: music_assistant.play_media
+    target:
+      entity_id: media_player.denon_avr_x2400h
+    data:
+      media_type: artist
+      media_id: '{{ biblioteka_artystow[''items''][0][''uri''] }}'
+      radio_mode: true
+  mode: single
+  icon: mdi:account-music
+projektor_on:
+  sequence:
+  - if:
+    - condition: numeric_state
+      entity_id: sensor.sonoff_projektor_moc
+      below: 10
+    then:
+    - action: remote.send_command
+      metadata: {}
+      target:
+        entity_id: remote.remote_ir
+      data:
+        num_repeats: 1
+        delay_secs: 0.4
+        hold_secs: 0.5
+        command: power
+        device: viewsonic_x1
+  alias: Projektor ON
+  description: ''
+projektor_on_duplikuj:
+  sequence:
+  - if:
+    - condition: numeric_state
+      entity_id: sensor.sonoff_projektor_moc
+      above: 10
+    then:
+    - action: remote.send_command
+      metadata: {}
+      target:
+        entity_id: remote.remote_ir
+      data:
+        delay_secs: 1
+        hold_secs: 0.5
+        command: power
+        device: viewsonic_x1
+        num_repeats: 2
+  alias: Projektor OFF
+  description: ''
+
+zagraj_muzyke_wykonaj:
+  alias: Zagraj muzykę (wykonanie w tle)
+  description: >-
+    Wewnętrzny pomocnik skryptu "Zagraj muzykę". Nie wywołuj bezpośrednio.
+    Wydzielony, bo music_assistant.play_media na głośniku Cast nie zwraca
+    odpowiedzi nawet po 5 minutach — skrypt główny nie może na to czekać.
+  icon: mdi:music-note
+  mode: restart
+  fields:
+    cel:
+      name: Encja docelowa
+      required: true
+      selector:
+        text:
+    rodzaj:
+      name: Typ mediów
+      required: true
+      selector:
+        text:
+    identyfikator:
+      name: Nazwa lub URI
+      required: true
+      selector:
+        text:
+  sequence:
+    - action: music_assistant.play_media
+      target:
+        entity_id: "{{ cel }}"
+      data:
+        media_type: "{{ rodzaj }}"
+        media_id: "{{ identyfikator }}"
+        radio_mode: "{{ rodzaj == 'artist' }}"
+
+zagraj_muzyke:
+  alias: Zagraj muzykę
+  description: >-
+    Odtwarza muzykę przez Music Assistant. Domyślnie gra na Denonie w salonie.
+    Jeśli użytkownik wskaże urządzenie (głośnik Google, Apple TV), gra tam.
+    Używaj tego skryptu do KAŻDEJ prośby o muzykę, album, wykonawcę, utwór
+    czy ulubione. Nie używaj do tego media_assistant.youtube_show.
+  icon: mdi:music
+  mode: single
+  fields:
+    co:
+      name: Co zagrać
+      description: >-
+        Wykonawca, album, utwór lub playlista. Zostaw puste, aby zagrać losowo
+        z ulubionych.
+      example: David Bowie
+      required: false
+      selector:
+        text:
+    typ:
+      name: Typ
+      description: Rodzaj tego, co podano w polu "co".
+      default: artist
+      required: false
+      selector:
+        select:
+          options: [artist, album, track, playlist, radio]
+    gdzie:
+      name: Gdzie zagrać
+      description: >-
+        Urządzenie docelowe. Pomiń dla domyślnego Denona w salonie.
+      default: denon
+      required: false
+      selector:
+        select:
+          options: [denon, glosnik_google, apple_tv]
+    losowo:
+      name: Losowa kolejność
+      description: >-
+        Ustaw na true tylko gdy użytkownik poprosił o LOSOWE ulubione
+        (np. "puść losowe ulubione"). Zwykłe "ulubione utwory" grają po kolei.
+      default: false
+      required: false
+      selector:
+        boolean:
+  sequence:
+    - variables:
+        cel: >-
+          {% set mapa = {
+            'denon': 'media_player.denon_avr_x2400h',
+            'glosnik_google': 'media_player.google_asystent_2',
+            'apple_tv': 'media_player.living_room' } %}
+          {{ mapa.get(gdzie | default('denon', true), 'media_player.denon_avr_x2400h') }}
+        rodzaj_wejsciowy: "{{ typ | default('artist', true) }}"
+        podane: "{{ co | default('', true) | trim }}"
+    # Fail loudly instead of reporting success on a dead player: the Music
+    # Assistant entity for Apple TV goes unavailable whenever it sleeps.
+    - if:
+        - condition: template
+          value_template: "{{ states(cel) in ['unavailable', 'unknown'] }}"
+      then:
+        - stop: >-
+            Urządzenie {{ cel }} jest niedostępne — nie da się na nim zagrać.
+          error: true
+    # Bez nazwy = gramy to, co Music Assistant sam przygotował.
+    #
+    # „Ulubione" w MA (flaga `favorite`) to 0 wykonawcow, 7 albumow i 185
+    # utworow — garstka oznaczona recznie. Prawdziwa kolekcja to BIBLIOTEKA
+    # zaciagnieta z Apple Music: 484 wykonawcow i 500+ albumow. Decyzja Lecha
+    # 11.08: „ulubione" ma znaczyc biblioteke.
+    #
+    # MA liczy gotowe playlisty „Random Album (from library)" i „Random Artist
+    # (from library)", wiec nie losujemy sami. Szukamy ich PO NAZWIE, bo
+    # `library://playlist/N` przezywa przebudowe biblioteki tylko z przypadku,
+    # a rozjazd bylby cichy: zagraloby sie co innego zamiast zglosic blad.
+    - if:
+        - condition: template
+          value_template: "{{ podane == '' }}"
+      then:
+        - variables:
+            szukana_playlista: >-
+              {% if rodzaj_wejsciowy == 'album' %}Random Album
+              {% elif rodzaj_wejsciowy == 'artist' %}Random Artist
+              {% else %}Favorite Songs{% endif %}
+        - action: music_assistant.get_library
+          data:
+            config_entry_id: 01KYJ11CQWBFF1B6VRZSMZTQE9
+            media_type: playlist
+            search: "{{ szukana_playlista | trim }}"
+            limit: 1
+          response_variable: ulubione
+        - if:
+            - condition: template
+              value_template: "{{ ulubione['items'] | count == 0 }}"
+          then:
+            - stop: >-
+                Nie ma playlisty „{{ szukana_playlista | trim }}" w Music Assistant.
+              error: true
+        - variables:
+            identyfikator: "{{ ulubione['items'][0]['uri'] }}"
+            rodzaj: playlist
+            # Album i wykonawca maja swoja kolejnosc — losowy jest WYBOR, nie
+            # tasowanie srodka. Tylko utwory wolno przetasowac.
+            wolno_tasowac: "{{ rodzaj_wejsciowy not in ['album', 'artist'] }}"
+      else:
+            - variables:
+                identyfikator: "{{ ulubione['items'][0]['uri'] }}"
+                rodzaj: playlist
+      else:
+        - variables:
+            identyfikator: "{{ podane }}"
+            rodzaj: "{{ rodzaj_wejsciowy }}"
+    # HEOS and Music Assistant are modules inside the AVR: they happily report
+    # playback while the amplifier is off, its volume is 0 and the input sits
+    # on a console. Without this, music plays into a dead device.
+    - if:
+        - condition: template
+          value_template: "{{ cel == 'media_player.denon_avr_x2400h' }}"
+      then:
+        - if:
+            - condition: state
+              entity_id: media_player.denon_2
+              state: "off"
+          then:
+            - action: media_player.turn_on
+              target:
+                entity_id: media_player.denon_2
+              continue_on_error: true
+            - wait_template: "{{ states('media_player.denon_2') != 'off' }}"
+              timeout:
+                seconds: 15
+              continue_on_timeout: true
+        # Master volume lives on the AVR entity. The Music Assistant queue
+        # reported 0.24 while the amplifier itself sat at 0.0 — dead silence
+        # that looks like healthy playback. Only rescue true silence; a
+        # deliberately quiet setting is left alone.
+        - if:
+            - condition: template
+              value_template: >-
+                {{ (state_attr('media_player.denon_2', 'volume_level') | float(0)) < 0.1 }}
+          then:
+            - action: media_player.volume_set
+              target:
+                entity_id: media_player.denon_2
+              data:
+                volume_level: 0.3
+    # A stopped Cast session takes a while to come back, so wake the speaker
+    # through its Cast entity before asking Music Assistant to play.
+    - if:
+        - condition: template
+          value_template: "{{ cel == 'media_player.google_asystent_2' }}"
+      then:
+        - action: media_player.turn_on
+          target:
+            entity_id: media_player.google_asystent
+          continue_on_error: true
+        - delay:
+            seconds: 2
+    # Fire and forget: play_media on a Cast speaker never returns, so waiting
+    # for it would hang the assistant for minutes.
+    # Co grało PRZED uruchomieniem — bez tego weryfikacja nizej nie ma sensu.
+    - variables:
+        przed_utworem: "{{ state_attr(cel, 'media_title') | default('', true) }}"
+    - action: script.turn_on
+      target:
+        entity_id: script.zagraj_muzyke_wykonaj
+      data:
+        variables:
+          cel: "{{ cel }}"
+          rodzaj: "{{ rodzaj }}"
+          identyfikator: "{{ identyfikator }}"
+    # A muted amplifier plays silently and looks like success. Nudging the
+    # volume is what actually clears mute on the Denon.
+    - if:
+        - condition: template
+          value_template: >-
+            {{ state_attr(cel, 'is_volume_muted')
+               or (state_attr(cel, 'volume_level') | float(0)) < 0.05 }}
+      then:
+        - action: media_player.volume_mute
+          target:
+            entity_id: "{{ cel }}"
+          data:
+            is_volume_muted: false
+        - action: media_player.volume_set
+          target:
+            entity_id: "{{ cel }}"
+          data:
+            volume_level: >-
+              {% set obecny = state_attr(cel, 'volume_level') | float(0) %}
+              {{ obecny if obecny > 0.05 else 0.25 }}
+    # Verify rather than trust: the assistant used to announce success while
+    # nothing was playing. Waiting beats sleeping — a Denon in standby needs
+    # to wake and switch input first.
+    # ZMIERZONE 11.08: samo `states(cel) == 'playing'` przechodzilo w 9 ms, bo
+    # muzyka JUZ grala z poprzedniej prosby. Skrypt meldowal sukces, nie
+    # sprawdziwszy, czy ruszylo to, o co poproszono — i to jest zrodlo skargi
+    # „twierdzil, ze pusci, a nie puscil". Czekamy wiec na ZMIANE utworu, a nie
+    # na sam fakt, ze cokolwiek leci.
+    - wait_template: >-
+        {{ states(cel) == 'playing'
+           and (state_attr(cel, 'media_title') | default('', true)) not in ['', przed_utworem] }}
+      timeout:
+        seconds: 45
+      continue_on_timeout: true
+    - if:
+        - condition: template
+          value_template: >-
+            {{ states(cel) != 'playing'
+               or (state_attr(cel, 'media_title') | default('', true)) in ['', przed_utworem] }}
+      then:
+        - stop: >-
+            Nie udało się uruchomić „{{ identyfikator }}" na {{ cel }}
+            (stan: {{ states(cel) }}, gra: {{ state_attr(cel, 'media_title') | default('nic', true) }}).
+          error: true
+    # Favourites play in order unless explicitly asked to shuffle. Always set
+    # it, so a previously enabled shuffle does not leak into an ordered play.
+    # Only after playback is up: touching shuffle too early aborts the loading
+    # playlist and leaves the player idle.
+    # ...ale NIE dla albumu. Przy „losowym ulubionym albumie" losowy jest WYBOR
+    # ALBUMU, a nie kolejnosc utworow w srodku — album ma swoja kolejnosc i to
+    # jest caly sens grania albumu. Zmierzone: shuffle + next_track na swiezo
+    # zaladowanym albumie zostawialy odtwarzacz w , bo przeskok wypadal
+    # poza kolejke, ktora dopiero sie budowala.
+    - if:
+        - condition: template
+          # `wolno_tasowac` powstaje tylko w galezi „bez nazwy", wiec dla
+          # wywolania z konkretna nazwa musi miec wartosc zastepcza — inaczej
+          # szablon wywala sie na nieznanej zmiennej.
+          value_template: >-
+            {{ podane == '' and (wolno_tasowac | default(true, true) | bool) }}
+      then:
+        - action: media_player.shuffle_set
+          target:
+            entity_id: "{{ cel }}"
+          data:
+            shuffle: "{{ losowo | default(false, true) | bool }}"
+          continue_on_error: true
+        # Shuffle can only be set once playback is up, so the queue always
+        # starts on track one. Skipping forward lands on a random track — the
+        # difference the user actually hears.
+        - if:
+            - condition: template
+              value_template: "{{ losowo | default(false, true) | bool }}"
+          then:
+            - delay:
+                milliseconds: 500
+            - action: media_player.media_next_track
+              target:
+                entity_id: "{{ cel }}"
+              continue_on_error: true
