@@ -186,7 +186,9 @@ export function createPamiecRouter(
   memory: IMemoryStore,
   extractor: () => IFactExtractor,
   ha: { getEntities(domain?: string): Promise<{ entity_id: string; attributes?: Record<string, unknown> }[]> },
-  llm: IChatEngine
+  llm: IChatEngine,
+  /** Nocny przegląd procedur, wywoływany ręcznie z panelu. */
+  przegladProcedur?: () => Promise<string[]>
 ): Router {
   const router = Router();
 
@@ -290,6 +292,26 @@ export function createPamiecRouter(
 
   router.get("/pominiete", (_req: Request, res: Response) => {
     res.json({ pominiete: czytajPominiecia() });
+  });
+
+  /**
+   * Uruchom nocny przegląd procedur od razu.
+   *
+   * Przegląd chodzi raz na dobę, więc bez tego sprawdzenie zmiany w nim
+   * znaczy czekanie do rana — a i sam Lech może chcieć zobaczyć, co wyszłoby
+   * z dzisiejszego dnia, nie czekając na noc.
+   */
+  router.post("/pominiete/przejrzyj", async (_req: Request, res: Response) => {
+    if (!przegladProcedur) {
+      return res.status(501).json({ error: "Nocny przegląd nie jest włączony." });
+    }
+    try {
+      res.json({ propozycje: await przegladProcedur() });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Nieznany błąd";
+      console.error("[pamiec] przeglad procedur nie powiodl sie:", message);
+      res.status(500).json({ error: message });
+    }
   });
 
   router.delete("/pominiete/:id", (req: Request, res: Response) => {

@@ -24,6 +24,8 @@ import { createLlmConfigRouter } from "./api/llm-config-routes.js";
 import { createSttService } from "./stt/stt-service.js";
 import { createTtsService } from "./tts/tts-service.js";
 import { MemoryCleanupJob } from "./jobs/memory-cleanup.js";
+import { ProceduryJob } from "./jobs/procedury-nocne.js";
+import { envNumber } from "./env.js";
 
 // Load configuration
 const config = loadConfig();
@@ -253,7 +255,7 @@ app.use("/api", createRulesRouter(llm));
 app.use("/api", createRestrictionsRouter());
 // Ekstraktor bierzemy funkcją, bo przełączenie providera w UI podmienia go w
 // locie — złapany raz przy montowaniu zostałby tym sprzed przełączenia.
-app.use("/api", createPamiecRouter(memory, () => currentExtractor, ha, llm));
+app.use("/api", createPamiecRouter(memory, () => currentExtractor, ha, llm, () => proceduryJob.uruchom()));
 app.use(createRulesPage());
 app.use(createPamiecPage());
 
@@ -296,10 +298,20 @@ Ready to accept requests at http://localhost:${config.port}
 const cleanupJob = new MemoryCleanupJob(memory, conversations, config.memoryCleanupIntervalHours);
 cleanupJob.start();
 
+// Nocny przeglad polecen pod katem procedur domowych. Ekstraktor podawany
+// FUNKCJA, nie wartoscia — przelaczenie providera w UI podmienia go w locie,
+// a zlapany raz przy starcie zostalby tym sprzed przelaczenia.
+const proceduryJob = new ProceduryJob(
+  () => currentExtractor,
+  envNumber("PROCEDURY_GODZINA", 3)
+);
+proceduryJob.start();
+
 // Graceful shutdown
 process.on("SIGTERM", () => {
   console.log("Shutting down...");
   cleanupJob.stop();
+  proceduryJob.stop();
   conversations.close();
   memory.close();
   process.exit(0);
@@ -308,6 +320,7 @@ process.on("SIGTERM", () => {
 process.on("SIGINT", () => {
   console.log("Shutting down...");
   cleanupJob.stop();
+  proceduryJob.stop();
   conversations.close();
   memory.close();
   process.exit(0);

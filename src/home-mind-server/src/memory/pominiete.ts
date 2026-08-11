@@ -46,6 +46,19 @@ export interface Pominiecie {
   tresc: string;
   userId: string;
   narzedzia?: string[];
+  /**
+   * Odpowiedź asystenta i wywołania z argumentami — materiał dla nocnego
+   * szukania procedur.
+   *
+   * Dziennik przez chwilę trzymał tylko `narzedzia`, czyli same nazwy, bo
+   * służył wyłącznie do czytania przez człowieka. Odkąd procedury wyławia
+   * przebieg NOCNY zamiast tury na żywo, tura jest już dawno zapomniana, gdy
+   * przychodzi ją obejrzeć — a „call_service" bez argumentów nie mówi ani
+   * jakiej usługi, ani na czym. Bez tych dwóch pól nocny przebieg nie miałby
+   * czego czytać.
+   */
+  odpowiedz?: string;
+  wywolania?: { nazwa: string; argumenty: Record<string, unknown> }[];
 }
 
 /**

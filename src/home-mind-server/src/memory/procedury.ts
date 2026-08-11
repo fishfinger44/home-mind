@@ -60,7 +60,20 @@ const LIMIT_ZNAKOW_ARGUMENTOW = 400;
  * jest napisane. Oszczędzanie akurat na materiale do tej decyzji jest
  * oszczędzaniem na jedynej rzeczy, którą ten przebieg robi.
  */
-const LIMIT_BLOKU_REGUL = 6000;
+/**
+ * Zawór bezpieczeństwa, nie oszczędność — i dlatego jest wysoko.
+ *
+ * Pierwsza wartość, 6000 znaków, była o 332 znaki za niska: blok ważył 6332 i
+ * ucięcie wypadało dokładnie na regule 13, czyli **ostatnio dopisanej**. Model
+ * zaproponował ją więc ponownie tej samej nocy. To najgorszy możliwy sposób
+ * przycinania: nowe reguły są na końcu listy, a jednocześnie to właśnie one
+ * najłatwiej wracają jako „nowa" propozycja.
+ *
+ * Sufit zostaje, bo lista reguł rośnie i kiedyś ktoś wklei do niej powieść —
+ * ale na poziomie, którego dzisiejszy dom nie dotknie, i z KRZYKIEM w logu,
+ * żeby następne ucięcie nie było znowu ciche.
+ */
+const LIMIT_BLOKU_REGUL = 24000;
 
 /** Włączone reguły w całości — po to, żeby model nie proponował ich na nowo. */
 function istniejaceReguly(): string {
@@ -71,9 +84,13 @@ function istniejaceReguly(): string {
   if (linie.length === 0) return "(brak reguł)";
 
   const blok = linie.join("\n");
-  return blok.length > LIMIT_BLOKU_REGUL
-    ? blok.slice(0, LIMIT_BLOKU_REGUL) + "\n…(dalsze reguły pominięte)"
-    : blok;
+  if (blok.length <= LIMIT_BLOKU_REGUL) return blok;
+
+  console.warn(
+    `[procedury] blok regul ma ${blok.length} znakow i zostal uciety do ${LIMIT_BLOKU_REGUL} — ` +
+      `NAJNOWSZE reguly sa teraz niewidoczne dla wykrywania duplikatow`
+  );
+  return blok.slice(0, LIMIT_BLOKU_REGUL) + "\n…(dalsze reguły pominięte)";
 }
 
 const PROMPT = `Jesteś obserwatorem asystenta domowego. Dostajesz JEDNĄ turę: co powiedział domownik,
@@ -130,6 +147,202 @@ Domownik: ${userMessage}
 Asystent: ${assistantResponse || "(bez odpowiedzi)"}
 Wywołane usługi:
 ${opis}`;
+}
+
+const PROMPT_NOCNY = `Jesteś obserwatorem asystenta domowego. Dostajesz WSZYSTKIE polecenia z ostatniej doby:
+co powiedział domownik, co asystent odpowiedział i jakie usługi naprawdę wywołał (z argumentami).
+
+Twoim zadaniem jest wyłowić PROCEDURY DOMOWE — trwałe zasady „jak się w tym domu robi X",
+które przydadzą się przy następnym takim poleceniu i których nie da się odgadnąć z nazw encji.
+
+To JEST procedura:
+- odwzorowanie słów domownika na konkretne wartości ("do końca" = pozycja 0, "przyciemnij" = jasność 30%)
+- wybór usługi lub skryptu spośród kilku możliwych ("muzyka idzie przez script.zagraj_muzyke")
+- stałe parametry, których nie widać w nazwie encji (numery segmentów, źródła, tryby)
+
+To NIE jest procedura — pomiń:
+- zwykłe wykonanie polecenia bez żadnego wyboru ("zapal światło" -> light.turn_on)
+- jednorazowa wartość, którą domownik podał wprost ("ustaw na 40%")
+- cokolwiek o stanie urządzenia w danej chwili
+- upodobanie domownika (to jest fakt, nie procedura)
+
+🔁 SPRAWDZIAN NA POWTÓRZENIE — WYKONAJ GO DLA KAŻDEJ LINII, ZANIM JĄ NAPISZESZ:
+przejrzyj listę obowiązujących reguł i znajdź tę, która mówi o TYM SAMYM urządzeniu
+i TEJ SAMEJ czynności. Jeśli taka istnieje — NIE PISZ tej linii, choćbyś umiał
+powiedzieć to krócej, jaśniej albo z lepszym tytułem. Reguła już tam jest.
+Przykłady powtórzeń, które trzeba pominąć:
+- reguła mówi „«zamknij» = pozycja 0" → NIE proponuj „ustawiaj position 0 dla «zamknij do końca»"
+- reguła mówi „muzyka wyłącznie przez script.zagraj_muzyke" → NIE proponuj „wywołuj zagraj_muzyke zamiast play_media"
+- reguła mówi „zatrzymuj przez media_stop na media_player.denon" → NIE proponuj tego samego innymi słowami
+Lepiej nie zaproponować nic, niż zaproponować to, co już obowiązuje.
+
+⭐ MASZ CAŁĄ DOBĘ NARAZ — KORZYSTAJ Z TEGO. Zachowanie, które POWTARZA SIĘ w wielu turach,
+jest procedurą. Zachowanie widziane RAZ to najczęściej jednorazowe polecenie i lepiej je pominąć.
+Przy równym wyborze proponuj to, co widziałeś częściej.
+
+Nie wymyślaj encji ani usług. Wolno ci wymienić WYŁĄCZNIE takie, które widnieją w wywołaniach poniżej.
+
+Odpowiedz samymi liniami, po polsku, w formacie:
+<krótki tytuł> | <reguła w trybie rozkazującym, jedno zdanie>
+Najwyżej ${"${MAKS_PROPOZYCJI}"} linii. Jeśli nie ma nic wartego zapisania, odpowiedz dokładnie: ${BRAK}`;
+
+/**
+ * Ile reguł wolno zaproponować za jednym razem.
+ *
+ * Przebieg ogląda całą dobę, więc bez sufitu jedna noc mogłaby zasypać listę.
+ * `suggestRule` ma własny sufit oczekujących (20), ale ten działa dopiero po
+ * fakcie — lepiej nie prosić modelu o więcej, niż człowiek przejrzy rano.
+ */
+const MAKS_PROPOZYCJI = 5;
+
+/** Ile tur pokazać. Doba poleceń mieści się w tym z zapasem. */
+const MAKS_TUR = 60;
+
+export interface TuraDoPrzegladu {
+  tresc: string;
+  odpowiedz?: string;
+  wywolania?: UzyteNarzedzie[];
+}
+
+/** Wsad nocny: obowiązujące reguły + wszystkie polecenia z doby. */
+export function zbudujWsadNocny(tury: TuraDoPrzegladu[]): string {
+  const opis = tury
+    // Tura bez wywołania zmieniającego stan nie ma procedury do opisania, a
+    // pokazana z „Wywołania: (brak)" jest samym szumem w oknie kontekstu.
+    .filter((t) => (t.wywolania ?? []).some((w) => NARZEDZIA_ZMIENIAJACE.has(w.nazwa)))
+    .slice(-MAKS_TUR)
+    .map((t, i) => {
+      const wyw = (t.wywolania ?? [])
+        .filter((w) => NARZEDZIA_ZMIENIAJACE.has(w.nazwa))
+        .map((w) => {
+          const a = JSON.stringify(w.argumenty ?? {});
+          return `${w.nazwa} ${a.length > LIMIT_ZNAKOW_ARGUMENTOW ? a.slice(0, LIMIT_ZNAKOW_ARGUMENTOW) + "…" : a}`;
+        })
+        .join("; ");
+      return `${i + 1}. Domownik: ${t.tresc}\n   Asystent: ${t.odpowiedz || "(bez odpowiedzi)"}\n   Wywołania: ${wyw || "(brak)"}`;
+    })
+    .join("\n");
+
+  return `${PROMPT_NOCNY.replace("${MAKS_PROPOZYCJI}", String(MAKS_PROPOZYCJI))}
+
+REGUŁY, KTÓRE JUŻ OBOWIĄZUJĄ (nie proponuj niczego, co już tu jest):
+${istniejaceReguly()}
+
+POLECENIA Z OSTATNIEJ DOBY:
+${opis}`;
+}
+
+/** Rozbierz wielolinijkową odpowiedź nocnego przebiegu. */
+export function rozbierzWieleOdpowiedzi(surowa: string): { tytul: string; tresc: string }[] {
+  const wynik: { tytul: string; tresc: string }[] = [];
+  for (const linia of surowa.split("\n")) {
+    const jedna = rozbierzOdpowiedz(linia);
+    if (jedna) wynik.push(jedna);
+    if (wynik.length >= MAKS_PROPOZYCJI) break;
+  }
+  return wynik;
+}
+
+/**
+ * Czy ta jedna propozycja jest już pokryta przez którąś z reguł?
+ *
+ * Osobne pytanie, bo instrukcja „proponuj procedury, ale pomijaj te, które już
+ * są" okazała się nieskuteczna — trzy razy z rzędu, mimo wprost podanych
+ * przykładów powtórzeń i pełnej listy reguł w promptcie. Model proszony o
+ * WYPRODUKOWANIE listy produkuje ją; pominięcie jest dla niego pobocznym
+ * warunkiem, który przegrywa z głównym poleceniem.
+ *
+ * Pytanie zamknięte o jedną rzecz naraz nie ma tej wady: nie ma nic do
+ * wytworzenia, jest tylko rozstrzygnięcie. Kosztuje jedno małe wywołanie na
+ * kandydata, a kandydaci pojawiają się raz na dobę i jest ich najwyżej pięciu.
+ *
+ * Mętna odpowiedź liczy się jako „pokryta": przeoczona procedura wróci jutro,
+ * bo dom robi swoje rzeczy w kółko. Duplikat na liście trzeba skasować ręcznie.
+ *
+ * ⚠️ PUSTA odpowiedź to co innego niż mętna i musi iść w DRUGĄ stronę.
+ * Zmierzone: przy `max_tokens` 8 i 16 ten model oddaje pusty łańcuch — budżet
+ * zjada rozumowanie, zanim padnie słowo; dopiero przy 64 odpowiada „NIE".
+ * Dopóki pustka liczyła się jako „pokryta", bramka odrzucała WSZYSTKO, łącznie
+ * z propozycją o zmywarce, o której żadna reguła nie wspomina — i robiła to po
+ * cichu. Awaria bramki ma być widoczna na liście propozycji, a nie objawiać się
+ * tym, że lista jest podejrzanie pusta przez miesiąc.
+ */
+export async function czyPokryta(
+  extractor: IFactExtractor,
+  propozycja: { tytul: string; tresc: string }
+): Promise<boolean> {
+  if (typeof extractor.zapytaj !== "function") return false;
+
+  const pytanie = `Masz listę reguł domowych i JEDNĄ nową propozycję reguły.
+
+Odpowiedz jednym słowem: czy któraś z istniejących reguł mówi już o TYM SAMYM
+urządzeniu i TEJ SAMEJ czynności co propozycja? Inne słowa, inny tytuł czy
+krótsze ujęcie NIE czynią z niej nowej reguły.
+
+TAK — temat jest już pokryty, propozycja jest powtórzeniem.
+NIE — żadna reguła o tym nie mówi.
+
+REGUŁY:
+${istniejaceReguly()}
+
+PROPOZYCJA:
+[${propozycja.tytul}] ${propozycja.tresc}
+
+Odpowiedz wyłącznie: TAK albo NIE`;
+
+  try {
+    // 200, nie 8: model najpierw myśli, a dopiero potem pisze — przy ciasnym
+    // budżecie oddaje pustkę zamiast odpowiedzi.
+    const odp = (await extractor.zapytaj(pytanie, 200)).trim().toUpperCase();
+    if (!odp) {
+      console.warn(
+        "[procedury] sprawdzenie powtorzenia oddalo PUSTA odpowiedz — przepuszczam propozycje, " +
+          "zeby awaria bramki byla widoczna"
+      );
+      return false;
+    }
+    // Wszystko, co nie jest wyraźnym „NIE", traktujemy jak powtórzenie.
+    return !odp.startsWith("NIE");
+  } catch (err) {
+    console.error("[procedury] sprawdzenie powtorzenia sie nie powiodlo:", err);
+    return true;
+  }
+}
+
+/**
+ * Obejrzyj dobę poleceń naraz i zgłoś procedury, których jeszcze nie ma.
+ *
+ * Nigdy nie rzuca — chodzi z zegara, w tle, i awaria ma kosztować jeden
+ * pominięty przegląd, nie przewrócone zadanie. Zwraca tytuły zapisanych reguł.
+ */
+export async function szukajProceduryWsadowo(
+  extractor: IFactExtractor,
+  tury: TuraDoPrzegladu[]
+): Promise<string[]> {
+  if (typeof extractor.zapytaj !== "function") return [];
+
+  const zeZmianami = tury.filter((t) =>
+    (t.wywolania ?? []).some((w) => NARZEDZIA_ZMIENIAJACE.has(w.nazwa))
+  );
+  if (zeZmianami.length === 0) return [];
+
+  try {
+    const odpowiedz = await extractor.zapytaj(zbudujWsadNocny(zeZmianami), 400);
+    const zapisane: string[] = [];
+    for (const p of rozbierzWieleOdpowiedzi(odpowiedz)) {
+      // Druga bramka, świadomie oddzielona od pierwszej — patrz `czyPokryta`.
+      if (await czyPokryta(extractor, p)) {
+        console.log(`[procedury] odrzucone jako powtorzenie: „${p.tytul}"`);
+        continue;
+      }
+      const regula = suggestRule(p.tytul, p.tresc);
+      if (regula) zapisane.push(regula.title);
+    }
+    return zapisane;
+  } catch (err) {
+    console.error("[procedury] nocny przeglad sie nie powiodl:", err);
+    return [];
+  }
 }
 
 /**

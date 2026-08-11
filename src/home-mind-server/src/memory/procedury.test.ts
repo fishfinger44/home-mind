@@ -3,7 +3,15 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { rozbierzOdpowiedz, szukajProcedury, zbudujWsad } from "./procedury.js";
+import {
+  rozbierzOdpowiedz,
+  rozbierzWieleOdpowiedzi,
+  szukajProcedury,
+  szukajProceduryWsadowo,
+  czyPokryta,
+  zbudujWsad,
+  zbudujWsadNocny,
+} from "./procedury.js";
 import { loadRules, resetRulesCache, saveRules } from "../rules/store.js";
 import type { IFactExtractor } from "../llm/interface.js";
 
@@ -14,6 +22,15 @@ function ekstraktor(odpowiedz: string | Error) {
       if (odpowiedz instanceof Error) throw odpowiedz;
       return odpowiedz;
     }),
+  } as unknown as IFactExtractor & { zapytaj: ReturnType<typeof vi.fn> };
+}
+
+/** Ekstraktor oddajacy kolejne odpowiedzi po kolei — wsad, potem sprawdzenia. */
+function kolejneOdpowiedzi(odpowiedzi: string[]) {
+  let i = 0;
+  return {
+    extract: vi.fn(async () => []),
+    zapytaj: vi.fn(async () => odpowiedzi[Math.min(i++, odpowiedzi.length - 1)]),
   } as unknown as IFactExtractor & { zapytaj: ReturnType<typeof vi.fn> };
 }
 
@@ -105,6 +122,27 @@ describe("wsad dla modelu", () => {
     expect(wsad).toContain("„zamknij” = pozycja 0.");
   });
 
+  it("nie ucina bloku regul przy realnej wielkosci domu", () => {
+    // Sufit 6000 znakow byl o 332 za niski: blok wazyl 6332, a ucinalo od
+    // reguly 13 — czyli od OSTATNIO DOPISANEJ, ktora model zaproponowal
+    // ponownie tej samej nocy.
+    saveRules(
+      Array.from({ length: 13 }, (_, i) => ({
+        id: `r${i}`,
+        title: `Reguła ${i}`,
+        text: "x".repeat(480) + (i === 12 ? " NAJNOWSZA-REGUŁA" : ""),
+        enabled: true,
+        protected: false,
+        suggested: false,
+      }))
+    );
+
+    const wsad = zbudujWsad("Zamknij roletę", "Zamknąłem.", ZAMKNIJ);
+
+    expect(wsad).toContain("NAJNOWSZA-REGUŁA");
+    expect(wsad).not.toContain("dalsze reguły pominięte");
+  });
+
   it("radzi sobie, gdy nie ma jeszcze zadnej reguly", () => {
     saveRules([]);
     expect(zbudujWsad("x", "y", ZAMKNIJ)).toContain("(brak reguł)");
@@ -189,5 +227,101 @@ describe("szukanie procedury w odrzuconej turze", () => {
   it("milczy, gdy ekstraktor nie umie odpowiadac na pytania", async () => {
     const bezZapytaj = { extract: vi.fn(async () => []) } as unknown as IFactExtractor;
     await expect(szukajProcedury(bezZapytaj, "Zamknij", "Zamknąłem.", ZAMKNIJ)).resolves.toBeNull();
+  });
+});
+
+describe("nocny przeglad calej doby", () => {
+  let katalog: string;
+
+  beforeEach(() => {
+    katalog = mkdtempSync(join(tmpdir(), "nocny-"));
+    process.env.RULES_PATH = join(katalog, "rules.json");
+    resetRulesCache();
+  });
+
+  afterEach(() => {
+    delete process.env.RULES_PATH;
+    resetRulesCache();
+    rmSync(katalog, { recursive: true, force: true });
+  });
+
+  const TURY = [
+    { tresc: "Zamknij roletę", odpowiedz: "Zamknąłem.", wywolania: ZAMKNIJ },
+    { tresc: "Zatrzymaj muzykę", odpowiedz: "Stop.", wywolania: [{ nazwa: "call_service", argumenty: { service: "media_stop" } }] },
+  ];
+
+  it("sklada wszystkie tury w jeden wsad i zacheca do szukania powtorzen", () => {
+    const wsad = zbudujWsadNocny(TURY);
+    expect(wsad).toContain("Zamknij roletę");
+    expect(wsad).toContain("Zatrzymaj muzykę");
+    expect(wsad).toContain("POWTARZA SIĘ");
+  });
+
+  it("pomija tury bez wywolan zmieniajacych stan", () => {
+    const wsad = zbudujWsadNocny([
+      ...TURY,
+      { tresc: "Jaka temperatura?", odpowiedz: "19.", wywolania: [{ nazwa: "get_state", argumenty: {} }] },
+    ]);
+    expect(wsad).not.toContain("Jaka temperatura?");
+  });
+
+  it("czyta wiele regul z odpowiedzi, ale nie wiecej niz sufit", () => {
+    const wiele = Array.from({ length: 9 }, (_, i) => `Tytuł ${i} | Reguła numer ${i} wystarczająco długa`).join("\n");
+    expect(rozbierzWieleOdpowiedzi(wiele).length).toBe(5);
+  });
+
+  it("na BRAK nie zapisuje niczego", async () => {
+    const e = ekstraktor("BRAK");
+    expect(await szukajProceduryWsadowo(e, TURY)).toEqual([]);
+    expect(loadRules()).toHaveLength(0);
+  });
+
+  it("zapisuje kilka regul naraz, wszystkie wylaczone", async () => {
+    // Pierwsza odpowiedz to lista propozycji, kolejne to sprawdzenia powtorzen.
+    const e = kolejneOdpowiedzi([
+      "Rolety | Zamykaj do pozycji 0.\nMuzyka | Zatrzymuj przez media_stop na Denonie.",
+      "NIE",
+      "NIE",
+    ]);
+
+    expect(await szukajProceduryWsadowo(e, TURY)).toEqual(["Rolety", "Muzyka"]);
+    expect(loadRules().every((r) => !r.enabled && r.suggested)).toBe(true);
+  });
+
+  it("odrzuca propozycje, ktora sprawdzenie uzna za powtorzenie", async () => {
+    const e = kolejneOdpowiedzi(["Rolety | Zamykaj do pozycji 0.", "TAK"]);
+
+    expect(await szukajProceduryWsadowo(e, TURY)).toEqual([]);
+    expect(loadRules()).toHaveLength(0);
+  });
+
+  it("metna odpowiedz liczy sie jako powtorzenie, ale PUSTA nie", async () => {
+    const p = { tytul: "X", tresc: "Treść reguły." };
+    expect(await czyPokryta(ekstraktor("TAK"), p)).toBe(true);
+    expect(await czyPokryta(ekstraktor("Trudno powiedzieć"), p)).toBe(true);
+    expect(await czyPokryta(ekstraktor(new Error("padl")), p)).toBe(true);
+    expect(await czyPokryta(ekstraktor("NIE"), p)).toBe(false);
+    // Pustka to awaria bramki, nie werdykt. Zmierzone: przy ciasnym budzecie
+    // tokenow model oddaje "" i bramka odrzucala wszystko, takze rzeczy
+    // niepokryte zadna regula — po cichu.
+    expect(await czyPokryta(ekstraktor(""), p)).toBe(false);
+    expect(await czyPokryta(ekstraktor("   "), p)).toBe(false);
+  });
+
+  it("pyta o powtorzenie z budzetem, ktory starczy modelowi na odpowiedz", async () => {
+    const e = ekstraktor("NIE");
+    await czyPokryta(e, { tytul: "X", tresc: "Treść reguły." });
+    expect(e.zapytaj.mock.calls[0][1]).toBeGreaterThanOrEqual(64);
+  });
+
+  it("nie wola modelu, gdy doba nie miala zadnej zmiany stanu", async () => {
+    const e = ekstraktor("Cokolwiek | cokolwiek długiego");
+    const same_odczyty = [{ tresc: "x", wywolania: [{ nazwa: "get_state", argumenty: {} }] }];
+    expect(await szukajProceduryWsadowo(e, same_odczyty)).toEqual([]);
+    expect(e.zapytaj).not.toHaveBeenCalled();
+  });
+
+  it("nie rzuca, gdy model padnie", async () => {
+    await expect(szukajProceduryWsadowo(ekstraktor(new Error("padl")), TURY)).resolves.toEqual([]);
   });
 });

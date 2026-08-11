@@ -6,7 +6,6 @@ import { IMPERSONAL_FACT_CATEGORIES, isImpersonal } from "../memory/types.js";
 import { filterFacts, SERVICE_PROCEDURE_REASON } from "../memory/fact-patterns.js";
 import { skipExtraction } from "../memory/extraction-gate.js";
 import { zapiszPominiecie } from "../memory/pominiete.js";
-import { szukajProcedury } from "../memory/procedury.js";
 import { suggestRule } from "../rules/store.js";
 import { checkRestriction } from "./restricted.js";
 import { envOrUndefined } from "../env.js";
@@ -785,18 +784,19 @@ export async function extractAndStoreFacts(
     console.log(`[extract] pominieto — ${pominiecie}: "${userMessage}"`);
     // Log kontenera znika przy kazdym wdrozeniu, a to jest jedyny slad po
     // fakcie, ktorego nie nauczylismy sie po cichu.
+    // Odpowiedź i argumenty wywołań lądują w dzienniku, bo procedury wyławia
+    // z niego przebieg NOCNY — patrz `jobs/procedury-nocne.ts`. Za dnia nic
+    // się tu nie dzieje poza zapisem: nie ma po co odsiewać w kółko przy
+    // każdym poleceniu to, co raz na dobę da się ocenić lepiej i taniej.
     zapiszPominiecie({
       rodzaj: "bramka",
       powod: pominiecie,
       tresc: userMessage,
       userId,
       narzedzia: toolsUsed,
+      odpowiedz: assistantResponse,
+      wywolania,
     });
-
-    // Bramka odrzuca turę jako źródło FAKTU i słusznie — ale procedura domowa
-    // mieszka właśnie w poleceniach. Tu jest jedyne miejsce, gdzie widać i
-    // słowa domownika, i to, co asystent naprawdę wywołał.
-    await szukajProcedury(extractor, userMessage, assistantResponse, wywolania);
     return 0;
   }
 
