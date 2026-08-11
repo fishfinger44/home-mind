@@ -503,16 +503,22 @@ export async function handleToolCall(
         break;
 
       case "call_service": {
+        // Wyprostuj kształt ZANIM cokolwiek na jego podstawie zdecydujesz —
+        // inaczej sprawdzanie uprawnień oglądałoby puste `domain`/`service`
+        // i przepuszczało wywołanie, które za chwilę i tak dojdzie do skutku.
+        const wyw = znormalizujWywolanie(input);
+        const celEncja = entityIdFrom({ ...input, data: wyw.data });
+
         const zakaz = checkRestriction(
-          input.domain as string | undefined,
-          input.service as string | undefined,
-          entityIdFrom(input),
+          wyw.domain,
+          wyw.service,
+          celEncja,
           speakerRecognised,
           mowca
         );
         if (!zakaz.allowed) {
           console.log(
-            `[tool] call_service ODMOWA (${speakerRecognised ? `bez uprawnień: ${mowca ?? "?"}` : "nierozpoznany glos"}): ${input.domain}.${input.service} ${entityIdFrom(input) ?? ""}`
+            `[tool] call_service ODMOWA (${speakerRecognised ? `bez uprawnień: ${mowca ?? "?"}` : "nierozpoznany glos"}): ${wyw.domain}.${wyw.service} ${celEncja ?? ""}`
           );
           result = { error: zakaz.reason };
           break;
@@ -522,15 +528,15 @@ export async function handleToolCall(
         // it into `data` alongside the service's own fields. Home Assistant
         // then refuses the call for not asking for a response — and, had it got
         // further, would have rejected the stray field against a strict schema.
-        const data = { ...(input.data as Record<string, unknown> | undefined) };
+        const data = wyw.data;
         const wantsResponse =
           input.return_response === true || data.return_response === true;
         delete data.return_response;
 
         result = await ha.callService(
-          input.domain as string,
-          input.service as string,
-          entityIdFrom(input),
+          wyw.domain as string,
+          wyw.service as string,
+          celEncja,
           Object.keys(data).length > 0 ? data : undefined,
           wantsResponse
         );
@@ -613,6 +619,71 @@ export function suggestionTitle(content: string): string {
  * command: "mop the kitchen" hit a 400 and fell back to a worse route. Both
  * spellings mean the same thing, so accept both.
  */
+/**
+ * Pola usługi z wywołania modelu, rozpakowane z `data` wewnątrz `data`.
+ *
+ * Model bywa niekonsekwentny: to samo polecenie raz przychodzi poprawnie
+ * (`{domain, service, entity_id, data:{…}}`), a raz z polami usługi zapakowanymi
+ * o poziom głębiej (`data: { data: {…}, entity_id: … }`). Zmierzone na żywo przy
+ * zapisie do kalendarza — HA odrzucał wywołanie, bo `data` nie jest polem
+ * `calendar.create_event`, a użytkownik słyszał „nie udało mi się zapisać".
+ *
+ * To ta sama tolerancja, którą ten plik ma już dla `entity_id` (`entityIdFrom`)
+ * i dla `return_response`: kształt wywołania jest jedyną rzeczą, o którą model
+ * potyka się przypadkowo, a koszt potknięcia ponosi domownik.
+ */
+export function daneUslugi(input: Record<string, unknown>): Record<string, unknown> {
+  return znormalizujWywolanie(input).data;
+}
+
+export interface WywolanieUslugi {
+  domain?: string;
+  service?: string;
+  data: Record<string, unknown>;
+}
+
+/**
+ * Wyprostuj wywołanie usługi, które model zapakował o poziom za głęboko.
+ *
+ * Zmierzone na żywo, przy dwóch kolejnych próbach tego samego polecenia:
+ *   `data: { data: {…}, entity_id: … }`                    → HA 400
+ *   `data: { data: {…}, domain: …, service: …, entity_id }` → HA 400
+ * a między nimi to samo polecenie przeszło poprawnie. Model nie myli się w
+ * treści, tylko w kształcie — i to zawsze w tę samą stronę, wkładając rzeczy
+ * do `data`.
+ *
+ * ⚠️ `domain` i `service` są wyciągane z `data` TYLKO wtedy, gdy nie ma ich na
+ * górze. Nie jest to ostrożność na wyrost: `logbook.log` ma własne pole
+ * `domain`, więc bezwarunkowe usuwanie zabrałoby mu poprawny argument. Skoro
+ * wywołanie bez `domain` na górze i tak jest nieważne, wyciągnięcie go stamtąd
+ * może tylko pomóc; wywołanie, które ma je na górze, zostawiamy w spokoju.
+ */
+export function znormalizujWywolanie(input: Record<string, unknown>): WywolanieUslugi {
+  const dane = { ...(input.data as Record<string, unknown> | undefined) };
+
+  const zagniezdzone = dane.data;
+  if (zagniezdzone && typeof zagniezdzone === "object" && !Array.isArray(zagniezdzone)) {
+    delete dane.data;
+    // Zagnieżdżone wygrywa: to w nim model umieścił pola usługi. Zewnętrzny
+    // poziom niesie wtedy zwykle sam cel wywołania, nie pola.
+    Object.assign(dane, zagniezdzone as Record<string, unknown>);
+  }
+
+  let domain = typeof input.domain === "string" ? input.domain : undefined;
+  if (!domain && typeof dane.domain === "string") {
+    domain = dane.domain;
+    delete dane.domain;
+  }
+
+  let service = typeof input.service === "string" ? input.service : undefined;
+  if (!service && typeof dane.service === "string") {
+    service = dane.service;
+    delete dane.service;
+  }
+
+  return { domain, service, data: dane };
+}
+
 export function entityIdFrom(input: Record<string, unknown>): string | undefined {
   if (typeof input.entity_id === "string") return input.entity_id;
   if (Array.isArray(input.entity_id)) return input.entity_id.join(",");

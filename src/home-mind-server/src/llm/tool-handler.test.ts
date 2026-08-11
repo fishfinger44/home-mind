@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleToolCall, entityIdFrom, extractAndStoreFacts, filterExtractedFacts, normalizeTimestamp, truncateHistory, recallFacts, resolveSearchMode, groundedGeminiSearch, readBraveQuotaHeaders, QuotaError, suggestionTitle } from "./tool-handler.js";
+import { handleToolCall, entityIdFrom, extractAndStoreFacts, filterExtractedFacts, normalizeTimestamp, truncateHistory, recallFacts, resolveSearchMode, groundedGeminiSearch, readBraveQuotaHeaders, QuotaError, suggestionTitle,
+  daneUslugi,
+  znormalizujWywolanie,
+} from "./tool-handler.js";
 import { loadRules, resetRulesCache } from "../rules/store.js";
 import type { HomeAssistantClient } from "../ha/client.js";
 import type { IMemoryStore } from "../memory/interface.js";
@@ -1153,5 +1156,76 @@ describe("readBraveQuotaHeaders", () => {
     // for the month; the allowance derived from the credit stays in charge.
     expect(usage.remoteQuota("brave")).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("daneUslugi", () => {
+  it("przepuszcza normalne wywolanie bez zmian", () => {
+    expect(
+      daneUslugi({ domain: "calendar", service: "create_event", entity_id: "calendar.x", data: { summary: "Dentysta" } })
+    ).toEqual({ summary: "Dentysta" });
+  });
+
+  // Zmierzone na zywo: to samo polecenie raz przyszlo poprawnie, raz z polami
+  // uslugi o poziom glebiej — HA odrzucal je, bo `data` nie jest polem uslugi.
+  it("rozpakowuje data zagniezdzone w data", () => {
+    expect(
+      daneUslugi({
+        domain: "calendar",
+        service: "create_event",
+        data: {
+          entity_id: "calendar.lechfish_gmail_com",
+          data: { summary: "Podlewanie kwiatów", start_date_time: "2026-08-11 18:00:00" },
+        },
+      })
+    ).toEqual({
+      entity_id: "calendar.lechfish_gmail_com",
+      summary: "Podlewanie kwiatów",
+      start_date_time: "2026-08-11 18:00:00",
+    });
+  });
+
+  it("nie rusza pola data, ktore nie jest obiektem", () => {
+    expect(daneUslugi({ data: { data: "dwa" } })).toEqual({ data: "dwa" });
+    expect(daneUslugi({ data: { data: [1, 2] } })).toEqual({ data: [1, 2] });
+  });
+
+  it("radzi sobie z brakiem data", () => {
+    expect(daneUslugi({ domain: "light", service: "turn_on" })).toEqual({});
+  });
+
+  // Druga zmierzona deformacja: model wsadzil CALE wywolanie do `data`, wiec
+  // domain i service zniknely z gory i HA dostawal undefined.
+  it("wyciaga domain i service z data, gdy nie ma ich na gorze", () => {
+    expect(
+      znormalizujWywolanie({
+        data: {
+          data: { summary: "Podlewanie kwiatów" },
+          service: "create_event",
+          entity_id: "calendar.lechfish_gmail_com",
+          domain: "calendar",
+        },
+      })
+    ).toEqual({
+      domain: "calendar",
+      service: "create_event",
+      data: { summary: "Podlewanie kwiatów", entity_id: "calendar.lechfish_gmail_com" },
+    });
+  });
+
+  // logbook.log ma WLASNE pole `domain` — bezwarunkowe usuwanie zabraloby mu
+  // poprawny argument, wiec ruszamy tylko gdy na gorze go brakuje.
+  it("nie zabiera pola domain uslugom, ktore maja je na gorze", () => {
+    expect(
+      znormalizujWywolanie({
+        domain: "logbook",
+        service: "log",
+        data: { name: "Test", message: "x", domain: "light" },
+      })
+    ).toEqual({
+      domain: "logbook",
+      service: "log",
+      data: { name: "Test", message: "x", domain: "light" },
+    });
   });
 });
