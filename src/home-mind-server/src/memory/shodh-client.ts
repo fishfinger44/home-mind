@@ -365,13 +365,30 @@ export class ShodhMemoryStore {
   /**
    * Get facts within a token limit using a hybrid recall strategy:
    *   1. Always pull the user's tagged fact set (deterministic baseline).
-   *   2. If we have a current message, also pull proactive-context facts
-   *      (graph-based spreading activation) and promote them to the front
-   *      so the LLM sees query-relevant memories first.
+   *   2. If we have a current message, also run a semantic recall for it
+   *      and promote the hits to the front, so the LLM sees query-relevant
+   *      memories first — and so that they are the ones that survive when
+   *      the budget cannot hold everything.
    *
-   * Rationale: proactive_context alone misses facts when the query has
-   * weak semantic links (typos, cold memories). Tag recall guarantees
-   * that any stored fact reaches the prompt as long as the budget allows.
+   * Rationale: tag recall guarantees that any stored fact reaches the prompt
+   * as long as the budget allows, but its order is arbitrary — the moment
+   * there are more facts than budget, an arbitrary order means an arbitrary
+   * choice of what the assistant forgets. The relevance layer decides that
+   * choice instead.
+   *
+   * Why `recall` and not `proactive_context`: the graph walk behind
+   * proactive_context returned facts unrelated to the question here, while
+   * plain semantic recall found the right ones. Neither endpoint is ours to
+   * fix, so the layer simply uses the one that answers.
+   *
+   * ⚠️ The relevance layer only REORDERS the tagged set — it never adds to it.
+   * Shodh's index holds more than our facts: raw conversation turns live under
+   * the same `user_id` without the `home-mind` tag, and a semantic query
+   * happily ranks them first (measured on this household: a question about
+   * coffee returned twelve transcript fragments and not one fact). Letting
+   * `recall` contribute members would push verbatim speech into the prompt as
+   * if it were remembered knowledge, and crowd the real facts out of the
+   * budget. Tagged recall stays the sole source of membership.
    */
   async getFactsWithinTokenLimit(
     userId: string,
@@ -381,19 +398,28 @@ export class ShodhMemoryStore {
     // Baseline: every fact tagged home-mind for this user
     const tagFactsPromise = this.shodh.recallByTags(userId, 100);
     // Relevance boost when we have a query (tolerate failure)
-    const proactivePromise = currentContext
-      ? this.shodh.getProactiveContext(userId, currentContext, 20).catch((err) => {
-          console.warn("[shodh] proactive_context failed, using tag recall only:", err);
+    const relevantPromise = currentContext
+      ? this.shodh.recall(userId, currentContext, 20).catch((err) => {
+          console.warn("[shodh] recall failed, using tag recall only:", err);
           return [] as Fact[];
         })
       : Promise.resolve([] as Fact[]);
 
-    const [tagFacts, proactiveFacts] = await Promise.all([tagFactsPromise, proactivePromise]);
+    const [tagFacts, relevantFacts] = await Promise.all([tagFactsPromise, relevantPromise]);
 
-    // Merge: proactive first (query-relevant), then remaining tagged facts; dedupe by id.
-    const seen = new Set<string>();
+    // Order: the tagged facts the query hit, in the order it ranked them, then
+    // the rest of the tagged set. Anything `recall` returned that is not a
+    // tagged fact is dropped — see the note above.
+    const tagged = new Map(tagFacts.map((f) => [f.id, f]));
     const merged: Fact[] = [];
-    for (const fact of [...proactiveFacts, ...tagFacts]) {
+    const seen = new Set<string>();
+    for (const hit of relevantFacts) {
+      const fact = tagged.get(hit.id);
+      if (!fact || seen.has(fact.id)) continue;
+      seen.add(fact.id);
+      merged.push(fact);
+    }
+    for (const fact of tagFacts) {
       if (seen.has(fact.id)) continue;
       seen.add(fact.id);
       merged.push(fact);

@@ -467,25 +467,26 @@ describe("ShodhMemoryStore", () => {
       expect(reinforceCall).toBeDefined();
     });
 
-    it("queries both tag-recall and proactive_context when currentContext is provided", async () => {
-      // First fetch: recallByTags
+    it("puts the tagged facts the query hit ahead of the rest", async () => {
+      // First fetch: recallByTags — "wanted" sits last in the arbitrary order
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
           memories: [
-            { id: "tag-1", experience: { content: "Tag fact", memory_type: "Context", tags: ["preference"] }, importance: 0.5, created_at: "2026-01-25T10:00:00Z" },
+            { id: "other", experience: { content: "Other fact", memory_type: "Context", tags: ["preference"] }, importance: 0.5, created_at: "2026-01-25T10:00:00Z" },
+            { id: "wanted", experience: { content: "Wanted fact", memory_type: "Context", tags: ["preference"] }, importance: 0.5, created_at: "2026-01-25T10:00:00Z" },
           ],
-          count: 1,
+          count: 2,
         }),
       });
-      // Second fetch: proactive_context (flat shape)
+      // Second fetch: semantic recall ranks "wanted" first
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
           memories: [
-            { id: "proactive-1", content: "Proactive fact", memory_type: "Context", tags: ["preference"], importance: 0.7, created_at: "2026-01-25T10:00:00Z" },
+            { id: "wanted", experience: { content: "Wanted fact", memory_type: "Context", tags: ["preference"] }, importance: 0.7, created_at: "2026-01-25T10:00:00Z" },
           ],
-          memory_count: 1,
+          count: 1,
         }),
       });
       // Third fetch: reinforce
@@ -498,12 +499,97 @@ describe("ShodhMemoryStore", () => {
 
       const urls = mockFetch.mock.calls.map((c) => c[0] as string);
       expect(urls).toContain("http://localhost:3030/api/recall/tags");
-      expect(urls).toContain("http://localhost:3030/api/proactive_context");
-      // Proactive fact should come first (query-relevant)
-      expect(facts.map((f) => f.id)).toEqual(["proactive-1", "tag-1"]);
+      expect(urls).toContain("http://localhost:3030/api/recall");
+      expect(facts.map((f) => f.id)).toEqual(["wanted", "other"]);
     });
 
-    it("deduplicates facts present in both proactive and tag results by id", async () => {
+    it("drops recall hits that are not tagged facts", async () => {
+      // Shodh's index also holds raw conversation turns under the same user_id.
+      // They must not reach the prompt dressed as remembered knowledge.
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          memories: [
+            { id: "tag-1", experience: { content: "Tag fact", memory_type: "Context", tags: ["preference"] }, importance: 0.5, created_at: "2026-01-25T10:00:00Z" },
+          ],
+          count: 1,
+        }),
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          memories: [
+            { id: "transcript-1", experience: { content: "Zamknij lewą roletę w salonie", memory_type: "Context", tags: [] }, importance: 0.9, created_at: "2026-01-25T10:00:00Z" },
+            { id: "tag-1", experience: { content: "Tag fact", memory_type: "Context", tags: ["preference"] }, importance: 0.4, created_at: "2026-01-25T10:00:00Z" },
+          ],
+          count: 2,
+        }),
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ memories_processed: 1 }),
+      });
+
+      const facts = await store.getFactsWithinTokenLimit("user-1", 1000, "roleta");
+
+      expect(facts.map((f) => f.id)).toEqual(["tag-1"]);
+    });
+
+    it("passes the current message to recall as the search query", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ memories: [], count: 0 }),
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ memories: [], count: 0 }),
+      });
+
+      await store.getFactsWithinTokenLimit("user-1", 1000, "jaką kawę piję?");
+
+      const recallCall = mockFetch.mock.calls.find(
+        (c) => c[0] === "http://localhost:3030/api/recall"
+      );
+      expect(recallCall).toBeDefined();
+      expect(JSON.parse((recallCall![1] as { body: string }).body)).toMatchObject({
+        user_id: "user-1",
+        query: "jaką kawę piję?",
+      });
+    });
+
+    it("keeps query-relevant facts when the budget cannot hold every tagged fact", async () => {
+      // Tag recall returns the relevant fact LAST — arbitrary order is the point.
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          memories: [
+            { id: "filler-1", experience: { content: "x".repeat(400), memory_type: "Context", tags: [] }, importance: 0.5, created_at: "2026-01-25T10:00:00Z" },
+            { id: "wanted", experience: { content: "User drinks no coffee after 18:00", memory_type: "Context", tags: ["preference"] }, importance: 0.5, created_at: "2026-01-25T10:00:00Z" },
+          ],
+          count: 2,
+        }),
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          memories: [
+            { id: "wanted", experience: { content: "User drinks no coffee after 18:00", memory_type: "Context", tags: ["preference"] }, importance: 0.9, created_at: "2026-01-25T10:00:00Z" },
+          ],
+          count: 1,
+        }),
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ memories_processed: 1 }),
+      });
+
+      // Budget fits one short fact, not the 100-token filler.
+      const facts = await store.getFactsWithinTokenLimit("user-1", 20, "coffee in the evening?");
+
+      expect(facts.map((f) => f.id)).toEqual(["wanted"]);
+    });
+
+    it("deduplicates facts present in both recall and tag results by id", async () => {
       // recallByTags returns two facts
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -515,14 +601,14 @@ describe("ShodhMemoryStore", () => {
           count: 2,
         }),
       });
-      // proactive_context returns one fact also present in tag set
+      // recall returns one fact also present in tag set
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
           memories: [
-            { id: "dup", content: "Duplicate", memory_type: "Context", tags: [], importance: 0.7, created_at: "2026-01-25T10:00:00Z" },
+            { id: "dup", experience: { content: "Duplicate", memory_type: "Context", tags: [] }, importance: 0.7, created_at: "2026-01-25T10:00:00Z" },
           ],
-          memory_count: 1,
+          count: 1,
         }),
       });
       mockFetch.mockResolvedValueOnce({
@@ -535,7 +621,7 @@ describe("ShodhMemoryStore", () => {
       expect(facts.map((f) => f.id)).toEqual(["dup", "tag-only"]);
     });
 
-    it("falls back to tag-recall when proactive_context fails", async () => {
+    it("falls back to tag-recall when semantic recall fails", async () => {
       // recallByTags succeeds
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -546,7 +632,7 @@ describe("ShodhMemoryStore", () => {
           count: 1,
         }),
       });
-      // proactive_context fails all 3 retries
+      // recall fails all 3 retries
       mockFetch.mockRejectedValueOnce(new Error("shodh down"));
       mockFetch.mockRejectedValueOnce(new Error("shodh down"));
       mockFetch.mockRejectedValueOnce(new Error("shodh down"));

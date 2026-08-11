@@ -716,10 +716,23 @@ export async function recallFacts(
  * budget stays a budget for *what* is remembered.
  */
 function zData(fact: Fact): string {
-  const kiedy = fact.createdAt instanceof Date
-    ? fact.createdAt.toISOString().slice(0, 10)
-    : String(fact.createdAt).slice(0, 10);
+  const kiedy = dzien(fact.createdAt);
   return kiedy ? `${fact.content} [learned ${kiedy}]` : fact.content;
+}
+
+/**
+ * `YYYY-MM-DD`, or nothing when there is no usable date.
+ *
+ * A fact without a readable `createdAt` must lose its stamp, not gain a bad
+ * one: `String(undefined)` put the literal word "undefined" into the prompt,
+ * and `new Date(undefined).toISOString()` throws, which would take the whole
+ * recall down over one malformed row. An undated fact is the state this
+ * feature exists to warn about — printing a nonsense date instead is worse
+ * than printing none.
+ */
+function dzien(kiedy: Fact["createdAt"]): string {
+  const data = kiedy instanceof Date ? kiedy : new Date(kiedy as string | number);
+  return Number.isNaN(data.getTime()) ? "" : data.toISOString().slice(0, 10);
 }
 
 export async function extractAndStoreFacts(
