@@ -68,6 +68,12 @@ const ConfigSchema = z
     // App / API access
     corsOrigins: z.string().optional(), // Comma-separated origins, e.g. "http://localhost:5173,https://app.example.com"
     apiToken: z.string().optional(), // Bearer token for API auth (when unset, no auth enforced)
+    // Lista adresów, z których wolno wołać `/api` (poza `/health`). Przecinki,
+    // pojedyncze adresy albo sieci z maską: "127.0.0.1,::1,192.168.88.0/24".
+    // Pusta = brak ograniczenia. Potrzebna, bo dopóki `apiToken` jest pusty,
+    // `identityConfidence` w `POST /api/chat` przychodzi od wołającego i każdy
+    // w LAN-ie może kazać asystentowi czytać cudzą pamięć.
+    apiAllowlist: z.string().optional(),
 
     // Speech-to-text (for HomeMind App)
     sttProvider: z.enum(["openai", "none"]).default("none"),
@@ -144,6 +150,7 @@ export function loadConfig(): Config {
     deviceOverrides: emptyToUndefined(process.env.DEVICE_OVERRIDES),
     corsOrigins: emptyToUndefined(process.env.CORS_ORIGINS),
     apiToken: emptyToUndefined(process.env.API_TOKEN),
+    apiAllowlist: emptyToUndefined(process.env.API_ALLOWLIST),
     sttProvider: emptyToUndefined(process.env.STT_PROVIDER),
     sttApiKey: emptyToUndefined(process.env.STT_API_KEY),
     sttBaseUrl: emptyToUndefined(process.env.STT_BASE_URL),

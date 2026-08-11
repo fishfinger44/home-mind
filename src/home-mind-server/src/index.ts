@@ -4,6 +4,7 @@ import cors from "cors";
 import { createRequire } from "module";
 import { loadConfig } from "./config.js";
 import { createAuthMiddleware } from "./api/auth.js";
+import { utworzBramkeAdresow } from "./api/dozwolone-adresy.js";
 
 // Read version from package.json
 const require = createRequire(import.meta.url);
@@ -203,6 +204,22 @@ if (config.corsOrigins) {
 }
 
 app.use(express.json());
+
+// Bramka adresowa — kto w ogóle może zapukać do /api (poza /health).
+// Idzie PRZED tokenem, bo odsiewa taniej i nie zależy od żadnego nagłówka.
+// Zły wpis w liście zatrzymuje start: lista, z której coś cicho wypadło,
+// dopuszczałaby mniej, niż widać w konfiguracji, i nikt by tego nie zauważył.
+try {
+  app.use("/api", utworzBramkeAdresow(config.apiAllowlist));
+  if (config.apiAllowlist) {
+    console.log(`  Bramka adresowa /api: ${config.apiAllowlist}`);
+  } else {
+    console.warn("  ⚠ API_ALLOWLIST pusty — /api stoi otworem dla całej sieci");
+  }
+} catch (e) {
+  console.error(`Configuration errors:\n  - ${(e as Error).message}`);
+  process.exit(1);
+}
 
 // API token auth (only when API_TOKEN is configured)
 const authMiddleware = createAuthMiddleware(config.apiToken);

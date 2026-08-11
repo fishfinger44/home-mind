@@ -88,6 +88,10 @@ services:
       - DEVICE_OVERRIDES=${DEVICE_OVERRIDES:-}
       - CORS_ORIGINS=${CORS_ORIGINS:-}
       - API_TOKEN=${API_TOKEN:-}
+      # Kto moze pukac do /api (poza /health). Puste = kazdy w sieci.
+      # Pulpity w pasku HA wolaja API Z PRZEGLADARKI, wiec na liscie musza byc
+      # adresy komputerow i telefonow, a nie tylko adres Home Assistanta.
+      - API_ALLOWLIST=${API_ALLOWLIST:-}
       - STT_PROVIDER=${STT_PROVIDER:-none}
       - STT_API_KEY=${STT_API_KEY:-}
       - STT_BASE_URL=${STT_BASE_URL:-}

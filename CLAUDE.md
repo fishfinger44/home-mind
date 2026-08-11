@@ -154,7 +154,7 @@ LLM config:
 
 **Runtime switching keeps credentials per provider.** `/data/llm-override.json` stores `apiKeys` and `baseUrls` keyed by provider name (legacy single `apiKey`/`baseUrl` files are migrated on read). Storing only the active provider's key made a switch a silent, unrecoverable loss: coming back fell through to the `.env` key, which is typically a *different* Google project — a free-tier key entered in the UI would quietly be replaced by a billed one. Trying a local model has to be free.
 
-Optional: `PORT` (default 3100), `API_TOKEN` (bearer token for auth — when set, all endpoints except health require it), `HA_SKIP_TLS_VERIFY`, `MEMORY_TOKEN_LIMIT` (default 1500), `LOG_LEVEL`, `CONVERSATION_STORAGE` (`memory` | `sqlite`, default `memory`), `CONVERSATION_DB_PATH` (default `/data/conversations.db`, only used when `CONVERSATION_STORAGE=sqlite`), `CUSTOM_PROMPT` (server-level default custom system prompt), `TZ` (timezone for the Docker container, default `Europe/Prague` in docker-compose; Node.js uses this for `toLocaleString()` so the LLM sees correct local time)
+Optional: `PORT` (default 3100), `API_TOKEN` (bearer token for auth — when set, all endpoints except health require it), `API_ALLOWLIST` (addresses/CIDRs allowed to reach `/api` — see Authentication), `HA_SKIP_TLS_VERIFY`, `MEMORY_TOKEN_LIMIT` (default 1500), `LOG_LEVEL`, `CONVERSATION_STORAGE` (`memory` | `sqlite`, default `memory`), `CONVERSATION_DB_PATH` (default `/data/conversations.db`, only used when `CONVERSATION_STORAGE=sqlite`), `CUSTOM_PROMPT` (server-level default custom system prompt), `TZ` (timezone for the Docker container, default `Europe/Prague` in docker-compose; Node.js uses this for `toLocaleString()` so the LLM sees correct local time)
 
 ### Cloud Proxy Compatibility
 
@@ -175,6 +175,16 @@ Optional bearer token auth via `API_TOKEN` env var. When set, all endpoints exce
 - **Health endpoint** (`/api/health`) is always public, even when auth is enabled
 - **Timing-safe comparison** prevents timing attacks on the token
 - **HACS config flow** validates tokens against `/api/memory/{userId}` (not `/api/health`, since health bypasses auth)
+
+### Address gate (`API_ALLOWLIST`)
+
+Comma-separated addresses and CIDR blocks that may reach `/api` (e.g. `127.0.0.1,::1,192.168.88.0/24,172.16.0.0/12,100.64.0.0/10`). Empty = no restriction. Runs before the token check; `/api/health` stays public. Implementation: `api/dozwolone-adresy.ts`.
+
+This exists because `API_TOKEN` is empty here and `identityConfidence` in `POST /api/chat` is supplied **by the caller** — so the personal-memory gate is honest for the voice path and merely advisory over plain HTTP. Until a token is enabled, where a request comes from is the only real restriction.
+
+- **The address comes from `req.socket.remoteAddress`, not `req.ip`** — `req.ip` reads `X-Forwarded-For` when `trust proxy` is on, which would let a client hand itself a permitted address. The server runs `network_mode: host`, so the socket address is the real client.
+- **A malformed entry aborts startup.** A list that silently drops an entry admits less than the config shows, and locks out dashboards with no trace in the log.
+- **The dashboards (`/rules`, `/pamiec`, `/trasy`) call `/api` from the BROWSER**, so the list needs the addresses of PCs and phones — not just Home Assistant's. The pages themselves sit outside `/api` and are not gated; with the API blocked they simply load empty.
 
 ## API Endpoints
 
