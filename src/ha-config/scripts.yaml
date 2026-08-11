@@ -257,10 +257,6 @@ zagraj_muzyke:
             # tasowanie srodka. Tylko utwory wolno przetasowac.
             wolno_tasowac: "{{ rodzaj_wejsciowy not in ['album', 'artist'] }}"
       else:
-            - variables:
-                identyfikator: "{{ ulubione['items'][0]['uri'] }}"
-                rodzaj: playlist
-      else:
         - variables:
             identyfikator: "{{ podane }}"
             rodzaj: "{{ rodzaj_wejsciowy }}"
@@ -349,23 +345,54 @@ zagraj_muzyke:
     # ZMIERZONE 11.08: samo `states(cel) == 'playing'` przechodzilo w 9 ms, bo
     # muzyka JUZ grala z poprzedniej prosby. Skrypt meldowal sukces, nie
     # sprawdziwszy, czy ruszylo to, o co poproszono — i to jest zrodlo skargi
-    # „twierdzil, ze pusci, a nie puscil". Czekamy wiec na ZMIANE utworu, a nie
-    # na sam fakt, ze cokolwiek leci.
+    # „twierdzil, ze pusci, a nie puscil".
+    #
+    # ZMIERZONE 11.08 wieczorem: czekanie na ZMIANE TYTULU z limitem 45 s
+    # okazalo sie odwrotna awaria — od wyzwolenia skryptu do pierwszego
+    # dzwieku minelo 70,7 s, wiec skrypt zglaszal blad na odtworzeniu, ktore
+    # SIE UDALO. Asystent mowil „sprobuje jeszcze raz", a kolejna proba
+    # przerywala to, co wlasnie ruszylo. Podnoszenie limitu nie jest wyjsciem:
+    # sterowanie glosem nie moze milczec przez minute.
+    #
+    # Tytul mierzy czas dojscia DZWIEKU, na ktory skrypt nie ma wplywu.
+    # Czekamy wiec na to, co jest w naszym zasiegu: czy odtwarzacz wyszedl z
+    # bezczynnosci i czy Music Assistant przelaczyl go na swoja kolejke.
+    # Zmiane tytulu nadal przyjmujemy — dla Google i Apple TV to jedyny sygnal,
+    # bo zrodla „Music Assistant Queue" nie raportuja.
+    # Krok 1 — czy Music Assistant PRZYJAL zlecenie. Kolejka zaladowana widac
+    # po tym, ze odtwarzacz wyszedl z bezczynnosci: `playing` albo `paused`.
     - wait_template: >-
-        {{ states(cel) == 'playing'
-           and (state_attr(cel, 'media_title') | default('', true)) not in ['', przed_utworem] }}
+        {{ states(cel) in ['playing', 'paused', 'buffering'] }}
       timeout:
-        seconds: 45
+        seconds: 25
+      continue_on_timeout: true
+    # Krok 2 — ZMIERZONE 11.08 wieczorem, to jest wlasciwa przyczyna skargi
+    # „nie moge uruchomic ulubionych". Po `play_media` odtwarzacz Music
+    # Assistant na Denonie zostaje na PAUZIE z zaladowana kolejka i sam z
+    # siebie rusza albo po ~70 s, albo wcale (zmierzone: 92 s bez zmiany).
+    # Jedno `media_play` startuje go natychmiast. Skrypt nigdy tego nie robil:
+    # czekal, az ruszy samo, i po limicie meldowal blad na odtworzeniu, ktore
+    # bylo o jedno wywolanie od sukcesu.
+    - if:
+        - condition: template
+          value_template: "{{ states(cel) == 'paused' }}"
+      then:
+        - action: media_player.media_play
+          target:
+            entity_id: "{{ cel }}"
+          continue_on_error: true
+    # Krok 3 — dopiero teraz wolno cokolwiek zameldowac.
+    - wait_template: "{{ states(cel) == 'playing' }}"
+      timeout:
+        seconds: 20
       continue_on_timeout: true
     - if:
         - condition: template
-          value_template: >-
-            {{ states(cel) != 'playing'
-               or (state_attr(cel, 'media_title') | default('', true)) in ['', przed_utworem] }}
+          value_template: "{{ states(cel) != 'playing' }}"
       then:
         - stop: >-
             Nie udało się uruchomić „{{ identyfikator }}" na {{ cel }}
-            (stan: {{ states(cel) }}, gra: {{ state_attr(cel, 'media_title') | default('nic', true) }}).
+            (stan: {{ states(cel) }}, źródło: {{ state_attr(cel, 'source') | default('brak', true) }}).
           error: true
     # Favourites play in order unless explicitly asked to shuffle. Always set
     # it, so a previously enabled shuffle does not leak into an ordered play.
