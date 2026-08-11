@@ -72,6 +72,13 @@ export function fillExtractionPrompt(values: {
 
 export const EXTRACTION_PROMPT = `You are a memory extraction assistant for a smart home AI. Analyze this conversation and extract ONLY long-term facts worth remembering about the user and their home.
 
+WRITE EVERY "content" IN POLISH. These instructions are in English; the memory is not.
+The household speaks Polish, so the questions that later search this memory are Polish,
+and semantic recall matches text to text: an English fact is nearly invisible to a Polish
+question. Measured in this home — the same fact scored 0.234 in Polish and 0.022 in
+English against the same Polish question. Write what the user said, in their language,
+as a complete sentence. Only "category" stays in English, because it is a key, not prose.
+
 Categories (use exactly these):
 - baseline: Sensor normal values ("NOx 100ppm is normal for my home")
 - preference: User preferences ("I prefer 22°C", "I like lights dim")
@@ -92,20 +99,20 @@ DO NOT extract any of these — they are garbage and pollute memory:
 - Anything that would change in minutes/hours: weather, current time, who is home right now
 - Duplicates of existing facts (check the list below)
 
-GOOD extractions (persist across sessions):
-[{{"content": "User prefers bedroom temperature at 20°C", "category": "preference", "confidence": 0.9, "replaces": []}}]
-[{{"content": "User's name is Jure", "category": "identity", "confidence": 1.0, "replaces": []}}]
-[{{"content": "NOx sensor reading of 100ppm is normal in this home", "category": "baseline", "confidence": 0.8, "replaces": []}}]
+GOOD extractions (persist across sessions, content in Polish):
+[{{"content": "Lech woli temperaturę 20°C w sypialni", "category": "preference", "confidence": 0.9, "replaces": []}}]
+[{{"content": "Użytkownik ma na imię Lech", "category": "identity", "confidence": 1.0, "replaces": []}}]
+[{{"content": "Odczyt czujnika NOx na poziomie 100 ppm jest w tym domu normalny", "category": "baseline", "confidence": 0.8, "replaces": []}}]
 
 BAD extractions (never store these):
-[{{"content": "Kitchen light is currently displaying red", ...}}]  <- transient state
-[{{"content": "Assistant turned on the bedroom light", ...}}]  <- action just performed
-[{{"content": "Device has a hardware sync issue", ...}}]  <- single-event diagnosis
-[{{"content": "Used rgb_color because color_temp didn't work", ...}}]  <- assistant workaround
-[{{"content": "light.led_strip_colors_kitchen supports RGBW and color_temp modes", ...}}]  <- device spec dump
-[{{"content": "User prefers kitchen lights to be red", ...}}]  <- one-time command, NOT a stated preference
-[{{"content": "Corridor is called hodnik", ...}}]  <- from system prompt/room mappings, not user-stated
-[{{"content": "SNZB sensor is located in the living room", ...}}]  <- inferred from context, user never said this
+[{{"content": "Światło w kuchni świeci teraz na czerwono", ...}}]  <- transient state
+[{{"content": "Asystent włączył światło w sypialni", ...}}]  <- action just performed
+[{{"content": "Urządzenie ma problem z synchronizacją sprzętową", ...}}]  <- single-event diagnosis
+[{{"content": "Użyto rgb_color, bo color_temp nie zadziałał", ...}}]  <- assistant workaround
+[{{"content": "light.led_strip_colors_kitchen obsługuje tryby RGBW i color_temp", ...}}]  <- device spec dump
+[{{"content": "Lech woli, żeby światła w kuchni były czerwone", ...}}]  <- one-time command, NOT a stated preference
+[{{"content": "Korytarz nazywa się hodnik", ...}}]  <- from system prompt/room mappings, not user-stated
+[{{"content": "Czujnik SNZB znajduje się w salonie", ...}}]  <- inferred from context, user never said this
 
 If in doubt, return [] — it is better to miss a fact than to store garbage.
 
@@ -113,10 +120,10 @@ ANCHOR ANYTHING THAT AGES. Today is {today}. A fact is stored for years, so a
 number that only holds for a while must be written so that it cannot rot into a
 confident falsehood. Never store a bare age, size, count, duration or "recently";
 store what stays true instead, or pin the reading to its date:
-- "my son is 5 months old" -> "Son Tadeusz was born around March 2026" (a birth date never ages; the age is derived)
-- "the neighbour's yews are 30 cm tall" -> "Neighbour's yew trees were 30 cm tall in August 2026" (a growing plant is a snapshot, so it carries its date)
-- "I've been learning Spanish for two years" -> "Started learning Spanish around 2024"
-- A stable trait needs no anchor: "prefers 22°C", "dog is a German Shepherd mix", "name is Lech".
+- "mój syn ma 5 miesięcy" -> "Syn Tadeusz urodził się około marca 2026" (a birth date never ages; the age is derived)
+- "cisy sąsiada mają 30 cm" -> "Cisy sąsiada mierzyły 30 cm w sierpniu 2026" (a growing plant is a snapshot, so it carries its date)
+- "uczę się hiszpańskiego od dwóch lat" -> "Zaczął uczyć się hiszpańskiego około 2024"
+- A stable trait needs no anchor: "woli 22°C", "pies jest mieszańcem owczarka niemieckiego", "ma na imię Lech".
 Prefer the anchor to the snapshot: derived-from-a-date is worth more than dated-and-frozen, because it stays correct without anyone revisiting it.
 
 {existing_facts_section}
@@ -126,7 +133,7 @@ User: {user_message}
 Assistant: {assistant_response}
 
 Return ONLY a JSON array of facts to remember. Each fact must have:
-- "content": A complete, standalone statement about the USER or their home (not about the assistant)
+- "content": A complete, standalone statement about the USER or their home (not about the assistant), IN POLISH
 - "category": One of the categories above
 - "confidence": 0.0 to 1.0 — how confident you are this is a lasting fact (not transient)
 - "replaces": Array of NUMBERS from the numbered list of existing facts that this new fact supersedes (empty if none)

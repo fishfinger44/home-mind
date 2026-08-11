@@ -1,15 +1,28 @@
 /**
  * Shared garbage-detection patterns for fact filtering.
  * Used both at extraction time (tool-handler.ts) and by the periodic cleanup job.
+ *
+ * ⚠️ These read what the EXTRACTOR wrote, and since 2026-08-11 it writes Polish.
+ * Three of the four families below were English-only, so leaving them that way
+ * would not have failed loudly — it would have quietly stopped filtering, and
+ * the junk would only surface a week later as a memory full of device states.
+ * Every family that matches prose therefore matches both languages; the
+ * service-call family is mostly identifiers and needs no translation.
+ *
+ * Content is normalised with `uprosc()` before matching, so Polish patterns are
+ * written WITHOUT diacritics — speech-to-text drops them, and `\b` does not
+ * behave next to non-ASCII letters.
  */
+
+import { uprosc } from "./tekst.js";
 
 // Patterns that indicate transient state — these should not be stored as long-term facts
 export const TRANSIENT_PATTERNS =
-  /\b(currently|right now|at the moment|is showing|was just|is displaying|just turned|just set|is now)\b/i;
+  /\b(currently|right now|at the moment|is showing|was just|is displaying|just turned|just set|is now|obecnie|aktualnie|teraz|w tej chwili|w tym momencie|chwilowo|przed chwila|wlasnie (wlaczy|wylaczy|ustawi|zmieni))\b/i;
 
 // Device spec/capability dump patterns — LLM catalogs entity attributes instead of extracting user facts
 export const DEVICE_SPEC_PATTERNS =
-  /\b(supports?\s+\d+|supports?\s+(rgbw|rgb|color_temp|xy|hs|brightness|on_off)|color.?mode|effect.?list|\d+\+?\s+effects?|firmware|protocol|supported.?features?|supported.?color)\b/i;
+  /\b(supports?\s+\d+|supports?\s+(rgbw|rgb|color_temp|xy|hs|brightness|on_off)|color.?mode|effect.?list|\d+\+?\s+effects?|firmware|protocol|supported.?features?|supported.?color|(obsluguje|wspiera)\s+(tryb\w*|rgbw|rgb|color_temp|jasnos\w*)|tryb\w* koloru|lista efektow|oprogramowanie ukladowe)\b/i;
 
 // Service-call procedures — the assistant writing down HOW to operate the house
 // instead of WHAT is true about it.
@@ -33,8 +46,13 @@ export const SERVICE_PROCEDURE_PATTERNS =
   /\b(call_service|service_data|media_content_id|media_content_type|play_media|select_source|set_hvac_mode|send_command|volume_set|volume_mute|set_cover_position|select_option|wywołaj|wywolaj)\b|\.(turn_on|turn_off|toggle|open_cover|close_cover|media_play|media_pause|press)\b/i;
 
 // Command-echo patterns — assistant restating what it just did, not a user-stated fact
+//
+// The Polish side matches the impersonal past ("ustawiono", "wlaczono"), which
+// is how the assistant reports its own actions, and the passive participles.
+// Deliberately NOT matching bare "ustawil"/"wlaczyl": "Lech wlaczyl ogrzewanie
+// podlogowe w 2024" is a fact about the house, not an echo.
 export const COMMAND_ECHO_PATTERNS =
-  /\b(was set to|was changed to|was turned|has been set|has been turned|has been changed)\b/i;
+  /\b(was set to|was changed to|was turned|has been set|has been turned|has been changed|ustawiono|wlaczono|wylaczono|zmieniono|zostal[aoy]? (ustawion|wlaczon|wylaczon|zmienion|zgaszon|otwart|zamkniet))\w*\b/i;
 
 /**
  * The reason string for a rejected service-call procedure.
@@ -56,19 +74,23 @@ export function matchesGarbagePattern(content: string, confidence?: number): str
     return "too short (<10 chars)";
   }
 
-  if (TRANSIENT_PATTERNS.test(content)) {
+  // Length is measured on the original; everything else on the folded form, so
+  // "właśnie" and "wlasnie" are the same word to every pattern below.
+  const tekst = uprosc(content);
+
+  if (TRANSIENT_PATTERNS.test(tekst)) {
     return "transient state pattern";
   }
 
-  if (DEVICE_SPEC_PATTERNS.test(content)) {
+  if (DEVICE_SPEC_PATTERNS.test(tekst)) {
     return "device spec/capability dump";
   }
 
-  if (COMMAND_ECHO_PATTERNS.test(content)) {
+  if (COMMAND_ECHO_PATTERNS.test(tekst)) {
     return "command echo (restating action)";
   }
 
-  if (SERVICE_PROCEDURE_PATTERNS.test(content)) {
+  if (SERVICE_PROCEDURE_PATTERNS.test(tekst)) {
     return SERVICE_PROCEDURE_REASON;
   }
 

@@ -6,10 +6,11 @@
  * media_player.play_media"), miała jedną stronę w promptcie, a drugą w
  * PAMIĘCI. Ten przypadek został wtedy poza zasięgiem i to jest jego łatka.
  *
- * Dlaczego to musi być LLM, a nie porównanie tekstu: fakty zapisuje ekstraktor
- * po angielsku, reguły pisze człowiek po polsku. „carpet" i „Dywan", „kitchen"
- * i „Kuchnia" nie mają wspólnego znaku, a mówią to samo. Żadna heurystyka na
- * wspólnych słowach tego nie złapie.
+ * Dlaczego to musi być LLM, a nie porównanie tekstu: od 11.08.2026 obie strony
+ * są po polsku, ale to niczego nie ułatwia — „w salonie świeci się ciepło"
+ * i „Salon: temperatura barwowa 2700 K" nie mają wspólnego słowa, a mówią to
+ * samo, i wciąż leżą w bazie angielskie zaszłości sprzed przejścia na polski.
+ * Żadna heurystyka na wspólnych słowach tego nie złapie.
  *
  * Strony NIE są równorzędne — i to jest cała różnica wobec kontroli reguł.
  * Reguła jest pisana ręcznie, wersjonowana i objęta sprawdzaczem sprzeczności;
@@ -46,8 +47,8 @@ Twoim zadaniem jest wskazać fakty, które nie powinny już leżeć w pamięci, 
 SPRZECZNY — fakt mówi coś innego niż reguła (inny numer, inna nazwa encji, inna procedura, inna wartość).
 POKRYTY — fakt powtarza to, co reguła już mówi, bez sprzeczności. Nic nie wnosi.
 
-Reguły są po polsku, a fakty po angielsku — to ta sama wiedza zapisana w dwóch językach.
-Porównuj ZNACZENIE, nie słowa. „carpet" to „Dywan", „kitchen" to „Kuchnia".
+Porównuj ZNACZENIE, nie słowa — ta sama wiedza bywa zapisana zupełnie inaczej.
+Część starszych faktów jest po angielsku: „carpet" to „Dywan", „kitchen" to „Kuchnia".
 
 To NIE jest powód do zgłoszenia: fakt o czymś, o czym żadna reguła nie mówi; uszczegółowienie,
 którego reguła nie zawiera; osobista informacja o człowieku (imię, rodzina, upodobania, zwyczaje).

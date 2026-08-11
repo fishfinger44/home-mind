@@ -22,6 +22,8 @@
  * them and see what the filter actually cut.
  */
 
+import { uprosc } from "./tekst.js";
+
 /**
  * Tools that only carry out or read state.
  *
@@ -47,22 +49,6 @@ const EXECUTIVE_TOOLS = new Set([
  */
 const DECLARATIVE_MARKERS =
   /\b(zapamietaj|zapamietac|pamietaj|wiedz|mam|mamy|jestem|jestesmy|lubie|lubimy|wole|wolimy|nie znosze|nienawidze|nazywa sie|nazywam|u nas|zawsze|zwykle|zazwyczaj|nigdy|codziennie|moj|moja|moje|nasz|nasza|nasze|remember|prefer|always|usually|my name)\b/;
-
-/**
- * Fold away Polish diacritics before matching.
- *
- * Speech-to-text drops them often enough that a marker list spelled only with
- * them would miss half the real cases — and JavaScript's `\b` sits awkwardly
- * next to non-ASCII letters, so "lubię" would not match a trailing boundary.
- */
-function uprosc(text: string): string {
-  return text
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/ł/g, "l")
-    .replace(/Ł/g, "L")
-    .toLowerCase();
-}
 
 /**
  * A reason to skip extraction for this turn, or null to run it.
