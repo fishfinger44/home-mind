@@ -34,6 +34,20 @@ export class OpenAIFactExtractor implements IFactExtractor {
     this.maxTokens = maxTokens ?? 1000;
   }
 
+  /** Jedno małe zapytanie tym samym klientem — patrz `IFactExtractor.zapytaj`. */
+  async zapytaj(prompt: string, maxTokens = 200): Promise<string> {
+    const response = await this.client.chat.completions.create({
+      model: this.model,
+      max_tokens: maxTokens,
+      messages: [{ role: "user", content: prompt }],
+    });
+    // Modele rozumujace wtracaja <think>…</think>; bez tego pierwsza linia
+    // odpowiedzi bywa fragmentem rozumowania, a nie odpowiedzia.
+    return (response.choices[0]?.message?.content ?? "")
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .trim();
+  }
+
   async extract(
     userMessage: string,
     assistantResponse: string,

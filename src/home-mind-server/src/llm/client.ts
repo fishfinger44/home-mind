@@ -18,6 +18,7 @@ import type {
   StreamCallback,
   IChatEngine,
   IFactExtractor,
+  UzyteNarzedzie,
 } from "./interface.js";
 
 export type { ChatRequest, ChatResponse, StreamCallback };
@@ -68,6 +69,9 @@ export class LLMClient implements IChatEngine {
   ): Promise<ChatResponse> {
     const { message, userId, conversationId, isVoice = false, customPrompt, skipExtraction } = request;
     const toolsUsed: string[] = [];
+    // Te same wywołania z argumentami — `toolsUsed` zostaje listą nazw, bo
+    // czyta ją integracja HA; nauka potrzebuje szczegółów, patrz UzyteNarzedzie.
+    const wywolania: UzyteNarzedzie[] = [];
 
     // 1. Load user's memory (pass current message as context for Shodh's proactive retrieval)
     // Personal memory is only for a speaker we are sure of: a guess that turns
@@ -143,6 +147,10 @@ export class LLMClient implements IChatEngine {
 
       const toolPromises = toolBlocks.map(async (block) => {
         toolsUsed.push(block.name);
+        wywolania.push({
+          nazwa: block.name,
+          argumenty: block.input as Record<string, unknown>,
+        });
         const result = await handleToolCall(
           this.ha,
           block.name,
@@ -210,7 +218,8 @@ export class LLMClient implements IChatEngine {
         responseText,
         trustedIdentity,
         SHARED_PROFILE_ID,
-        toolsUsed
+        toolsUsed,
+        wywolania
       ).catch((err) => console.error("Fact extraction failed:", err));
     }
 

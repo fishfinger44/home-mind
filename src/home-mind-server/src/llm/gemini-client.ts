@@ -28,6 +28,7 @@ import type {
   StreamCallback,
   IChatEngine,
   IFactExtractor,
+  UzyteNarzedzie,
 } from "./interface.js";
 import { envOrUndefined } from "../env.js";
 
@@ -126,6 +127,9 @@ export class GeminiChatEngine implements IChatEngine {
   async chat(request: ChatRequest, onChunk?: StreamCallback): Promise<ChatResponse> {
     const { message, userId, conversationId, isVoice = false, customPrompt, skipExtraction } = request;
     const toolsUsed: string[] = [];
+    // Te same wywołania z argumentami — `toolsUsed` zostaje listą nazw, bo
+    // czyta ją integracja HA; nauka potrzebuje szczegółów, patrz UzyteNarzedzie.
+    const wywolania: UzyteNarzedzie[] = [];
 
     // 1. Recall facts
     // Personal memory is only for a speaker we are sure of: a guess that turns
@@ -271,6 +275,7 @@ export class GeminiChatEngine implements IChatEngine {
       for (const p of functionCalls) {
         const fc = p.functionCall!;
         toolsUsed.push(fc.name);
+        wywolania.push({ nazwa: fc.name, argumenty: fc.args ?? {} });
         const result = await handleToolCall(this.ha, fc.name, fc.args ?? {}, searchSettings, trustedIdentity, userId);
         responseParts.push({
           functionResponse: {
@@ -312,7 +317,8 @@ export class GeminiChatEngine implements IChatEngine {
         responseText,
         trustedIdentity,
         SHARED_PROFILE_ID,
-        toolsUsed
+        toolsUsed,
+        wywolania
       ).catch((err) => console.error("Fact extraction failed:", err));
     }
 

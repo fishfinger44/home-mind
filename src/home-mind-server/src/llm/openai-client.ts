@@ -19,6 +19,7 @@ import type {
   StreamCallback,
   IChatEngine,
   IFactExtractor,
+  UzyteNarzedzie,
 } from "./interface.js";
 
 type FunctionToolCall = OpenAI.ChatCompletionMessageFunctionToolCall;
@@ -136,6 +137,9 @@ export class OpenAIChatEngine implements IChatEngine {
   ): Promise<ChatResponse> {
     const { message, userId, conversationId, isVoice = false, customPrompt, skipExtraction } = request;
     const toolsUsed: string[] = [];
+    // Te same wywołania z argumentami — `toolsUsed` zostaje listą nazw, bo
+    // czyta ją integracja HA; nauka potrzebuje szczegółów, patrz UzyteNarzedzie.
+    const wywolania: UzyteNarzedzie[] = [];
 
     // 1. Load user's memory
     // Personal memory is only for a speaker we are sure of: a guess that turns
@@ -236,6 +240,11 @@ export class OpenAIChatEngine implements IChatEngine {
           };
         }
 
+        // Dopiero tutaj, nie przy `toolsUsed.push`: argumenty, których nie dało
+        // się sparsować, wracają wyżej jako błąd narzędzia i nie ma z nich
+        // czego się uczyć.
+        wywolania.push({ nazwa: tc.function.name, argumenty: args });
+
         const toolResult = await handleToolCall(this.ha, tc.function.name, args, {
           mode: request.webSearchMode ?? this.config.webSearchMode,
           searchApiKey: this.config.geminiSearchApiKey,
@@ -286,7 +295,8 @@ export class OpenAIChatEngine implements IChatEngine {
         responseText,
         trustedIdentity,
         SHARED_PROFILE_ID,
-        toolsUsed
+        toolsUsed,
+        wywolania
       ).catch((err) => console.error("Fact extraction failed:", err));
     }
 

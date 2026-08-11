@@ -1,11 +1,12 @@
 import type { HomeAssistantClient, HistoryEntry } from "../ha/client.js";
 import type { IMemoryStore } from "../memory/interface.js";
-import type { IFactExtractor, WebSearchMode } from "./interface.js";
+import type { IFactExtractor, UzyteNarzedzie, WebSearchMode } from "./interface.js";
 import type { ExtractedFact, Fact } from "../memory/types.js";
 import { IMPERSONAL_FACT_CATEGORIES, isImpersonal } from "../memory/types.js";
 import { filterFacts, SERVICE_PROCEDURE_REASON } from "../memory/fact-patterns.js";
 import { skipExtraction } from "../memory/extraction-gate.js";
 import { zapiszPominiecie } from "../memory/pominiete.js";
+import { szukajProcedury } from "../memory/procedury.js";
 import { suggestRule } from "../rules/store.js";
 import { checkRestriction } from "./restricted.js";
 import { envOrUndefined } from "../env.js";
@@ -766,7 +767,15 @@ export async function extractAndStoreFacts(
    * Empty by default so a caller that does not pass it keeps the old
    * behaviour — every turn extracted — rather than silently skipping.
    */
-  toolsUsed: string[] = []
+  toolsUsed: string[] = [],
+  /**
+   * Te same wywołania, ale z argumentami.
+   *
+   * Osobno od `toolsUsed`, bo tamto jest publiczne (czyta je integracja HA) i
+   * ma zostać listą nazw. Puste domyślnie — wołający, który tego nie poda,
+   * dostaje dokładne dawne zachowanie.
+   */
+  wywolania: UzyteNarzedzie[] = []
 ): Promise<number> {
   const pominiecie = skipExtraction(userMessage, toolsUsed);
   if (pominiecie) {
@@ -783,6 +792,11 @@ export async function extractAndStoreFacts(
       userId,
       narzedzia: toolsUsed,
     });
+
+    // Bramka odrzuca turę jako źródło FAKTU i słusznie — ale procedura domowa
+    // mieszka właśnie w poleceniach. Tu jest jedyne miejsce, gdzie widać i
+    // słowa domownika, i to, co asystent naprawdę wywołał.
+    await szukajProcedury(extractor, userMessage, assistantResponse, wywolania);
     return 0;
   }
 

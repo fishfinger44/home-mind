@@ -17,6 +17,16 @@ export class FactExtractor implements IFactExtractor {
     this.model = model;
   }
 
+  /** Jedno małe zapytanie tym samym klientem — patrz `IFactExtractor.zapytaj`. */
+  async zapytaj(prompt: string, maxTokens = 200): Promise<string> {
+    const response = await this.client.messages.create({
+      model: this.model,
+      max_tokens: maxTokens,
+      messages: [{ role: "user", content: prompt }],
+    });
+    return response.content[0]?.type === "text" ? response.content[0].text.trim() : "";
+  }
+
   async extract(
     userMessage: string,
     assistantResponse: string,

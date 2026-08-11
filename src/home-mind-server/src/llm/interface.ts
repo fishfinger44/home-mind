@@ -133,10 +133,36 @@ export interface IChatEngine {
   chat(request: ChatRequest, onChunk?: StreamCallback): Promise<ChatResponse>;
 }
 
+/**
+ * Jedno wywołanie narzędzia razem z argumentami.
+ *
+ * `ChatResponse.toolsUsed` niesie same nazwy i tak zostaje — czyta je
+ * integracja HA, żeby wiedzieć, czy tura coś zrobiła. Do nauki nazwa nie
+ * wystarcza: „call_service" nie mówi ani której usługi, ani na czym. Cała
+ * wiedza o tym, JAK obsługuje się ten dom, siedzi w argumentach, a te były
+ * dotąd wyrzucane zaraz po wywołaniu.
+ */
+export interface UzyteNarzedzie {
+  nazwa: string;
+  argumenty: Record<string, unknown>;
+}
+
 export interface IFactExtractor {
   extract(
     userMessage: string,
     assistantResponse: string,
     existingFacts?: Fact[]
   ): Promise<ExtractedFact[]>;
+
+  /**
+   * Jedno małe zapytanie do modelu, poza ekstrakcją faktów.
+   *
+   * Opcjonalne z rozmysłem: to nie jest część kontraktu ekstraktora, tylko
+   * pożyczenie klienta, który już jest skonfigurowany — inaczej szukanie
+   * procedur wymagałoby własnego klienta, własnego klucza w konfiguracji
+   * i własnej ścieżki przełączania providera w locie. Brak metody ma
+   * wyłączyć tę jedną funkcję, a nie wywrócić ekstrakcję: dlatego wołający
+   * sprawdza jej obecność, a atrapy w testach nie muszą jej znać.
+   */
+  zapytaj?(prompt: string, maxTokens?: number): Promise<string>;
 }
