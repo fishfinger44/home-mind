@@ -26,7 +26,7 @@ import { czytajPominiecia, usunPominiecie } from "../memory/pominiete.js";
 import { VALID_CATEGORIES } from "../memory/extraction-prompt.js";
 import { SHARED_PROFILE_ID, isImpersonal } from "../memory/types.js";
 import type { FactCategory } from "../memory/types.js";
-import { loadRules } from "../rules/store.js";
+import { addRuleFromFact, loadRules } from "../rules/store.js";
 import { sprawdzFaktyZRegulami, type FaktDoKontroli } from "./kontrola.js";
 import { EDYTOR_PAMIECI_HTML } from "./editor.js";
 
@@ -83,15 +83,21 @@ export interface WynikPrzeniesienia {
  * źródła. Awaria w połowie zostawia duplikat, który widać i da się skasować, a
  * nie dziurę po fakcie, którego już nikt nie odtworzy.
  *
- * Kategorie osobiste (`preference`, `identity`, `pattern`) są odrzucane, bo
- * profil wspólny z założenia ich nie trzyma — patrz `IMPERSONAL_FACT_CATEGORIES`.
- * Ta sama reguła rządzi zapisem z rozmowy, więc panel nie może jej obchodzić.
+ * Kategorie osobiste (`preference`, `identity`, `pattern`) nie mogą wjechać do
+ * profilu wspólnego pod własną kategorią, bo ten trzyma wyłącznie
+ * `IMPERSONAL_FACT_CATEGORIES` — odczyt i tak by je odfiltrował, więc fakt
+ * zniknąłby wszystkim, zamiast stać się wiedzą o domu. Można je jednak
+ * **przekwalifikować**: `nowaKategoria` musi wtedy być bezosobowa i jest to
+ * świadoma decyzja człowieka, że zdanie o osobie opisuje w istocie dom
+ * („woli ciepłe światło w salonie" → jak ten dom ma świecić). Bez tego pola
+ * odmowa zostaje taka jak dotąd.
  */
 export async function przeniesFakt(
   memory: IMemoryStore,
   zProfilu: string,
   factId: string,
-  doProfilu: string = SHARED_PROFILE_ID
+  doProfilu: string = SHARED_PROFILE_ID,
+  nowaKategoria?: FactCategory
 ): Promise<WynikPrzeniesienia> {
   if (zProfilu === doProfilu) {
     return { status: 400, error: "Fakt już jest w tym profilu." };
@@ -100,17 +106,25 @@ export async function przeniesFakt(
   const fakt = (await memory.getFacts(zProfilu)).find((f) => f.id === factId);
   if (!fakt) return { status: 404, error: "Nie ma takiego faktu w tym profilu." };
 
-  if (doProfilu === SHARED_PROFILE_ID && !isImpersonal(fakt.category)) {
+  const kategoria = nowaKategoria ?? fakt.category;
+
+  if (nowaKategoria && !(VALID_CATEGORIES as readonly string[]).includes(nowaKategoria)) {
+    return { status: 400, error: `Nieznana kategoria „${nowaKategoria}”.` };
+  }
+
+  if (doProfilu === SHARED_PROFILE_ID && !isImpersonal(kategoria)) {
     return {
       status: 400,
-      error: `Kategoria „${fakt.category}” opisuje osobę, a profil wspólny trzyma tylko wiedzę o domu.`,
+      error: nowaKategoria
+        ? `Kategoria „${nowaKategoria}” opisuje osobę, a profil wspólny trzyma tylko wiedzę o domu.`
+        : `Kategoria „${fakt.category}” opisuje osobę. Żeby fakt trafił do wspólnego, wskaż kategorię bezosobową.`,
     };
   }
 
   const id = await memory.addFactIfNew(
     doProfilu,
     fakt.content,
-    fakt.category,
+    kategoria,
     fakt.confidence
   );
   await memory.deleteFact(zProfilu, factId);
@@ -118,6 +132,54 @@ export async function przeniesFakt(
   return id
     ? { status: 200, wynik: "przeniesiony", id }
     : { status: 200, wynik: "scalony" };
+}
+
+export interface WynikAwansu {
+  status: number;
+  error?: string;
+  /** `awansowany` — reguła powstała; `istniala` — taka reguła już była. */
+  wynik?: "awansowany" | "istniala";
+  regulaId?: string;
+  tytul?: string;
+}
+
+/**
+ * Zamień fakt w regułę domową.
+ *
+ * Fakt i reguła to dwa różne byty i to jest cała treść tej operacji: fakt jest
+ * stwierdzeniem o świecie, które asystent zapisał sam i które może się
+ * zestarzeć, a reguła jest poleceniem, które człowiek napisał i którego
+ * asystent ma słuchać. Pamięć trafia na KONIEC promptu, za regułami, więc
+ * dopóki wiedza siedzi w pamięci, ma nad regułami przewagę pozycji, nie mając
+ * ich autorytetu — awans odwraca ten układ.
+ *
+ * Kolejność jak przy przenoszeniu profilu: **najpierw reguła, potem kasowanie
+ * faktu**. Awaria w połowie zostawia wyłączoną regułę, którą widać i da się
+ * usunąć, a nie dziurę po wiedzy, której nikt już nie odtworzy.
+ *
+ * Duplikat NIE kasuje faktu. Reguła o tej treści już istnieje, więc nic nie
+ * powstało — skasowanie faktu byłoby tu cichą stratą przy operacji, która się
+ * nie odbyła.
+ */
+export async function faktNaRegule(
+  memory: IMemoryStore,
+  profil: string,
+  factId: string,
+  tytul?: string
+): Promise<WynikAwansu> {
+  const fakt = (await memory.getFacts(profil)).find((f) => f.id === factId);
+  if (!fakt) return { status: 404, error: "Nie ma takiego faktu w tym profilu." };
+
+  const regula = addRuleFromFact(tytul ?? "", fakt.content);
+  if (!regula) {
+    return {
+      status: 409,
+      error: "Reguła o tej treści już istnieje — fakt został na miejscu.",
+    };
+  }
+
+  await memory.deleteFact(profil, factId);
+  return { status: 200, wynik: "awansowany", regulaId: regula.id, tytul: regula.title };
 }
 
 export function createPamiecRouter(
@@ -190,13 +252,37 @@ export function createPamiecRouter(
           String(req.params.factId),
           typeof req.body?.docelowy === "string" && req.body.docelowy
             ? req.body.docelowy
-            : SHARED_PROFILE_ID
+            : SHARED_PROFILE_ID,
+          typeof req.body?.kategoria === "string" && req.body.kategoria
+            ? (req.body.kategoria as FactCategory)
+            : undefined
         );
         const { status, ...reszta } = wynik;
         res.status(status).json(reszta);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Nieznany błąd";
         console.error("[pamiec] nie udalo sie przeniesc faktu:", message);
+        res.status(500).json({ error: message });
+      }
+    }
+  );
+
+  /** Awansuj fakt na regułę domową — działa w każdym profilu, także wspólnym. */
+  router.post(
+    "/pamiec/:userId/fakty/:factId/na-regule",
+    async (req: Request, res: Response) => {
+      try {
+        const wynik = await faktNaRegule(
+          memory,
+          String(req.params.userId),
+          String(req.params.factId),
+          typeof req.body?.tytul === "string" ? req.body.tytul : undefined
+        );
+        const { status, ...reszta } = wynik;
+        res.status(status).json(reszta);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Nieznany błąd";
+        console.error("[pamiec] nie udalo sie awansowac faktu na regule:", message);
         res.status(500).json({ error: message });
       }
     }

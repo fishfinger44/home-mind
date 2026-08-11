@@ -192,6 +192,44 @@ export function suggestRule(title: string, text: string): HouseRule | null {
   return rule;
 }
 
+/**
+ * File a rule promoted from a remembered fact.
+ *
+ * Saved **disabled**, like a suggestion, and for a sharper reason than caution:
+ * facts are stored in the extractor's English and rules are read by the model
+ * as Polish house instructions, so the promoted wording almost always needs an
+ * edit before it should speak for the house. Enabling it here would put a
+ * half-translated instruction into every prompt without anyone reading it.
+ *
+ * `suggested` stays false — a person did this, and the editor's suggestion
+ * queue is for the assistant's own proposals. That also keeps a promoted rule
+ * out of `MAX_PENDING_SUGGESTIONS`, which exists to stop chatter burying
+ * hand-written rules; a deliberate promotion is not chatter.
+ *
+ * Returns null when a rule with that wording already exists, so promoting the
+ * same knowledge twice cannot split it across two rules.
+ */
+export function addRuleFromFact(title: string, text: string): HouseRule | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  const existing = loadRules();
+  const wzorzec = normalize(trimmed);
+  if (existing.some((r) => normalize(r.text) === wzorzec)) return null;
+
+  const rule: HouseRule = {
+    id: `f${Date.now().toString(36)}`,
+    title: title.trim() || "Z pamięci",
+    text: trimmed,
+    enabled: false,
+    protected: false,
+    suggested: false,
+  };
+  saveRules([...existing, rule]);
+  console.log(`[rules] promoted a fact to a rule: ${rule.title}`);
+  return rule;
+}
+
 /** Test seam: drop the cache so the next read hits the disk again. */
 export function resetRulesCache(): void {
   cache = null;

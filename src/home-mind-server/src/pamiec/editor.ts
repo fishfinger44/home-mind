@@ -100,17 +100,24 @@ function rysujFakty(fakty, profil) {
   $("licznik-faktow").textContent = fakty.length;
   const wspolny = profil === "default";
   $("fakty").innerHTML = fakty.length ? fakty.map(f => {
-    // W profilu wspolnym nie ma dokad przenosic; przy fakcie osobistym przycisk
-    // zostaje widoczny, ale wylaczony — inaczej regula bylaby niewidzialna.
+    // Fakt osobisty NIE moze wjechac do wspolnego pod swoja kategoria — odczyt
+    // i tak by go odfiltrowal, wiec zniknalby wszystkim. Zamiast blokowac
+    // przycisk, prosimy o przekwalifikowanie: czlowiek wskazuje, ktora
+    // bezosobowa kategoria opisuje to zdanie jako wiedze o domu.
     const osobisty = !BEZOSOBOWE.includes(f.category);
-    const przenies = wspolny ? "" : \`<button class="przenies" data-przenies="\${esc(f.id)}" data-profil="\${esc(profil)}"\${
-      osobisty ? \` disabled title="Kategoria „\${esc(f.category)}” opisuje osobę — profil wspólny trzyma tylko wiedzę o domu."\` : ""
-    }>Przenieś do wspólnego</button>\`;
+    const wybor = osobisty
+      ? \`<select data-nowa-kat="\${esc(f.id)}" title="Fakt osobisty musi zmienić kategorię, żeby stać się wiedzą o domu.">
+           \${BEZOSOBOWE.map(k => \`<option>\${k}</option>\`).join("")}
+         </select>\`
+      : "";
+    const przenies = wspolny ? "" : wybor + \`<button class="przenies" data-przenies="\${esc(f.id)}" data-profil="\${esc(profil)}">\${
+      osobisty ? "Przekwalifikuj do wspólnego" : "Przenieś do wspólnego"
+    }</button>\`;
     return \`
     <div class="wpis">
       <div class="gora">
         <span class="znacznik">\${esc(f.category)}</span>
-        <span class="akcje">\${przenies}<button class="usun" data-fakt="\${esc(f.id)}" data-profil="\${esc(profil)}">Usuń</button></span>
+        <span class="akcje">\${przenies}<button class="na-regule" data-regula="\${esc(f.id)}" data-profil="\${esc(profil)}">Zmień w regułę</button><button class="usun" data-fakt="\${esc(f.id)}" data-profil="\${esc(profil)}">Usuń</button></span>
       </div>
       <div class="tresc">\${esc(f.content)}</div>
       <div class="meta">użyć: \${esc(f.useCount ?? 0)} · dodany: \${esc((f.createdAt || "").slice(0,16).replace("T"," "))}</div>
@@ -180,20 +187,44 @@ document.addEventListener("click", async (e) => {
     return wczytaj();
   }
   if (t.dataset.przenies) {
+    const pole = document.querySelector(\`[data-nowa-kat="\${t.dataset.przenies}"]\`);
+    const kategoria = pole ? pole.value : undefined;
     // Shodh nie zna zmiany wlasciciela: to zapis pod nowym profilem i usuniecie
     // starego, wiec licznik uzyc i waga faktu przepadaja. Trzeba to powiedziec.
-    if (!confirm("Przenieść ten fakt do profilu wspólnego?\\n\\nFakt zacznie liczyć użycia od zera — pamięć nie umie przenieść wpisu, tylko zapisać go na nowo.")) return;
+    const ostrzezenie = "\\n\\nFakt zacznie liczyć użycia od zera — pamięć nie umie przenieść wpisu, tylko zapisać go na nowo.";
+    if (!confirm(kategoria
+      ? \`Przenieść ten fakt do profilu wspólnego jako „\${kategoria}"?\\n\\nPrzestanie być zdaniem o osobie, a stanie się wiedzą o domu — zobaczą go wszyscy domownicy.\${ostrzezenie}\`
+      : "Przenieść ten fakt do profilu wspólnego?" + ostrzezenie)) return;
     stan("przenoszę…");
     const r = await fetch(\`/api/pamiec/\${encodeURIComponent(t.dataset.profil)}/fakty/\${encodeURIComponent(t.dataset.przenies)}/przenies\`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ docelowy: "default" }),
+      body: JSON.stringify({ docelowy: "default", kategoria }),
     });
     const o = await r.json();
     if (!r.ok) return stan("Błąd: " + (o.error || r.status));
     await wczytajProfile();
     await wczytaj();
     return stan(o.wynik === "scalony" ? "Profil wspólny już to wiedział — usunięto kopię z tego profilu." : "Przeniesiono do profilu wspólnego.");
+  }
+  if (t.dataset.regula) {
+    // Regula powstaje WYLACZONA: tresc faktu jest w jezyku ekstraktora, a regule
+    // czyta model jako polecenie domowe — prawie zawsze trzeba ja najpierw
+    // przeredagowac. Mowimy to wprost, zeby nikt nie czekal na efekt.
+    const tytul = prompt("Tytuł reguły (sam tekst weźmie treść faktu):", "Z pamięci");
+    if (tytul === null) return;
+    if (!confirm("Zamienić ten fakt w regułę domową?\\n\\nFakt zniknie z pamięci, a reguła powstanie WYŁĄCZONA na końcu listy — trzeba ją przejrzeć, poprawić brzmienie i włączyć w pulpicie Reguły.")) return;
+    stan("awansuję na regułę…");
+    const r = await fetch(\`/api/pamiec/\${encodeURIComponent(t.dataset.profil)}/fakty/\${encodeURIComponent(t.dataset.regula)}/na-regule\`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tytul }),
+    });
+    const o = await r.json();
+    if (!r.ok) return stan("Błąd: " + (o.error || r.status));
+    await wczytajProfile();
+    await wczytaj();
+    return stan(\`Powstała reguła „\${o.tytul}" — jest WYŁĄCZONA, włącz ją w pulpicie Reguły.\`);
   }
   if (t.dataset.odrzuc) {
     stan("usuwam z listy…");

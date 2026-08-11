@@ -1,5 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
-import { przeniesFakt, zbierzProfile } from "./routes.js";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { faktNaRegule, przeniesFakt, zbierzProfile } from "./routes.js";
+import { loadRules, resetRulesCache, saveRules } from "../rules/store.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { Fact, FactCategory } from "../memory/types.js";
 
@@ -94,6 +99,31 @@ describe("przenoszenie faktu do profilu wspolnego", () => {
     }
   });
 
+  it("przepuszcza fakt osobisty do wspolnego, gdy czlowiek go przekwalifikuje", async () => {
+    // Bez zmiany kategorii fakt wjechalby do wspolnego i zostal odfiltrowany
+    // przy odczycie, czyli znikalby wszystkim.
+    const m = pamiecZ([{ id: "f1", content: "woli ciepłe światło w salonie", category: "preference", confidence: 0.7 }]);
+
+    expect((await przeniesFakt(m, "lech", "f1", "default", "baseline")).wynik).toBe("przeniesiony");
+    expect(m.addFactIfNew).toHaveBeenCalledWith("default", "woli ciepłe światło w salonie", "baseline", 0.7);
+    expect(m.deleteFact).toHaveBeenCalledWith("lech", "f1");
+  });
+
+  it("nie pozwala przekwalifikowac na inna kategorie osobowa", async () => {
+    const m = pamiecZ([{ id: "f1", content: "lubi 22 stopnie", category: "preference" }]);
+    const w = await przeniesFakt(m, "lech", "f1", "default", "identity");
+    expect(w.status).toBe(400);
+    expect(m.addFactIfNew).not.toHaveBeenCalled();
+    expect(m.deleteFact).not.toHaveBeenCalled();
+  });
+
+  it("odrzuca kategorie, ktorej nie ma", async () => {
+    const m = pamiecZ([{ id: "f1", content: "cokolwiek" }]);
+    const w = await przeniesFakt(m, "lech", "f1", "default", "wymyslona" as FactCategory);
+    expect(w.status).toBe(400);
+    expect(m.addFactIfNew).not.toHaveBeenCalled();
+  });
+
   it("przepuszcza fakt osobisty do profilu innej OSOBY — regula dotyczy tylko wspolnego", async () => {
     const m = pamiecZ([{ id: "f1", content: "lubi 22 stopnie", category: "preference" }]);
     expect((await przeniesFakt(m, "lech", "f1", "wladek")).wynik).toBe("przeniesiony");
@@ -109,5 +139,74 @@ describe("przenoszenie faktu do profilu wspolnego", () => {
     const m = pamiecZ([{ id: "inny" }]);
     expect((await przeniesFakt(m, "lech", "f1")).status).toBe(404);
     expect(m.deleteFact).not.toHaveBeenCalled();
+  });
+});
+
+describe("awans faktu na regule domowa", () => {
+  let katalog: string;
+
+  beforeEach(() => {
+    katalog = mkdtempSync(join(tmpdir(), "reguly-"));
+    process.env.RULES_PATH = join(katalog, "rules.json");
+    resetRulesCache();
+  });
+
+  afterEach(() => {
+    delete process.env.RULES_PATH;
+    resetRulesCache();
+    rmSync(katalog, { recursive: true, force: true });
+  });
+
+  it("dopisuje regule na koncu listy i kasuje fakt", async () => {
+    saveRules([{ id: "r1", title: "Pierwsza", text: "Nie zgaduj.", enabled: true, protected: true, suggested: false }]);
+    const m = pamiecZ([{ id: "f1", content: "W salonie świeci się ciepło." }]);
+
+    const w = await faktNaRegule(m, "lech", "f1", "Światło w salonie");
+
+    expect(w.status).toBe(200);
+    expect(w.wynik).toBe("awansowany");
+    const reguly = loadRules();
+    expect(reguly).toHaveLength(2);
+    // Kolejnosc decyduje o tym, kto wygrywa sprzecznosc — nowa idzie na koniec.
+    expect(reguly[1]).toMatchObject({ title: "Światło w salonie", text: "W salonie świeci się ciepło." });
+    expect(m.deleteFact).toHaveBeenCalledWith("lech", "f1");
+  });
+
+  it("tworzy regule WYLACZONA i nieoznaczona jako sugestia asystenta", async () => {
+    const m = pamiecZ([{ id: "f1", content: "Cokolwiek." }]);
+    await faktNaRegule(m, "lech", "f1");
+
+    expect(loadRules()[0]).toMatchObject({ enabled: false, suggested: false, protected: false });
+  });
+
+  it("nie kasuje faktu, gdy taka regula juz istnieje", async () => {
+    // Nic nie powstalo, wiec skasowanie faktu byloby cicha strata przy
+    // operacji, ktora sie nie odbyla.
+    saveRules([{ id: "r1", title: "Jest", text: "Cokolwiek.", enabled: true, protected: false, suggested: false }]);
+    const m = pamiecZ([{ id: "f1", content: "  cokolwiek.  " }]);
+
+    const w = await faktNaRegule(m, "lech", "f1");
+
+    expect(w.status).toBe(409);
+    expect(loadRules()).toHaveLength(1);
+    expect(m.deleteFact).not.toHaveBeenCalled();
+  });
+
+  it("bierze tytul zastepczy, gdy nie podano zadnego", async () => {
+    const m = pamiecZ([{ id: "f1", content: "Cokolwiek." }]);
+    await faktNaRegule(m, "lech", "f1", "   ");
+    expect(loadRules()[0].title).toBe("Z pamięci");
+  });
+
+  it("dziala tak samo w profilu wspolnym", async () => {
+    const m = pamiecZ([{ id: "f1", content: "Kuchnia to segment 1." }]);
+    expect((await faktNaRegule(m, "default", "f1")).wynik).toBe("awansowany");
+    expect(m.deleteFact).toHaveBeenCalledWith("default", "f1");
+  });
+
+  it("zwraca 404, gdy faktu nie ma — i nie zostawia reguly", async () => {
+    const m = pamiecZ([{ id: "inny" }]);
+    expect((await faktNaRegule(m, "lech", "f1")).status).toBe(404);
+    expect(loadRules()).toHaveLength(0);
   });
 });

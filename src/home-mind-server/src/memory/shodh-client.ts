@@ -337,6 +337,21 @@ export class ShodhMemoryClient {
 }
 
 /**
+ * How deep the relevance query looks before its hits are intersected with the
+ * tagged fact set.
+ *
+ * It has to be generous, because the query does not rank facts against facts —
+ * it ranks them against everything stored under that user_id, and most of what
+ * is stored is not ours. This household's index holds 88 verbatim utterances
+ * beside 12 facts, and they outscore the facts even when both are in the same
+ * language: the best-matching fact for "jakie światło wolę w salonie" sits at
+ * position 4, and for "czy mogę napić się kawy o dwudziestej" at position 15.
+ * A window of 20 would have dropped the second one. Nothing is paid for the
+ * extra depth — the intersection throws the non-facts away regardless.
+ */
+const RELEVANCE_WINDOW = 100;
+
+/**
  * Memory store that uses Shodh for long-term facts and in-memory storage
  * for short-term conversation history. Shodh excels at semantic memory;
  * conversation state is transient and lost on restart (by design).
@@ -399,7 +414,7 @@ export class ShodhMemoryStore {
     const tagFactsPromise = this.shodh.recallByTags(userId, 100);
     // Relevance boost when we have a query (tolerate failure)
     const relevantPromise = currentContext
-      ? this.shodh.recall(userId, currentContext, 20).catch((err) => {
+      ? this.shodh.recall(userId, currentContext, RELEVANCE_WINDOW).catch((err) => {
           console.warn("[shodh] recall failed, using tag recall only:", err);
           return [] as Fact[];
         })
