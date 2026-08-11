@@ -111,6 +111,15 @@ services:
       # Self-hosted search (see the searxng service below). Unset = not available.
       - SEARXNG_URL=${SEARXNG_URL:-http://127.0.0.1:8888}
       - SEARCH_ALLOW_PAID=${SEARCH_ALLOW_PAID:-false}
+      # Planowanie tras (narzedzie zaplanuj_trase). Klucz z Google Maps
+      # Platform z wlaczonym Routes API - to NIE jest darmowy klucz Gemini.
+      # Twardy hamulec siedzi w konsoli Google (quota cap); TRASY_LIMIT_DZIENNY
+      # jest hamulcem drugim, po naszej stronie, i dziala od razu.
+      - GOOGLE_ROUTES_API_KEY=${GOOGLE_ROUTES_API_KEY:-}
+      - TRASY_LIMIT_DZIENNY=${TRASY_LIMIT_DZIENNY:-100}
+      # Skroty miejsc -> adresy. Klucz "dom" = domyslny poczatek trasy.
+      - TRASY_MIEJSCA=${TRASY_MIEJSCA:-}
+      - TRASY_ILE_WARIANTOW=${TRASY_ILE_WARIANTOW:-3}
       - TZ=Europe/Warsaw
     volumes:
       - conversation_data:/data

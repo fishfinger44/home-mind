@@ -9,6 +9,7 @@ import { zapiszPominiecie } from "../memory/pominiete.js";
 import { suggestRule } from "../rules/store.js";
 import { checkRestriction } from "./restricted.js";
 import { envOrUndefined } from "../env.js";
+import { zaplanujTrase } from "../trasy/klient.js";
 import {
   type SearchBackend,
   SEARCH_BACKENDS,
@@ -560,6 +561,15 @@ export async function handleToolCall(
           (input.max_results as number | undefined) ?? 3,
           search
         );
+        break;
+      }
+      case "zaplanuj_trase": {
+        result = await zaplanujTrase({
+          dokad: String(input.dokad ?? ""),
+          skad: input.skad ? String(input.skad) : undefined,
+          kiedy: input.kiedy ? String(input.kiedy) : undefined,
+          kiedyZnaczy: input.kiedy_znaczy === "przyjazd" ? "przyjazd" : "wyjazd",
+        });
         break;
       }
       default:

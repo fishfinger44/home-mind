@@ -139,6 +139,43 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ["query"],
     },
   },
+  // Jedyne narzedzie opisane po polsku, i celowo: odpowiada na pytania zadawane
+  // po polsku o wroclawskie linie, a nazwy przystankow i kierunkow wracaja z
+  // Google po polsku. Reguly, ktore je wolaja, tez sa polskie.
+  {
+    name: "zaplanuj_trase",
+    description:
+      "Zaplanuj dojazd komunikacja miejska (autobus, tramwaj, pociag) z jednego miejsca do drugiego. " +
+      "Uzyj tego ZAWSZE, gdy pytanie dotyczy dojazdu, polaczenia, przesiadki albo tego, ktora linia jechac. " +
+      "Odpowiedz zawiera numer linii, KIERUNEK (pole 'kierunek' - wypowiedz go na glos, nie zgaduj strony), " +
+      "przystanek wsiadania i godziny. To NIE jest tablica odjazdow: podaje polaczenie na konkretna pore, " +
+      "a nie kolejne kursy jednej linii. Rozklad jest planowy - nie zawiera opoznien na zywo.",
+    parameters: {
+      type: "object",
+      properties: {
+        dokad: {
+          type: "string",
+          description:
+            "Cel podrozy: adres albo znany skrot (np. 'centrum', 'praca'). Nieznana nazwa idzie do Google jako adres.",
+        },
+        skad: {
+          type: "string",
+          description: "Punkt poczatkowy. Pominiety = dom.",
+        },
+        kiedy: {
+          type: "string",
+          description:
+            "Godzina w ISO 8601 (uzyj znacznika czasu z kontekstu systemowego do przeliczen). Pominieta = teraz.",
+        },
+        kiedy_znaczy: {
+          type: "string",
+          description:
+            "'wyjazd' (domyslnie) = o tej godzinie wyruszam; 'przyjazd' = o tej godzinie mam byc na miejscu.",
+        },
+      },
+      required: ["dokad"],
+    },
+  },
 ];
 
 export function toAnthropicTools(tools: ToolDefinition[]): Anthropic.Tool[] {

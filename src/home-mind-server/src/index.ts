@@ -17,6 +17,7 @@ import { createChatEngine, createFactExtractor } from "./llm/factory.js";
 import { createRouter } from "./api/routes.js";
 import { createRulesRouter, createRulesPage } from "./rules/routes.js";
 import { createPamiecRouter, createPamiecPage } from "./pamiec/routes.js";
+import { createTrasyRouter, createTrasyPage } from "./trasy/routes.js";
 import { createRestrictionsRouter } from "./llm/restricted-routes.js";
 import type { IChatEngine } from "./llm/interface.js";
 import { loadLlmOverride, saveLlmOverride } from "./llm/runtime-config.js";
@@ -256,8 +257,10 @@ app.use("/api", createRestrictionsRouter());
 // Ekstraktor bierzemy funkcją, bo przełączenie providera w UI podmienia go w
 // locie — złapany raz przy montowaniu zostałby tym sprzed przełączenia.
 app.use("/api", createPamiecRouter(memory, () => currentExtractor, ha, llm, () => proceduryJob.uruchom()));
+app.use("/api", createTrasyRouter());
 app.use(createRulesPage());
 app.use(createPamiecPage());
+app.use(createTrasyPage());
 
 // Root endpoint
 app.get("/", (_req, res) => {
