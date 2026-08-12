@@ -20,6 +20,7 @@ import { TopologyScanner } from "../ha/topology-scanner.js";
 import { buildSystemPromptText } from "./prompts.js";
 import { TOOL_DEFINITIONS, toGeminiTools } from "./tool-definitions.js";
 import { handleToolCall, extractAndStoreFacts, recallFacts } from "./tool-handler.js";
+import type { KontekstPamieci } from "./tool-handler.js";
 import { trustsProfile } from "./interface.js";
 import type { WebSearchSettings } from "./tool-handler.js";
 import type {
@@ -144,6 +145,18 @@ export class GeminiChatEngine implements IChatEngine {
       trustedIdentity,
       SHARED_PROFILE_ID
     );
+
+    // `sprawdz_pamiec` reads through the same gate as the block above — same
+    // profile, same budget, same `trustedIdentity`. Built here rather than in
+    // the tool loop so the two can never drift into disagreeing about who the
+    // speaker is allowed to be.
+    const kontekstPamieci: KontekstPamieci = {
+      memory: this.memory,
+      userId,
+      limit: request.memoryTokenLimit ?? this.config.memoryTokenLimit,
+      allowPersonal: trustedIdentity,
+      sharedUserId: SHARED_PROFILE_ID,
+    };
 
     // 2. Refresh device/topology, build system prompt
     await Promise.all([this.scanner.refreshIfStale(), this.topology.refreshIfStale()]);
@@ -276,7 +289,7 @@ export class GeminiChatEngine implements IChatEngine {
         const fc = p.functionCall!;
         toolsUsed.push(fc.name);
         wywolania.push({ nazwa: fc.name, argumenty: fc.args ?? {} });
-        const result = await handleToolCall(this.ha, fc.name, fc.args ?? {}, searchSettings, trustedIdentity, userId);
+        const result = await handleToolCall(this.ha, fc.name, fc.args ?? {}, searchSettings, trustedIdentity, userId, kontekstPamieci);
         responseParts.push({
           functionResponse: {
             name: fc.name,

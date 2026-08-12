@@ -200,7 +200,10 @@ describe("OpenAIChatEngine", () => {
       // 5th: whether the voice was recognised, gating the restricted devices.
       true,
       // 6th: WHO was recognised, for the groups taken away from that person.
-      "user-1"
+      "user-1",
+      // 7th: what sprawdz_pamiec reads. `allowPersonal` has to travel with it —
+      // the tool must not become a way around the gate the prompt block obeys.
+      expect.objectContaining({ userId: "user-1", allowPersonal: true })
     );
     expect(result.response).toBe("The light is on");
     expect(result.toolsUsed).toEqual(["get_state"]);

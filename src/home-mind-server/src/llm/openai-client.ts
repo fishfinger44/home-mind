@@ -11,7 +11,7 @@ import { buildSystemPromptText } from "./prompts.js";
 import { TOOL_DEFINITIONS, toOpenAITools } from "./tool-definitions.js";
 import { handleToolCall, extractAndStoreFacts, recallFacts } from "./tool-handler.js";
 import { trustsProfile } from "./interface.js";
-import type { WebSearchSettings } from "./tool-handler.js";
+import type { WebSearchSettings, KontekstPamieci } from "./tool-handler.js";
 import type {
   ChatRequest,
   ChatResponse,
@@ -154,6 +154,14 @@ export class OpenAIChatEngine implements IChatEngine {
       trustedIdentity,
       SHARED_PROFILE_ID
     );
+    // Same gate as the block above — see the note in gemini-client.ts.
+    const kontekstPamieci: KontekstPamieci = {
+      memory: this.memory,
+      userId,
+      limit: request.memoryTokenLimit ?? this.config.memoryTokenLimit,
+      allowPersonal: trustedIdentity,
+      sharedUserId: SHARED_PROFILE_ID,
+    };
     if (this.config.logLevel === "debug") {
       const approxTokens = Math.ceil(factContents.join(" ").length / 4);
       console.debug(
@@ -248,7 +256,7 @@ export class OpenAIChatEngine implements IChatEngine {
         const toolResult = await handleToolCall(this.ha, tc.function.name, args, {
           mode: request.webSearchMode ?? this.config.webSearchMode,
           searchApiKey: this.config.geminiSearchApiKey,
-        } satisfies WebSearchSettings, trustedIdentity, request.userId);
+        } satisfies WebSearchSettings, trustedIdentity, request.userId, kontekstPamieci);
         return {
           role: "tool" as const,
           tool_call_id: tc.id,

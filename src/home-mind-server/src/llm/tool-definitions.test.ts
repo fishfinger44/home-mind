@@ -7,8 +7,8 @@ import {
 } from "./tool-definitions.js";
 
 describe("TOOL_DEFINITIONS", () => {
-  it("has 7 tools", () => {
-    expect(TOOL_DEFINITIONS).toHaveLength(7);
+  it("has 8 tools", () => {
+    expect(TOOL_DEFINITIONS).toHaveLength(8);
   });
 
   it("has the expected tool names", () => {
@@ -21,6 +21,7 @@ describe("TOOL_DEFINITIONS", () => {
       "get_history",
       "web_search",
       "zaplanuj_trase",
+      "sprawdz_pamiec",
     ]);
   });
 
@@ -39,7 +40,7 @@ describe("toAnthropicTools", () => {
   it("converts to Anthropic format with input_schema", () => {
     const result = toAnthropicTools(TOOL_DEFINITIONS);
 
-    expect(result).toHaveLength(7);
+    expect(result).toHaveLength(TOOL_DEFINITIONS.length);
     for (const tool of result) {
       expect(tool).toHaveProperty("name");
       expect(tool).toHaveProperty("description");
@@ -64,7 +65,7 @@ describe("toOpenAITools", () => {
   it("wraps in function type", () => {
     const result = toOpenAITools(TOOL_DEFINITIONS);
 
-    expect(result).toHaveLength(7);
+    expect(result).toHaveLength(TOOL_DEFINITIONS.length);
     for (const tool of result) {
       expect(tool.type).toBe("function");
       const fn = (tool as any).function;
@@ -93,7 +94,7 @@ describe("toGeminiTools", () => {
   it("wraps declarations in a functionDeclarations block", () => {
     const { functionDeclarations } = toGeminiTools(TOOL_DEFINITIONS);
 
-    expect(functionDeclarations).toHaveLength(7);
+    expect(functionDeclarations).toHaveLength(TOOL_DEFINITIONS.length);
     for (const fn of functionDeclarations) {
       expect(typeof fn.name).toBe("string");
       expect(typeof fn.description).toBe("string");

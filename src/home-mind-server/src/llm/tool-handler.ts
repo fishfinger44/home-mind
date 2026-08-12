@@ -482,7 +482,13 @@ export async function handleToolCall(
    * household member specifically may not touch. Undefined means "we only
    * know it was somebody known", which keeps the old, group-wide behaviour.
    */
-  mowca?: string
+  mowca?: string,
+  /**
+   * What `sprawdz_pamiec` reads. Absent means the engine has not wired memory
+   * in, and the tool says so instead of quietly answering "nothing found" —
+   * see `sprawdzPamiec`.
+   */
+  pamiec?: KontekstPamieci
 ): Promise<unknown> {
   const start = Date.now();
   console.log(`[tool] ${toolName} called with: ${JSON.stringify(input)}`);
@@ -570,6 +576,10 @@ export async function handleToolCall(
           kiedy: input.kiedy ? String(input.kiedy) : undefined,
           kiedyZnaczy: input.kiedy_znaczy === "przyjazd" ? "przyjazd" : "wyjazd",
         });
+        break;
+      }
+      case "sprawdz_pamiec": {
+        result = await sprawdzPamiec(input.czego_szukasz, pamiec);
         break;
       }
       default:
@@ -710,6 +720,88 @@ export function entityIdFrom(input: Record<string, unknown>): string | undefined
   if (Array.isArray(fromData)) return fromData.join(",");
 
   return undefined;
+}
+
+/**
+ * Everything `sprawdz_pamiec` needs to read memory as the speaker, and not as
+ * somebody with more rights than them.
+ *
+ * It carries the same four things `recallFacts` is given for the prompt block,
+ * because the tool must land on exactly the same permission gate: a household
+ * member whose personal facts are withheld from the prompt must not get them
+ * back by having the model ask for them.
+ */
+export interface KontekstPamieci {
+  memory: IMemoryStore;
+  userId: string;
+  limit: number;
+  allowPersonal: boolean;
+  sharedUserId?: string;
+}
+
+/**
+ * The model's way back to memory after the prompt block missed.
+ *
+ * The block is chosen by similarity to what was said, and similarity does not
+ * see every connection that matters: "zrób mi kawę" does not pull "Lech nie
+ * pije kawy po 18:00" — measured, at every window size we tried. Before this
+ * tool a miss like that was final for the turn, and the assistant would
+ * cheerfully make the coffee. Now it costs one extra call.
+ *
+ * Two failure modes are deliberately kept apart, because collapsing them is
+ * how an assistant starts inventing: **nothing found** is not **could not
+ * look**. Both come back as prose telling the model what it may conclude, since
+ * "no facts" as an empty list reads to a model as permission to assume the
+ * habit does not exist.
+ */
+export async function sprawdzPamiec(
+  czegoSzukasz: unknown,
+  pamiec?: KontekstPamieci
+): Promise<{ fakty: string[]; uwaga: string }> {
+  const zapytanie = typeof czegoSzukasz === "string" ? czegoSzukasz.trim() : "";
+
+  if (!zapytanie) {
+    return {
+      fakty: [],
+      uwaga:
+        "Nie podano, czego szukac. Zawolaj ponownie z opisem tematu, np. 'kawa wieczorem'.",
+    };
+  }
+
+  if (!pamiec) {
+    return {
+      fakty: [],
+      uwaga:
+        "Pamiec jest w tej chwili niedostepna — to awaria, a NIE informacja, ze nic nie wiadomo. " +
+        "Powiedz, ze nie mozesz sprawdzic, i nie zakladaj niczego o przyzwyczajeniach.",
+    };
+  }
+
+  const fakty = await recallFacts(
+    pamiec.memory,
+    pamiec.userId,
+    zapytanie,
+    undefined,
+    pamiec.limit,
+    pamiec.allowPersonal,
+    pamiec.sharedUserId
+  );
+
+  if (fakty.length === 0) {
+    return {
+      fakty: [],
+      uwaga:
+        "Nic nie znaleziono na ten temat. To znaczy 'nie wiem', a nie 'nie ma takiego zwyczaju' — " +
+        "nie zmyslaj faktu i nie twierdz, ze czegos nie ma.",
+    };
+  }
+
+  return {
+    fakty,
+    uwaga:
+      "Fakty uszeregowane od najbardziej zwiazanych z zapytaniem. Data w nawiasie mowi, KIEDY sie tego dowiedziano — " +
+      "przy wieku, rozmiarach i innych rzeczach zmiennych w czasie licz od niej, a nie od dzisiaj.",
+  };
 }
 
 export async function recallFacts(

@@ -11,7 +11,7 @@ import { buildSystemPrompt, type CachedSystemPrompt } from "./prompts.js";
 import { HA_TOOLS } from "./tools.js";
 import { handleToolCall, extractAndStoreFacts, recallFacts } from "./tool-handler.js";
 import { trustsProfile } from "./interface.js";
-import type { WebSearchSettings } from "./tool-handler.js";
+import type { WebSearchSettings, KontekstPamieci } from "./tool-handler.js";
 import type {
   ChatRequest,
   ChatResponse,
@@ -86,6 +86,14 @@ export class LLMClient implements IChatEngine {
       trustedIdentity,
       SHARED_PROFILE_ID
     );
+    // Same gate as the block above — see the note in gemini-client.ts.
+    const kontekstPamieci: KontekstPamieci = {
+      memory: this.memory,
+      userId,
+      limit: request.memoryTokenLimit ?? this.config.memoryTokenLimit,
+      allowPersonal: trustedIdentity,
+      sharedUserId: SHARED_PROFILE_ID,
+    };
     if (this.config.logLevel === "debug") {
       const approxTokens = Math.ceil(factContents.join(" ").length / 4);
       console.debug(
@@ -160,7 +168,8 @@ export class LLMClient implements IChatEngine {
             searchApiKey: this.config.geminiSearchApiKey,
           } satisfies WebSearchSettings,
           trustedIdentity,
-          request.userId
+          request.userId,
+          kontekstPamieci
         );
         return {
           type: "tool_result" as const,

@@ -176,6 +176,32 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ["dokad"],
     },
   },
+  // Po polsku z tego samego powodu co zaplanuj_trase: fakty w tej bazie sa
+  // zapisywane po polsku (ekstraktor pisze po polsku), wiec i zapytanie, ktore
+  // model tu ulozy, ma byc polskie — trafnosc liczy sie miedzy zapytaniem a
+  // trescia faktu, a nie miedzy jezykami.
+  {
+    name: "sprawdz_pamiec",
+    description:
+      "Poszukaj w pamieci tego, co wiadomo o domownikach i domu, gdy potrzebujesz czegos, czego nie masz przed soba. " +
+      "Fakty najbardziej zwiazane z rozmowa dostajesz automatycznie — to narzedzie jest na sytuacje, " +
+      "gdy zwiazek jest niebezposredni i moglo go zabraknac. " +
+      "Przyklad: pytanie 'zrob mi kawe' o 22:00 nie przyniesie samo z siebie faktu o niepiciu kawy wieczorem — " +
+      "jesli masz zrobic cos, co moze sie klocic z czyimis przyzwyczajeniami, sprawdz najpierw. " +
+      "Pusta odpowiedz znaczy 'nie wiem', a NIE 'nie ma takiego zwyczaju' — nie zmyslaj wtedy faktu i nie zakladaj, ze czegos nie ma.",
+    parameters: {
+      type: "object",
+      properties: {
+        czego_szukasz: {
+          type: "string",
+          description:
+            "Czego szukasz, wlasnymi slowami po polsku — np. 'kawa wieczorem', 'ulubione swiatlo w salonie', " +
+            "'imiona dzieci'. To jest wyszukiwanie po znaczeniu, wiec opisz TEMAT, a nie powtarzaj calego pytania uzytkownika.",
+        },
+      },
+      required: ["czego_szukasz"],
+    },
+  },
 ];
 
 export function toAnthropicTools(tools: ToolDefinition[]): Anthropic.Tool[] {

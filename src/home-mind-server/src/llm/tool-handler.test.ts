@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { handleToolCall, entityIdFrom, extractAndStoreFacts, filterExtractedFacts, normalizeTimestamp, truncateHistory, recallFacts, resolveSearchMode, groundedGeminiSearch, readBraveQuotaHeaders, QuotaError, suggestionTitle,
   daneUslugi,
   znormalizujWywolanie,
+  sprawdzPamiec,
 } from "./tool-handler.js";
+import type { KontekstPamieci } from "./tool-handler.js";
 import { loadRules, resetRulesCache } from "../rules/store.js";
 import type { HomeAssistantClient } from "../ha/client.js";
 import type { IMemoryStore } from "../memory/interface.js";
@@ -1227,5 +1229,79 @@ describe("daneUslugi", () => {
       service: "log",
       data: { name: "Test", message: "x", domain: "light" },
     });
+  });
+});
+
+describe("sprawdzPamiec", () => {
+  const kontekst = (
+    facts: { content: string; category?: string }[],
+    nadpisz: Partial<KontekstPamieci> = {}
+  ): KontekstPamieci => ({
+    memory: {
+      getFactsWithinTokenLimit: vi.fn().mockResolvedValue(
+        facts.map((f) => ({ category: f.category ?? "preference", ...f }))
+      ),
+    } as unknown as IMemoryStore,
+    userId: "lech",
+    limit: 1500,
+    allowPersonal: true,
+    ...nadpisz,
+  });
+
+  it("finds facts by topic rather than by the whole question", async () => {
+    const ctx = kontekst([{ content: "Lech nie pije kawy po 18:00" }]);
+
+    const wynik = await sprawdzPamiec("kawa wieczorem", ctx);
+
+    expect(wynik.fakty).toEqual(["Lech nie pije kawy po 18:00"]);
+    expect(ctx.memory.getFactsWithinTokenLimit).toHaveBeenCalledWith(
+      "lech",
+      1500,
+      "kawa wieczorem"
+    );
+  });
+
+  // The whole point of the tool is recovering from a miss, so the two ways of
+  // coming back empty must not read alike: one means "there is no such habit",
+  // the other means "I could not look". Collapsing them is how an assistant
+  // starts asserting things it never checked.
+  it("says nothing-found means not-known, not not-so", async () => {
+    const wynik = await sprawdzPamiec("kawa wieczorem", kontekst([]));
+
+    expect(wynik.fakty).toEqual([]);
+    expect(wynik.uwaga).toContain("nie wiem");
+    expect(wynik.uwaga).toContain("nie zmyslaj");
+  });
+
+  it("reports a missing store as a fault, not as an empty memory", async () => {
+    const wynik = await sprawdzPamiec("kawa wieczorem", undefined);
+
+    expect(wynik.fakty).toEqual([]);
+    expect(wynik.uwaga).toContain("awaria");
+  });
+
+  it("asks again instead of searching for nothing", async () => {
+    const ctx = kontekst([{ content: "cokolwiek" }]);
+
+    const wynik = await sprawdzPamiec("   ", ctx);
+
+    expect(wynik.fakty).toEqual([]);
+    expect(ctx.memory.getFactsWithinTokenLimit).not.toHaveBeenCalled();
+  });
+
+  // A speaker whose personal facts are withheld from the prompt must not get
+  // them back by having the model ask for them out loud.
+  it("honours the personal-memory gate the prompt block runs under", async () => {
+    const ctx = kontekst(
+      [
+        { content: "Lech nie pije kawy po 18:00", category: "preference" },
+        { content: "Denon to wzmacniacz w salonie", category: "device" },
+      ],
+      { allowPersonal: false }
+    );
+
+    const wynik = await sprawdzPamiec("kawa wieczorem", ctx);
+
+    expect(wynik.fakty).toEqual(["Denon to wzmacniacz w salonie"]);
   });
 });
