@@ -31,6 +31,13 @@ export interface LlmOverride {
    *  Kept separate from `apiKey` so the conversation can run on a free-tier key
    *  while search — which the free tier does not offer — runs on a paid one. */
   searchApiKey?: string;
+  /** Whether a local reasoning model may think before answering (Ollama only).
+   *
+   *  Absent means "not chosen yet" and falls back to the .env default, which is
+   *  on — the same behaviour as before this switch existed. It is stored per
+   *  override rather than per provider because it only ever applies to Ollama:
+   *  Gemini's OpenAI-compatible endpoint rejects the parameter with a 400. */
+  thinking?: boolean;
 }
 
 /** Only the string entries of an untrusted object — the override file is
@@ -71,6 +78,10 @@ export function loadLlmOverride(): LlmOverride | null {
         ...(typeof data.searchApiKey === "string" && data.searchApiKey
           ? { searchApiKey: data.searchApiKey }
           : {}),
+        // Only a real boolean counts: a file written before this field existed
+        // must stay "not chosen" and keep falling back to the .env default,
+        // rather than being read as an explicit "off".
+        ...(typeof data.thinking === "boolean" ? { thinking: data.thinking } : {}),
       };
     }
   } catch (err) {

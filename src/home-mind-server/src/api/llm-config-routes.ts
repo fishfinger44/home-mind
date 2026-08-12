@@ -12,13 +12,17 @@ export interface LlmController {
     hasApiKey?: boolean;
     /** Whether a separate billed key for `gemini_micro` web search is stored. */
     hasSearchApiKey?: boolean;
+    /** Whether a local reasoning model may think first. Meaningful for Ollama
+     *  only — the hosted providers reject the parameter that carries it. */
+    thinking?: boolean;
   };
   apply: (
     provider: "anthropic" | "openai" | "ollama" | "gemini",
     model: string,
     apiKey?: string,
     baseUrl?: string,
-    searchApiKey?: string
+    searchApiKey?: string,
+    thinking?: boolean
   ) => void;
 }
 
@@ -48,7 +52,7 @@ export function createLlmConfigRouter(
   });
 
   router.post("/config/llm", (req: Request, res: Response) => {
-    const { provider, model, apiKey, baseUrl, searchApiKey } = req.body ?? {};
+    const { provider, model, apiKey, baseUrl, searchApiKey, thinking } = req.body ?? {};
     if (
       (provider !== "anthropic" &&
         provider !== "openai" &&
@@ -59,8 +63,15 @@ export function createLlmConfigRouter(
     ) {
       return res.status(400).json({
         error:
-          "Body must be { provider: 'anthropic'|'openai'|'ollama'|'gemini', model: string, apiKey?, baseUrl?, searchApiKey? }",
+          "Body must be { provider: 'anthropic'|'openai'|'ollama'|'gemini', model: string, apiKey?, baseUrl?, searchApiKey?, thinking? }",
       });
+    }
+    // Only a real boolean is a choice. Anything else (absent, null, a string)
+    // leaves the stored setting alone rather than resetting it — otherwise a
+    // client that does not know about the field would silently clear it on
+    // every model change.
+    if (thinking !== undefined && typeof thinking !== "boolean") {
+      return res.status(400).json({ error: "`thinking` must be a boolean when present" });
     }
     const key = typeof apiKey === "string" && apiKey.trim() ? apiKey.trim() : undefined;
     const url = typeof baseUrl === "string" && baseUrl.trim() ? baseUrl.trim() : undefined;
@@ -68,7 +79,7 @@ export function createLlmConfigRouter(
     const searchKey =
       typeof searchApiKey === "string" && searchApiKey.trim() ? searchApiKey.trim() : undefined;
     try {
-      controller.apply(provider, model.trim(), key, url, searchKey);
+      controller.apply(provider, model.trim(), key, url, searchKey, thinking);
     } catch (err) {
       return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }

@@ -60,7 +60,7 @@
           "model": "For Ollama the list shows what is installed on the machine, with the VRAM each model needs. Entries marked DO POBRANIA are not downloaded yet — pull one first (`docker exec home-mind-ollama ollama pull <model>`), otherwise the first request fails. A model larger than the card still runs: Ollama moves the rest to system RAM and it becomes several times slower.",
           "base_url": "For the OpenAI-compatible provider, and for Ollama when it runs on another machine (default: the Ollama container next to the server). Keep the suggested value unless you know you need a different endpoint.",
           "search_api_key": "Only needed for the gemini_micro search mode. Key of a Google project WITH billing — it pays for search only (5000 grounded queries/month are included), while the conversation keeps running on the key above. Leave blank to keep the stored one.",
-          "thinking": "Lets the model reason before answering. Turn it OFF if the assistant goes silent or takes tens of seconds: a reasoning model can spend its ENTIRE output budget on an internal monologue and return nothing at all (measured on qwen3.5: 1200 of 1200 tokens, empty content). Ollama only — hosted providers reject the setting that carries it."
+          "thinking": "Lets the model reason before answering. Turn it OFF if the assistant goes silent or takes tens of seconds: a reasoning model can spend its ENTIRE output budget on an internal monologue and return nothing at all. Ollama only - hosted providers reject the setting."
         }
       }
     }

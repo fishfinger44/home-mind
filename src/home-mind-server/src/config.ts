@@ -28,6 +28,22 @@ const ConfigSchema = z
     // Nothing detects this — a model that does not fit still runs, just partly
     // on the CPU and several times slower, which is the trap worth flagging.
     ollamaVramGb: z.coerce.number().positive().optional(),
+    // Whether a reasoning model may "think" before answering. Ollama only.
+    //
+    // Left on, qwen3.5 spends the WHOLE output budget on an internal monologue
+    // and returns empty content — 1200/1200 tokens with nothing to say, which
+    // arrives here as EMPTY_CONTENT and looks like a broken model. Measured:
+    // 6290 tokens of monologue on "what's the weather on Sunday".
+    //
+    // The switch is Ollama-only on purpose: Gemini's OpenAI-compatible endpoint
+    // rejects `reasoning_effort` outright (HTTP 400 INVALID_ARGUMENT), so
+    // sending it to the cloud would break every request. Note also that
+    // `think: false` — which works on Ollama's native /api/chat — is silently
+    // IGNORED on /v1, and /v1 is the endpoint this server uses.
+    llmThinking: z
+      .string()
+      .optional()
+      .transform((v) => v !== "false"),
 
     // Home Assistant
     haUrl: z.string().url("HA_URL must be a valid URL"),
@@ -131,6 +147,7 @@ export function loadConfig(): Config {
     openaiMaxTokens: emptyToUndefined(process.env.OPENAI_MAX_TOKENS),
     ollamaBaseUrl: emptyToUndefined(process.env.OLLAMA_BASE_URL),
     ollamaVramGb: emptyToUndefined(process.env.OLLAMA_VRAM_GB),
+    llmThinking: emptyToUndefined(process.env.LLM_THINKING),
     haUrl: process.env.HA_URL,
     haToken: process.env.HA_TOKEN,
     haSkipTlsVerify: process.env.HA_SKIP_TLS_VERIFY,

@@ -64,7 +64,16 @@ let storedOverride = loadLlmOverride();
 // override omits a key, the provider's key falls back to .env.
 function buildActiveConfig() {
   if (!storedOverride) return config;
-  const c = { ...config, llmProvider: storedOverride.provider, llmModel: storedOverride.model };
+  const c = {
+    ...config,
+    llmProvider: storedOverride.provider,
+    llmModel: storedOverride.model,
+    // Undefined means the switch was never touched — keep the .env default
+    // rather than reading "no choice" as "off".
+    ...(typeof storedOverride.thinking === "boolean"
+      ? { llmThinking: storedOverride.thinking }
+      : {}),
+  };
   if (storedOverride.apiKey) {
     if (storedOverride.provider === "anthropic") c.anthropicApiKey = storedOverride.apiKey;
     // "gemini" (native) reuses openaiApiKey as its Gemini key, like "openai".
@@ -145,7 +154,8 @@ function applyLlm(
   model: string,
   apiKey?: string,
   baseUrl?: string,
-  searchApiKey?: string
+  searchApiKey?: string,
+  thinking?: boolean
 ): void {
   // Keys and base URLs are remembered per provider, so switching away and back
   // — including a trip through a local model — returns to the same credentials
@@ -165,6 +175,9 @@ function applyLlm(
     // The search key belongs to a different project than the chat key, so it
     // survives a provider switch — it is not tied to the selected provider.
     searchApiKey: searchApiKey ?? storedOverride?.searchApiKey,
+    // Remembered across provider switches, like the keys: going Ollama →
+    // Gemini → Ollama must not silently turn the monologue back on.
+    thinking: thinking ?? storedOverride?.thinking,
   };
   activeConfig = buildActiveConfig();
   currentExtractor = createFactExtractor(activeConfig);
@@ -173,7 +186,10 @@ function applyLlm(
   );
   saveLlmOverride(storedOverride);
   console.log(
-    `  LLM switched -> ${provider}/${model}${apiKey ? " (custom key updated)" : ""}`
+    `  LLM switched -> ${provider}/${model}${apiKey ? " (custom key updated)" : ""}` +
+      (provider === "ollama"
+        ? `, myslenie: ${activeConfig.llmThinking ? "wlaczone" : "wylaczone"}`
+        : "")
   );
 }
 
@@ -255,6 +271,7 @@ app.use(
             ? !!activeConfig.openaiApiKey
             : true,
       hasSearchApiKey: !!activeConfig.geminiSearchApiKey,
+      thinking: activeConfig.llmThinking,
     }),
     apply: applyLlm,
   },

@@ -379,6 +379,16 @@ export class OpenAIChatEngine implements IChatEngine {
       // Keep the tool list in the request (history already references it) but
       // stop the model from issuing more calls.
       ...(disableTools ? { tool_choice: "none" as const } : {}),
+      // Stop a local reasoning model from spending the whole output budget on
+      // an internal monologue. Measured on qwen3.5:2b: left alone it burned
+      // 1200/1200 tokens and returned EMPTY content; with this it answered in
+      // 5.8 s. Ollama-only by necessity — Gemini's OpenAI-compatible endpoint
+      // rejects `reasoning_effort` with 400 INVALID_ARGUMENT, so sending it to
+      // a hosted provider would break every request. (`think: false`, which
+      // works on Ollama's native /api/chat, is ignored on /v1.)
+      ...(this.config.llmProvider === "ollama" && !this.config.llmThinking
+        ? { reasoning_effort: "none" as const }
+        : {}),
       stream: true,
       stream_options: { include_usage: true },
     });

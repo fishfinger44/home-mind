@@ -352,6 +352,7 @@ class OptionsFlow(config_entries.OptionsFlow):
         api_key: str | None = None,
         base_url: str | None = None,
         search_api_key: str | None = None,
+        thinking: bool | None = None,
     ) -> None:
         api_url, headers = self._endpoints()
         session = async_get_clientsession(self.hass)
@@ -362,6 +363,11 @@ class OptionsFlow(config_entries.OptionsFlow):
             payload["baseUrl"] = base_url
         if search_api_key:
             payload["searchApiKey"] = search_api_key
+        # Sent only when the form actually offered the switch (Ollama). Omitting
+        # it leaves the stored setting alone, which is what an older server —
+        # one that does not know the field — needs too.
+        if thinking is not None:
+            payload["thinking"] = thinking
         async with session.post(
             f"{api_url}{API_CONFIG_LLM_ENDPOINT}",
             headers=headers,
@@ -465,6 +471,7 @@ class OptionsFlow(config_entries.OptionsFlow):
                     base_url=(user_input.get("base_url") or "").strip() or None,
                     search_api_key=(user_input.get("search_api_key") or "").strip()
                     or None,
+                    thinking=user_input.get("thinking"),
                 )
             except Exception:  # pylint: disable=broad-except
                 errors["base"] = "cannot_connect"
@@ -526,6 +533,19 @@ class OptionsFlow(config_entries.OptionsFlow):
             schema_dict[vol.Optional("api_key")] = TextSelector(
                 TextSelectorConfig(type=TextSelectorType.PASSWORD)
             )
+        # Deep thinking: offered for local models only. A reasoning model left to
+        # think can spend its entire output budget on an internal monologue and
+        # return nothing at all — measured on qwen3.5, 1200 of 1200 tokens with
+        # no answer. The hosted providers are deliberately not offered it: the
+        # parameter that carries the setting is rejected by Gemini with a 400.
+        if is_ollama:
+            thinking_default = self._current.get("thinking")
+            schema_dict[
+                vol.Optional(
+                    "thinking",
+                    default=True if thinking_default is None else bool(thinking_default),
+                )
+            ] = BooleanSelector()
         # The search key belongs to the web-search backend, not to the chat
         # provider — a local model still searches through it.
         schema_dict[vol.Optional("search_api_key")] = TextSelector(
