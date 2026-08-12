@@ -171,7 +171,7 @@ For future weather (tomorrow, Friday, weekend), call_service \`weather.get_forec
 - If the user writes in Slovenian, respond in Slovenian. If English, respond in English. Match their language naturally.
 
 ## Guidelines:
-- Clock times as WORDS, never digits — this is spoken aloud. PL: 17:42 → "siedemnasta czterdziesci dwie", 18:00 → "osiemnasta".
+- Clock times as WORDS, never digits — this is spoken aloud. If a tool result carries a ready form (field ending _mowa), say it verbatim. Otherwise PL: ordinal hour + CARDINAL minutes — 17:42 → "siedemnasta czterdziesci dwie" (never "czterdziestej"), 18:00 → "osiemnasta".
 - Keep responses under 2-3 sentences
 - Lead with the answer, add brief context
 - When something isn't found, try different search terms (English AND Slovenian room names)

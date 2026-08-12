@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   czasZapytania,
   godzina,
+  godzinaSlownie,
   sformatujTrasy,
   zaplanujTrase,
   type KrokPrzejazdu,
@@ -71,8 +72,10 @@ describe("sformatujTrasy", () => {
       typ: "autobus",
       wsiadz: "Waniliowa",
       o: "17:18",
+      o_mowa: "o siedemnastej osiemnaście",
       wysiadz: "Rynek",
       przyjazd: "17:40",
+      przyjazd_mowa: "o siedemnastej czterdzieści",
       przystankow: 9,
     });
   });
@@ -257,6 +260,52 @@ describe("godzina", () => {
   it("zly znacznik czasu nie wysadza formatowania", () => {
     expect(godzina("nie-data")).toBeUndefined();
     expect(godzina(undefined)).toBeUndefined();
+  });
+});
+
+describe("godzinaSlownie", () => {
+  beforeEach(() => {
+    process.env.TZ = "Europe/Warsaw";
+  });
+
+  /** Blad, dla ktorego ta funkcja powstala: model mowil "czterdziestej piec". */
+  it("minuty sa liczebnikiem GLOWNYM, nie porzadkowym", () => {
+    expect(godzinaSlownie("2026-08-11T21:45:00Z")).toBe(
+      "o dwudziestej trzeciej czterdzieści pięć"
+    );
+  });
+
+  it("pelna godzina nie mowi 'zero zero'", () => {
+    expect(godzinaSlownie("2026-08-11T16:00:00Z")).toBe("o osiemnastej");
+  });
+
+  /** Minuty sa zenskie ("dwie minuty"), wiec nie "czterdziesci dwa". */
+  it("dwojka w minutach jest zenska", () => {
+    expect(godzinaSlownie("2026-08-11T15:42:00Z")).toBe(
+      "o siedemnastej czterdzieści dwie"
+    );
+    expect(godzinaSlownie("2026-08-11T20:22:00Z")).toBe(
+      "o dwudziestej drugiej dwadzieścia dwie"
+    );
+  });
+
+  it("nastki nie sklejaja sie z dziesiatkami", () => {
+    expect(godzinaSlownie("2026-08-11T19:19:00Z")).toBe(
+      "o dwudziestej pierwszej dziewiętnaście"
+    );
+  });
+
+  it("minuty jednocyfrowe dostaja 'zero'", () => {
+    expect(godzinaSlownie("2026-08-11T06:05:00Z")).toBe("o ósmej zero pięć");
+  });
+
+  it("polnoc to godzina zerowa", () => {
+    expect(godzinaSlownie("2026-08-11T22:30:00Z")).toBe("o zerowej trzydzieści");
+  });
+
+  it("zly znacznik czasu nie wysadza formatowania", () => {
+    expect(godzinaSlownie("nie-data")).toBeUndefined();
+    expect(godzinaSlownie(undefined)).toBeUndefined();
   });
 });
 
