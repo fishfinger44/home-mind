@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { ShodhMemoryClient, ShodhMemoryStore } from "./shodh-client.js";
-import type { FactCategory } from "./types.js";
+import { ShodhMemoryClient, ShodhMemoryStore, wybierzPoTrafnosci } from "./shodh-client.js";
+import type { Fact, FactCategory } from "./types.js";
 
 // Mock fetch globally
 const mockFetch = vi.fn();
@@ -186,6 +186,25 @@ describe("ShodhMemoryClient", () => {
       const body = JSON.parse(lastCall[1].body);
       expect(body.query).toBe("all memories");
     });
+
+    it("warns when the relevance window fills up", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const memories = Array.from({ length: 2 }, (_, i) => ({
+        id: `mem-${i}`,
+        experience: { content: `Memory ${i}`, memory_type: "Observation", tags: [] },
+        importance: 0.5,
+        created_at: "2026-01-25T10:00:00Z",
+      }));
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ memories, count: memories.length }),
+      });
+
+      await client.recall("user-1", "kawa", 2);
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("relevance window"));
+      warn.mockRestore();
+    });
   });
 
   describe("reinforce", () => {
@@ -309,6 +328,64 @@ describe("ShodhMemoryClient", () => {
           }),
         })
       );
+    });
+
+    it("asks for the whole fact set when no limit is given", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ memories: [], count: 0 }),
+      });
+
+      await client.recallByTags("user-1");
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.limit).toBeGreaterThanOrEqual(5000);
+    });
+
+    // The endpoint has no pagination and returns facts in arbitrary order, so a
+    // full window is not "the first N" — it is N of them at random, with the
+    // rest invisible. Nothing in the response says it was cut, which is exactly
+    // how this failed before: the assistant forgets, the log stays clean.
+    it("warns when the answer comes back the size of the question", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const memories = Array.from({ length: 3 }, (_, i) => ({
+        id: `mem-${i}`,
+        experience: { content: `Fact ${i}`, memory_type: "Preference", tags: ["home-mind"] },
+        importance: 0.8,
+        created_at: "2026-01-25T10:00:00Z",
+      }));
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ memories, count: memories.length }),
+      });
+
+      await client.recallByTags("user-1", 3);
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("filled its window"));
+      warn.mockRestore();
+    });
+
+    it("stays quiet when the fact set fits", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          memories: [
+            {
+              id: "mem-1",
+              experience: { content: "Fact", memory_type: "Preference", tags: ["home-mind"] },
+              importance: 0.8,
+              created_at: "2026-01-25T10:00:00Z",
+            },
+          ],
+          count: 1,
+        }),
+      });
+
+      await client.recallByTags("user-1", 3);
+
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
     });
   });
 
@@ -783,5 +860,68 @@ describe("Integration tests (requires running Shodh)", () => {
       // Cleanup
       await client.forget(testUser, id);
     });
+  });
+});
+
+describe("wybierzPoTrafnosci", () => {
+  const fakt = (id: string, trafnosc?: number): Fact => ({
+    id,
+    userId: "lech",
+    content: `fakt ${id}`,
+    category: "preference",
+    confidence: 1,
+    createdAt: new Date("2026-08-01"),
+    lastUsed: new Date("2026-08-01"),
+    useCount: 0,
+    trafnosc,
+  });
+
+  // Real distribution for "picie kawy": the coffee fact leads at 0.61, the rest
+  // trail off. Half of 0.61 is 0.305, so the tail below that goes.
+  it("keeps the band below a confident best match", () => {
+    const wybrane = wybierzPoTrafnosci([
+      fakt("kawa", 0.61),
+      fakt("pies", 0.45),
+      fakt("muzyka", 0.39),
+      fakt("swiatlo", 0.34),
+      fakt("imie", 0.29),
+      fakt("netflix", 0.1),
+    ]);
+
+    expect(wybrane.map((f) => f.id)).toEqual(["kawa", "pies", "muzyka", "swiatlo"]);
+  });
+
+  // This is the case the whole shape exists for. "Zrób mi kawę" scores 0.204 at
+  // best and does not rank the coffee fact at all. Filtering on that ranking
+  // would drop the one fact that matters — so nothing is filtered.
+  it("sends everything when the question was not understood", () => {
+    const fakty = [fakt("pierogi", 0.204), fakt("muzyka", 0.168), fakt("kawa", undefined)];
+
+    expect(wybierzPoTrafnosci(fakty)).toEqual(fakty);
+  });
+
+  // 0.303 is the measured top score for a question about something this house
+  // has no memory of. It must land on the "do not filter" side.
+  it("treats a noise-level best match as not understood", () => {
+    const fakty = [fakt("pies", 0.303), fakt("imie", 0.282), fakt("muzyka", 0.247)];
+
+    expect(wybierzPoTrafnosci(fakty)).toHaveLength(3);
+  });
+
+  it("filters nothing when no fact was scored at all", () => {
+    const fakty = [fakt("a"), fakt("b"), fakt("c")];
+
+    expect(wybierzPoTrafnosci(fakty)).toEqual(fakty);
+  });
+
+  // An unscored fact is only evidence of irrelevance if the scoring worked.
+  it("drops unscored facts only once the ranking is credible", () => {
+    const wybrane = wybierzPoTrafnosci([
+      fakt("trafiony", 0.61),
+      fakt("slaby", 0.2),
+      fakt("nieoceniony", undefined),
+    ]);
+
+    expect(wybrane.map((f) => f.id)).toEqual(["trafiony"]);
   });
 });

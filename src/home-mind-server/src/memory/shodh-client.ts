@@ -31,6 +31,17 @@ const SHODH_TYPE_TO_CATEGORY: Record<string, FactCategory> = {
   Success: "pattern",
 };
 
+/**
+ * How many tagged facts we ask for in one go.
+ *
+ * Generous on purpose: depth is free here. The tag endpoint is an index read,
+ * and it does not care how deep we go — measured on this household at 2.3 ms
+ * for a limit of 100, 1000 and 5000 alike. The old value of 100 was not a
+ * budget, it was a guess, and it was the kind of guess that stops working
+ * without saying so once the fact set outgrows it.
+ */
+const FACT_SET_LIMIT = 5000;
+
 interface ShodhExperience {
   content: string;
   memory_type: string;
@@ -207,6 +218,15 @@ export class ShodhMemoryClient {
       }
     );
 
+    if (response.memories.length >= limit) {
+      console.warn(
+        `[shodh] relevance window for ${userId} filled (${limit}) — anything ranked ` +
+          `below it was not considered. Unlike tag recall this degrades gently ` +
+          `(the window holds the best matches), but a fact can still sit outside it ` +
+          `when the store is mostly non-facts. Raise RELEVANCE_WINDOW.`
+      );
+    }
+
     return response.memories.map((mem) => this.toFact(mem, userId));
   }
 
@@ -243,13 +263,35 @@ export class ShodhMemoryClient {
 
   /**
    * Recall memories by tags using Shodh's /api/recall/tags endpoint.
+   *
+   * The endpoint has no pagination — `offset`, `skip`, `page` and `cursor` are
+   * all accepted and all ignored (measured: every variant returned the same
+   * full set). So the only way to fetch the whole fact set is to ask
+   * for more than it holds, and the only way to know we failed is to notice
+   * that the answer came back exactly the size of the question.
+   *
+   * That check is the point of this function. The endpoint returns facts in a
+   * non-deterministic order — the same request twice puts a different fact
+   * first — so a truncated answer is not "the oldest N" or "the strongest N",
+   * it is an arbitrary N, and the fact that goes missing changes between
+   * calls. Silently. This is why the caller gets a warning rather than a
+   * shorter list.
    */
-  async recallByTags(userId: string, limit: number = 50): Promise<Fact[]> {
+  async recallByTags(userId: string, limit: number = FACT_SET_LIMIT): Promise<Fact[]> {
     const response = await this.request<ShodhRecallByTagsResponse>(
       "/api/recall/tags",
       "POST",
       { user_id: userId, tags: ["home-mind"], limit }
     );
+
+    if (response.memories.length >= limit) {
+      console.warn(
+        `[shodh] tag recall for ${userId} filled its window (${limit}) — the fact ` +
+          `set is at least this big and some of it is not being read. Facts are ` +
+          `returned in arbitrary order, so which ones are missing varies per call. ` +
+          `Raise FACT_SET_LIMIT.`
+      );
+    }
 
     return response.memories.map((mem) => this.toFact(mem, userId));
   }
@@ -332,6 +374,9 @@ export class ShodhMemoryClient {
       createdAt: new Date(mem.created_at),
       lastUsed: mem.last_accessed ? new Date(mem.last_accessed) : new Date(mem.created_at),
       useCount: mem.access_count || 0,
+      // Only /api/recall carries a score; the tag endpoint has no question to
+      // score against. Kept undefined rather than 0 in that case — see `Fact`.
+      trafnosc: typeof mem.score === "number" ? mem.score : undefined,
     };
   }
 }
@@ -348,8 +393,83 @@ export class ShodhMemoryClient {
  * position 4, and for "czy mogę napić się kawy o dwudziestej" at position 15.
  * A window of 20 would have dropped the second one. Nothing is paid for the
  * extra depth — the intersection throws the non-facts away regardless.
+ *
+ * "Nothing is paid" is now measured rather than assumed: the query costs the
+ * same at a window of 100, 500 and 2000 (~100 ms, flat). Practically all of it
+ * is embedding the question, which is a fixed cost — the search behind it does
+ * not show up. So the window is set to cover a store far larger than today's,
+ * because a window that is too small fails the same silent way the tag cap did:
+ * the relevant fact is simply not in the slice, and nothing says so.
+ *
+ * Shodh can filter by tag server-side (`tags` on /api/recall), which would make
+ * this window cheaper still — and we deliberately do not use it. Measured
+ * against the client-side intersection on four questions, it disagreed on two:
+ * it dropped one tagged fact outright for "ile lat ma mój syn" (10 vs 11) and
+ * reordered the set for "co lubię jeść". Membership stays on our side, where it
+ * is decided by an explicit set intersection we can reason about.
  */
-const RELEVANCE_WINDOW = 100;
+const RELEVANCE_WINDOW = 2000;
+
+/**
+ * How good the best match has to be before we believe the ranking understood
+ * the question at all.
+ *
+ * Below this the whole ranking is noise, and we send everything instead of
+ * filtering. Measured on this household — the top score when the question
+ * genuinely landed, against the top score when nothing in memory was relevant:
+ *
+ *   landed:  0.610 "picie kawy" · 0.476 "jak głośno gra muzyka"
+ *            0.467 "ile lat ma mój syn" · 0.362 "co lubię jeść"
+ *            0.328 "zapal światło w salonie"
+ *   noise:   0.303 "hodowla alpak" (nothing about alpacas exists)
+ *            0.204 "zrób mi kawę" · 0.164 "kawa wieczorem"
+ *
+ * The two groups nearly touch (0.328 against 0.303), so this cannot be used to
+ * judge individual facts — that was tried and it does not separate them. It is
+ * only good enough for the coarser question of whether to filter at all, and
+ * the value sits above the overlap on purpose: a question we are unsure about
+ * is treated as not understood, and nothing is withheld.
+ */
+const PROG_ZAUFANIA = 0.35;
+
+/**
+ * How far below the best match a fact may sit and still be sent.
+ *
+ * Safe to set anywhere in this range, which is the surprising part: when a
+ * fact is the right answer it does not sit mid-tail, it sits at the top. The
+ * expected fact came back at position 1 or 2 and at 99–100% of the best score
+ * in every question that scored it at all. So this number decides how much
+ * unrelated background goes out, and not whether the answer survives.
+ */
+const PASMO_TRAFNOSCI = 0.5;
+
+/**
+ * Pick the facts worth putting in the prompt.
+ *
+ * The rule that matters is not the band — it is that the band only applies
+ * when the ranking is credible. Relevance here is bimodal: either the fact
+ * that answers the question is ranked first, or it is **not ranked at all**.
+ * "Zrób mi kawę" does not rank "Lech nie pije kawy po 18:00" anywhere, at any
+ * window size we tried. So a filter that simply kept the top of every ranking
+ * would have thrown that fact out of a prompt it currently reaches — inventing
+ * the exact failure the filter exists to prevent, and doing it to the example
+ * that motivated the whole feature.
+ *
+ * Hence: filter when the question was clearly understood, send everything when
+ * it was not. Facts that the query never scored are kept in the second case
+ * and dropped in the first, which is the same principle read twice — an
+ * unscored fact is only evidence of irrelevance if the scoring was working.
+ */
+export function wybierzPoTrafnosci(fakty: Fact[]): Fact[] {
+  const oceniona = fakty.filter((f) => typeof f.trafnosc === "number");
+  if (oceniona.length === 0) return fakty;
+
+  const czolowka = Math.max(...oceniona.map((f) => f.trafnosc!));
+  if (czolowka < PROG_ZAUFANIA) return fakty;
+
+  const prog = czolowka * PASMO_TRAFNOSCI;
+  return fakty.filter((f) => typeof f.trafnosc === "number" && f.trafnosc >= prog);
+}
 
 /**
  * Memory store that uses Shodh for long-term facts and in-memory storage
@@ -374,7 +494,7 @@ export class ShodhMemoryStore {
    * Get all facts for a user using semantic recall
    */
   async getFacts(userId: string): Promise<Fact[]> {
-    return this.shodh.recallByTags(userId, 100);
+    return this.shodh.recallByTags(userId);
   }
 
   /**
@@ -411,7 +531,7 @@ export class ShodhMemoryStore {
     currentContext?: string
   ): Promise<Fact[]> {
     // Baseline: every fact tagged home-mind for this user
-    const tagFactsPromise = this.shodh.recallByTags(userId, 100);
+    const tagFactsPromise = this.shodh.recallByTags(userId);
     // Relevance boost when we have a query (tolerate failure)
     const relevantPromise = currentContext
       ? this.shodh.recall(userId, currentContext, RELEVANCE_WINDOW).catch((err) => {
@@ -432,7 +552,9 @@ export class ShodhMemoryStore {
       const fact = tagged.get(hit.id);
       if (!fact || seen.has(fact.id)) continue;
       seen.add(fact.id);
-      merged.push(fact);
+      // The tag copy has no score — carry the ranked copy's across, it is the
+      // only place the question's verdict on this fact exists.
+      merged.push({ ...fact, trafnosc: hit.trafnosc });
     }
     for (const fact of tagFacts) {
       if (seen.has(fact.id)) continue;
@@ -440,21 +562,34 @@ export class ShodhMemoryStore {
       merged.push(fact);
     }
 
+    const wybrane = wybierzPoTrafnosci(merged);
+
     // Trim to token budget (rough 4-char/token estimate)
     const result: Fact[] = [];
     let tokenCount = 0;
     const charsPerToken = 4;
 
-    for (const fact of merged) {
+    for (const fact of wybrane) {
       const factTokens = Math.ceil(fact.content.length / charsPerToken);
       if (tokenCount + factTokens > maxTokens) break;
       result.push(fact);
       tokenCount += factTokens;
     }
 
-    // Reinforce retrieved facts (Hebbian learning) - batch operation
-    if (result.length > 0) {
-      const ids = result.map((f) => f.id);
+    // Reinforce the whole tagged set, not the facts we chose to send.
+    //
+    // These two used to be the same list, and making the filter decide both
+    // would have quietly started deleting memories: Shodh ages facts out on
+    // `days_since_reinforcement`, so a fact that rarely matches a question
+    // would stop being reinforced, weaken, and eventually be forgotten — with
+    // nothing in our log to say so. What the model is shown is a privacy
+    // decision; what memory keeps is not, and they must not be one knob.
+    //
+    // The cost is that natural forgetting stays switched off, which is fine
+    // while this house has eleven facts and wrong once it has a thousand. That
+    // is a threshold to set deliberately, not to inherit from a filter.
+    if (merged.length > 0) {
+      const ids = merged.map((f) => f.id);
       this.shodh.reinforce(userId, ids).catch(() => {
         // Non-critical, ignore errors
       });
@@ -552,7 +687,7 @@ export class ShodhMemoryStore {
    * Get fact count for a user
    */
   async getFactCount(userId: string): Promise<number> {
-    const facts = await this.shodh.recallByTags(userId, 1000);
+    const facts = await this.shodh.recallByTags(userId);
     return facts.length;
   }
 

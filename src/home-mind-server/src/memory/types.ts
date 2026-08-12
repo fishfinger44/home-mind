@@ -52,6 +52,14 @@ export interface Fact {
   createdAt: Date;
   lastUsed: Date;
   useCount: number;
+  /**
+   * How well this fact matched the question that fetched it, when it was
+   * fetched by a question at all. Undefined means "not scored" — either the
+   * fact set was read by tag with no question involved, or the semantic query
+   * ran and did not rank this fact. Those two are not the same as "scored
+   * zero", which is why this is optional rather than defaulted.
+   */
+  trafnosc?: number;
 }
 
 export interface ExtractedFact {
