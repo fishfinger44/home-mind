@@ -4,6 +4,12 @@ All notable changes to Home Mind are documented here.
 
 ## [Unreleased]
 
+### Fixed (llm/tool-definitions.ts)
+- **Godziny odjazdów wymawiane słownie, nie cyframi.** Asystent poprawnie mówił bieżącą godzinę, ale odjazdy czytał jako cyfry — bo bieżącą godzinę układa własnym zdaniem, a godziny z `zaplanuj_trase` **przepisywał** z wyniku narzędzia, gdzie `godzina()` zwraca `"17:42"`. Nic tego nie zabraniało: opis narzędzia po prostu nie mówił, co z tymi liczbami zrobić przy mówieniu.
+- Dopisek do opisu `zaplanuj_trase` (**49 tokenów**), z precedensem w tym samym zdaniu — pole `kierunek` już nosi instrukcję „wypowiedz go na glos". Drugi przykład (`18:00` → „osiemnasta") jest tam po to, żeby pełna godzina nie brzmiała „osiemnasta zero zero".
+- **Rozważona i odrzucona** wersja deterministyczna (pola `o_slownie`/`przyjazd_slownie` liczone w kodzie). Zmierzone: +35 tok na każdy przejazd, czyli **+105–315 tok** na odpowiedź o trasę, a wynik narzędzia zostaje w historii rozmowy i płaci się go w każdej kolejnej turze. Dopisek kosztuje 49 tok, ale w każdym zapytaniu — próg opłacalności wypada przy ~16% zapytań o trasy. Do formy liczonej w kodzie warto wrócić przy małym modelu lokalnym, który pomyli rodzaj („siedemnaście czterdzieści dwa" zamiast „siedemnasta czterdzieści dwie"); `gemini-3.1-flash-lite` odmienia poprawnie.
+- Zweryfikowane na żywo: *„O godzinie dwudziestej drugiej pięćdziesiąt siedem wsiądź w autobus linii 244 … przesiądź się w tramwaj linii 7 … o dwudziestej trzeciej dwadzieścia"*.
+
 ### Added (config.ts, llm/runtime-config.ts, llm/openai-client.ts, api/llm-config-routes.ts, index.ts, ha-integration/config_flow.py)
 - **Przełącznik głębokiego myślenia dla modeli lokalnych**, w opcjach integracji obok wyboru modelu. Model rozumujący zostawiony sam sobie potrafi przepalić **cały** budżet odpowiedzi na wewnętrzny monolog i nie zwrócić nic: zmierzone na `qwen3.5:2b` przez `/v1` — 1200 z 1200 tokenów wyjścia, treść **pusta**, 39,4 s. Z wyłączonym myśleniem to samo pytanie: 5,8 s i 189 tokenów z odpowiedzią. Pusta odpowiedź trafia do `classifyEmptyResponse()` jako `EMPTY_CONTENT` i wygląda jak zepsuty model, a nie jak ustawienie.
 - **Tylko Ollama, i to nie z ostrożności, lecz z konieczności.** Nośnikiem ustawienia jest `reasoning_effort`, a końcówka OpenAI-compat Gemini odrzuca go wprost: `HTTP 400 INVALID_ARGUMENT`. Wysyłanie go do dostawcy w chmurze położyłoby **każde** zapytanie, więc pole pojawia się w formularzu wyłącznie dla providera `ollama`.
