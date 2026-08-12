@@ -7,7 +7,7 @@ import { rulesForPrompt } from "../rules/store.js";
 import { HomeAssistantClient } from "../ha/client.js";
 import { DeviceScanner } from "../ha/device-scanner.js";
 import { TopologyScanner } from "../ha/topology-scanner.js";
-import { buildSystemPrompt, type CachedSystemPrompt } from "./prompts.js";
+import { buildSystemPrompt, buildVolatileBlock, type CachedSystemPrompt } from "./prompts.js";
 import { HA_TOOLS } from "./tools.js";
 import { handleToolCall, extractAndStoreFacts, recallFacts } from "./tool-handler.js";
 import { trustsProfile } from "./interface.js";
@@ -112,7 +112,8 @@ export class LLMClient implements IChatEngine {
     const homeLayout = this.topology.hasLayout()
       ? this.topology.formatSection(exposed)
       : undefined;
-    const systemPrompt = buildSystemPrompt(factContents, isVoice, customPrompt, deviceCheatSheet, homeLayout, request.webSearchLimit, request.userName, trustedIdentity, rulesForPrompt());
+    const systemPrompt = buildSystemPrompt(isVoice, customPrompt, deviceCheatSheet, homeLayout, request.webSearchLimit, rulesForPrompt());
+    const blokZmienny = buildVolatileBlock(factContents, request.userName, trustedIdentity);
 
     // 3. Load conversation history if we have a conversationId
     const messages: Anthropic.MessageParam[] = [];
@@ -124,8 +125,9 @@ export class LLMClient implements IChatEngine {
       }
     }
 
-    // 4. Add current user message
-    messages.push({ role: "user", content: message });
+    // 4. Add current user message, with the volatile block riding on this turn
+    // only — the history above stays bare, which is what keeps it cacheable.
+    messages.push({ role: "user", content: `${blokZmienny}\n\n${message}` });
 
     // Store user message in conversation history
     if (conversationId) {

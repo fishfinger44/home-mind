@@ -17,7 +17,7 @@ import { rulesForPrompt } from "../rules/store.js";
 import { HomeAssistantClient } from "../ha/client.js";
 import { DeviceScanner } from "../ha/device-scanner.js";
 import { TopologyScanner } from "../ha/topology-scanner.js";
-import { buildSystemPromptText } from "./prompts.js";
+import { buildSystemPromptText, buildVolatileBlock } from "./prompts.js";
 import { TOOL_DEFINITIONS, toGeminiTools } from "./tool-definitions.js";
 import { handleToolCall, extractAndStoreFacts, recallFacts } from "./tool-handler.js";
 import type { KontekstPamieci } from "./tool-handler.js";
@@ -170,16 +170,14 @@ export class GeminiChatEngine implements IChatEngine {
       ? this.topology.formatSection(exposed)
       : undefined;
     const systemPromptText = buildSystemPromptText(
-      factContents,
       isVoice,
       customPrompt,
       deviceCheatSheet,
       homeLayout,
       request.webSearchLimit,
-      request.userName,
-      trustedIdentity,
       rulesForPrompt()
     );
+    const blokZmienny = buildVolatileBlock(factContents, request.userName, trustedIdentity);
 
     const webSearchEnabled = (request.webSearchLimit ?? 1) > 0;
     const searchMode = request.webSearchMode ?? this.config.webSearchMode ?? "grounding";
@@ -209,7 +207,12 @@ export class GeminiChatEngine implements IChatEngine {
       }
       this.conversations.storeMessage(conversationId, userId, "user", message);
     }
-    contents.push({ role: "user", parts: [{ text: message }] });
+    // The volatile block rides on THIS turn only, and what gets stored above is
+    // the bare message. Keeping it out of the history is what makes the history
+    // itself part of the stable prefix — otherwise every past turn would carry
+    // a stale timestamp and yesterday's recalled facts, and the whole
+    // conversation would have to be re-read each time.
+    contents.push({ role: "user", parts: [{ text: `${blokZmienny}\n\n${message}` }] });
 
     const systemInstruction = { parts: [{ text: systemPromptText }] };
     const buildTools = (): unknown[] => {

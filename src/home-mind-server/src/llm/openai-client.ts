@@ -7,7 +7,7 @@ import { rulesForPrompt } from "../rules/store.js";
 import { HomeAssistantClient } from "../ha/client.js";
 import { DeviceScanner } from "../ha/device-scanner.js";
 import { TopologyScanner } from "../ha/topology-scanner.js";
-import { buildSystemPromptText } from "./prompts.js";
+import { buildSystemPromptText, buildVolatileBlock } from "./prompts.js";
 import { TOOL_DEFINITIONS, toOpenAITools } from "./tool-definitions.js";
 import { handleToolCall, extractAndStoreFacts, recallFacts } from "./tool-handler.js";
 import { trustsProfile } from "./interface.js";
@@ -180,7 +180,8 @@ export class OpenAIChatEngine implements IChatEngine {
     const homeLayout = this.topology.hasLayout()
       ? this.topology.formatSection(exposed)
       : undefined;
-    const systemPrompt = buildSystemPromptText(factContents, isVoice, customPrompt, deviceCheatSheet, homeLayout, request.webSearchLimit, request.userName, trustedIdentity, rulesForPrompt());
+    const systemPrompt = buildSystemPromptText(isVoice, customPrompt, deviceCheatSheet, homeLayout, request.webSearchLimit, rulesForPrompt());
+    const blokZmienny = buildVolatileBlock(factContents, request.userName, trustedIdentity);
 
     // Prompt-size telemetry (sections that dominate the input tokens).
     const approxTok = (s?: string) => Math.ceil((s?.length ?? 0) / 4);
@@ -202,8 +203,9 @@ export class OpenAIChatEngine implements IChatEngine {
       }
     }
 
-    // 4. Add current user message
-    messages.push({ role: "user", content: message });
+    // 4. Add current user message, with the volatile block riding on this turn
+    // only — the history above stays bare, which is what keeps it cacheable.
+    messages.push({ role: "user", content: `${blokZmienny}\n\n${message}` });
 
     if (conversationId) {
       this.conversations.storeMessage(conversationId, userId, "user", message);

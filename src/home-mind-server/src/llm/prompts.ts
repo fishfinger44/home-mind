@@ -284,22 +284,53 @@ Unknown — this request carries no profile. It may be a shared device, an autom
 ${speaker}. Use their name naturally — when greeting them, or when it makes an answer clearer — but not in every sentence. The memories below are ${speaker}'s own.`;
 }
 
-export function buildSystemPrompt(
+/**
+ * The part of the prompt that is different on every single turn: who is
+ * speaking, what time it is, and the memories this question pulled up.
+ *
+ * It travels with the user's turn rather than with the system prompt, and the
+ * reason is mechanical. Everything after the first changed token has to be
+ * re-processed, and the tool definitions (~2000 tokens, entirely stable) sit
+ * *after* the system prompt in the request. With the volatile lines at the end
+ * of the system prompt, those definitions were re-read on every turn for
+ * nothing. Measured on a local model: re-reading a 2050-token prefix costs
+ * 20.9 s, reusing it costs 0.64 s. Hosted models charge for the same waste
+ * instead of making you wait for it.
+ *
+ * ⚠️ There is a price, and it is not measured yet: models weigh system-prompt
+ * text more heavily than the same words in a user turn. The house rules stay
+ * where they were, but the recalled facts have moved — if the assistant starts
+ * ignoring what it remembers, this is the first place to look.
+ */
+export function buildVolatileBlock(
   facts: string[],
-  isVoice: boolean = false,
-  customPrompt?: string,
-  deviceCheatSheet?: string,
-  homeLayout?: string,
-  webSearchLimit?: number,
   speaker?: string,
-  trusted: boolean = true,
-  houseRules?: string
-): CachedSystemPrompt {
+  trusted: boolean = true
+): string {
   const factsText =
     facts.length > 0 ? facts.map((f) => `- ${f}`).join("\n") : "No memories yet.";
 
   const { display: dateTimeStr, iso: isoTimestamp, localMidnightIso } = formatDateTimeWithOffset();
 
+  return `${speakerSection(speaker, trusted)}
+
+## Current Context:
+- Date/Time: ${dateTimeStr}
+- ISO Timestamp (now, UTC): ${isoTimestamp}
+- Local midnight today (UTC): ${localMidnightIso}  ← use this as start_time for "today" history queries, NOT 00:00:00Z
+
+${MEMORY_HEADING}
+${factsText}`;
+}
+
+export function buildSystemPrompt(
+  isVoice: boolean = false,
+  customPrompt?: string,
+  deviceCheatSheet?: string,
+  homeLayout?: string,
+  webSearchLimit?: number,
+  houseRules?: string
+): CachedSystemPrompt {
   const identity = customPrompt
     ? customPrompt
     : isVoice
@@ -317,56 +348,28 @@ export function buildSystemPrompt(
   const deviceSection = deviceCheatSheet ? `\n\n${deviceCheatSheet}` : "";
   const staticContent = `${identity}${instructions}${rulesSection(houseRules)}${searchRule}${layoutSection}${deviceSection}`;
 
-  // Volatile content: per-request date/time + per-query recalled facts. Kept
-  // out of the cached block so it doesn't bust the cache each turn.
-  const dynamicContent = `
-${speakerSection(speaker, trusted)}
-
-## Current Context:
-- Date/Time: ${dateTimeStr}
-- ISO Timestamp (now, UTC): ${isoTimestamp}
-- Local midnight today (UTC): ${localMidnightIso}  ← use this as start_time for "today" history queries, NOT 00:00:00Z
-
-${MEMORY_HEADING}
-${factsText}`;
-
-  // The cache_control marker caches everything up to and including its block,
-  // so the whole static prefix (identity + instructions + layout + devices) is
-  // cached; only the small volatile block below is charged at full price.
-  const blocks: Anthropic.TextBlockParam[] = [
+  // One block, entirely cacheable. The volatile lines that used to follow it
+  // now ride with the user's turn — see `buildVolatileBlock`.
+  return [
     {
       type: "text" as const,
       text: staticContent,
       cache_control: { type: "ephemeral" as const },
     },
-    {
-      type: "text" as const,
-      text: dynamicContent,
-    },
-  ];
-
-  return blocks;
+  ] satisfies Anthropic.TextBlockParam[];
 }
 
 /**
  * Build system prompt as a plain text string (for providers that don't support cache_control blocks).
  */
 export function buildSystemPromptText(
-  facts: string[],
   isVoice: boolean = false,
   customPrompt?: string,
   deviceCheatSheet?: string,
   homeLayout?: string,
   webSearchLimit?: number,
-  speaker?: string,
-  trusted: boolean = true,
   houseRules?: string
 ): string {
-  const factsText =
-    facts.length > 0 ? facts.map((f) => `- ${f}`).join("\n") : "No memories yet.";
-
-  const { display: dateTimeStr, iso: isoTimestamp, localMidnightIso } = formatDateTimeWithOffset();
-
   const identity = customPrompt
     ? customPrompt
     : isVoice
@@ -379,20 +382,9 @@ export function buildSystemPromptText(
   const layoutSection = homeLayout ? `\n\n${homeLayout}` : "";
   const deviceSection = deviceCheatSheet ? `\n\n${deviceCheatSheet}` : "";
 
-  // Order matters for prefix caching (e.g. Gemini implicit cache): put the
-  // large, STABLE content first (identity + instructions + home layout +
-  // device cheat sheet — these only change every ~30 min) so it forms a
-  // cacheable prefix, and keep the VOLATILE bits (date/time, per-query recalled
-  // facts) at the very end where they don't bust the cache.
-  return `${identity}${instructions}${rulesSection(houseRules)}${searchRule}${layoutSection}${deviceSection}
-
-${speakerSection(speaker, trusted)}
-
-## Current Context:
-- Date/Time: ${dateTimeStr}
-- ISO Timestamp (now, UTC): ${isoTimestamp}
-- Local midnight today (UTC): ${localMidnightIso}  ← use this as start_time for "today" history queries, NOT 00:00:00Z
-
-${MEMORY_HEADING}
-${factsText}`;
+  // Everything here is stable between turns, which is the point: it forms an
+  // uninterrupted cacheable prefix that reaches past the tool definitions and
+  // the conversation so far. The volatile lines live in `buildVolatileBlock`
+  // and are attached to the user's turn instead.
+  return `${identity}${instructions}${rulesSection(houseRules)}${searchRule}${layoutSection}${deviceSection}`;
 }

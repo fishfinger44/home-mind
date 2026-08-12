@@ -110,6 +110,14 @@ export class DeviceScanner {
    * Returns a compact cheat sheet for injection into the system prompt.
    * The LLM should use these pre-computed values instead of calling get_entities
    * or reasoning from raw supported_color_modes attributes.
+   *
+   * Capabilities only — deliberately no on/off state. The scan runs every 30
+   * minutes, so a state printed here is a photograph of up to half an hour ago,
+   * sitting in a section that tells the model it may skip looking things up.
+   * That invites "it is already on" from a stale snapshot; `get_state` is one
+   * call away and always right. It also kept the cheat sheet out of the
+   * cacheable prefix for no benefit: how to drive a light does not change, and
+   * whether it is lit changes all day.
    */
   formatCheatSheet(exposed?: Set<string>): string {
     const lights = Array.from(this.profiles.values()).filter(
@@ -125,7 +133,7 @@ export class DeviceScanner {
     ];
 
     for (const p of lights) {
-      lines.push(`\n**${p.entityId}** "${p.friendlyName}" [${p.state}]`);
+      lines.push(`\n**${p.entityId}** "${p.friendlyName}"`);
 
       // White method
       switch (p.whiteMethod.type) {
