@@ -146,6 +146,18 @@ services:
       - ollama_models:/root/.ollama
     environment:
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-30m}
+      # Flash attention + skwantyzowany KV-cache polowia pamiec kontekstu, co
+      # na karcie 4 GB decyduje o tym, czy model siedzi w calosci na GPU czy
+      # zsypuje sie na CPU (a wtedy jedna komenda liczy sie minutami).
+      # q8_0 dziala TYLKO z wlaczonym flash attention.
+      - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-1}
+      - OLLAMA_KV_CACHE_TYPE=${OLLAMA_KV_CACHE_TYPE:-q8_0}
+      # Domyslne 4096 obcinalo prompt do 2050 tokenow przy prompcie 8096 -
+      # asystent widzial cwiartke regul i sciagi urzadzen (21 razy 12.08.2026).
+      # UWAGA: Ollama obcina do n_ctx/2, NIE do n_ctx (zmierzone), a max_tokens
+      # nic tu nie zmienia. Stad 24576 -> limit promptu 12290, z zapasem na
+      # wahania liczby faktow. Bezczynne, gdy dostawca to Gemini.
+      - OLLAMA_CONTEXT_LENGTH=${OLLAMA_CONTEXT_LENGTH:-24576}
     deploy:
       resources:
         reservations:
