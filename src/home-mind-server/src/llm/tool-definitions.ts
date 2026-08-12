@@ -148,8 +148,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       "Zaplanuj dojazd komunikacja miejska (autobus, tramwaj, pociag) z jednego miejsca do drugiego. " +
       "Uzyj tego ZAWSZE, gdy pytanie dotyczy dojazdu, polaczenia, przesiadki albo tego, ktora linia jechac. " +
       "Odpowiedz zawiera numer linii, KIERUNEK (pole 'kierunek' - wypowiedz go na glos, nie zgaduj strony), " +
-      "przystanek wsiadania i godziny. Godziny WYMAWIAJ SLOWNIE: 17:42 to 'siedemnasta czterdziesci dwie', " +
-      "18:00 to 'osiemnasta'. To NIE jest tablica odjazdow: podaje polaczenie na konkretna pore, " +
+      "przystanek wsiadania i godziny. To NIE jest tablica odjazdow: podaje polaczenie na konkretna pore, " +
       "a nie kolejne kursy jednej linii. Rozklad jest planowy - nie zawiera opoznien na zywo.",
     parameters: {
       type: "object",
