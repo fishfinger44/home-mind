@@ -149,23 +149,31 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       "Uzyj tego ZAWSZE, gdy pytanie dotyczy dojazdu, polaczenia, przesiadki albo tego, ktora linia jechac. " +
       "Odpowiedz zawiera numer linii, KIERUNEK (pole 'kierunek' - wypowiedz go na glos, nie zgaduj strony), " +
       "przystanek wsiadania i godziny. To NIE jest tablica odjazdow: podaje polaczenie na konkretna pore, " +
-      "a nie kolejne kursy jednej linii. Rozklad jest planowy - nie zawiera opoznien na zywo.",
+      "a nie kolejne kursy jednej linii ani liste linii odjezdzajacych z przystanku - o to nie pytaj, " +
+      "tylko powiedz wprost, ze tego nie umiesz. Zawsze potrzebuje CELU podrozy: gdy uzytkownik nazwal " +
+      "sama linie albo sam przystanek, dopytaj, dokad chce dojechac. " +
+      "Rozklad jest planowy - nie zawiera opoznien na zywo.",
     parameters: {
       type: "object",
       properties: {
         dokad: {
           type: "string",
           description:
-            "Cel podrozy: adres albo znany skrot (np. 'centrum', 'praca'). Nieznana nazwa idzie do Google jako adres.",
+            "Cel podrozy: adres albo znany skrot (np. 'centrum', 'praca'). Nieznana nazwa idzie do Google jako adres. " +
+            "NIGDY numer linii ani nazwa przystanku, z ktorego sie wsiada - to nie sa cele podrozy.",
         },
         skad: {
           type: "string",
-          description: "Punkt poczatkowy. Pominiety = dom.",
+          description:
+            "Punkt poczatkowy. Pominiety = dom. Tu wlasnie wpisz przystanek, jesli uzytkownik go wskazal.",
         },
         kiedy: {
           type: "string",
           description:
-            "Godzina w ISO 8601 (uzyj znacznika czasu z kontekstu systemowego do przeliczen). Pominieta = teraz.",
+            "POMIN, gdy pytanie brzmi 'teraz', 'najblizszy', 'kiedy jedzie' - brak tego pola znaczy 'teraz' " +
+            "i jest to jedyna godzina, ktorej nie da sie pomylic. Podawaj wylacznie wtedy, gdy uzytkownik " +
+            "nazwal konkretna pore ('na dziewiata', 'jutro o 7'), i pisz ja jako CZAS LOKALNY bez strefy: " +
+            "'2026-08-13T09:00:00' - bez 'Z' i bez przesuniecia.",
         },
         kiedy_znaczy: {
           type: "string",
@@ -174,6 +182,37 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
       },
       required: ["dokad"],
+    },
+  },
+  // Tablica odjazdow - drugie z dwoch pytan o komunikacje. Rozdzielone od
+  // planowania trasy, bo Routes API wymaga CELU, a "o ktorej jedzie 111" celu
+  // nie ma. Godziny czytamy wprost ze strony miasta.
+  {
+    name: "odjazdy",
+    description:
+      "Godziny odjazdow KONKRETNEJ LINII z przystanku - tablica odjazdow. " +
+      "Uzyj, gdy pytanie brzmi 'o ktorej jedzie 111', 'kiedy najblizszy autobus 142', " +
+      "'kiedy odjazd tramwaju 7 z Baltyckiej'. Bez podanego przystanku bierze ten pod domem. " +
+      "Oddaje najblizsze kursy w OBIE strony, kazda z kierunkiem - wypowiedz kierunek, nie zgaduj strony. " +
+      "Do pytania 'jak dojade do X' uzyj zamiast tego zaplanuj_trase.",
+    parameters: {
+      type: "object",
+      properties: {
+        linia: {
+          type: "string",
+          description: "Sam numer linii, np. '111', '7', '142'.",
+        },
+        przystanek: {
+          type: "string",
+          description: "Nazwa przystanku. Pominiety = przystanek pod domem.",
+        },
+        kierunek: {
+          type: "string",
+          description:
+            "Kierunek, jesli uzytkownik go nazwal (np. 'Osiedle Sobieskiego'). Pominiety = obie strony.",
+        },
+      },
+      required: ["linia"],
     },
   },
   // Po polsku z tego samego powodu co zaplanuj_trase: fakty w tej bazie sa

@@ -318,18 +318,60 @@ export function sformatujTrasy(odp: OdpowiedzGoogle): Trasa[] {
     .map((w) => w.trasa);
 }
 
-/** Godzina wyjazdu/przyjazdu w formacie, ktory Google przyjmie. */
+/**
+ * Odetnij strefe z napisu ISO: "2026-08-13T15:08:21Z" i "…+02:00" -> "…15:08:21".
+ * Sama data bez godziny dostaje polnoc, bo `new Date("2026-08-13")` to polnoc
+ * UTC, czyli u nas druga w nocy - a "na jutro" znaczy jutro tutaj.
+ */
+function zegarScienny(kiedy: string): string {
+  const bezStrefy = kiedy.replace(/(?:Z|[+-]\d{2}:?\d{2})$/i, "");
+  return bezStrefy.includes("T") ? bezStrefy : `${bezStrefy}T00:00:00`;
+}
+
+/**
+ * Godzina wyjazdu/przyjazdu w formacie, ktory Google przyjmie.
+ *
+ * `kiedy` czytamy jako ZEGAR SCIENNY w strefie domu, a deklarowana strefe
+ * ODRZUCAMY. Zmierzone na zywo dwa razy: model bierze `ISO Timestamp (now, UTC)`
+ * z promptu, przepisuje godzine na lokalna i zostawia koncowke `Z` - o 15:08
+ * naszego czasu wyslal `2026-08-13T15:08:21Z`, czyli 17:08 u nas. Google planowal
+ * wtedy przejazd o dwie godziny za pozno (najblizszy 111 z Waniliowej: 18:28
+ * zamiast 16:29) i to wygladalo jak zly rozklad, a nie jak zla godzina.
+ * Sprawdzenie ponizej tego nie lapalo: godzina przesunieta w przyszlosc zawsze
+ * przechodzila jako "poprawna".
+ *
+ * Cena tej decyzji: gdyby model kiedys przyslal prawdziwy UTC, potraktujemy go
+ * jako czas lokalny. To wybor swiadomy - pytania padaja tu o zegar na scianie
+ * ("na dziewiata"), wiec zegar scienny jest tym, co model NAPRAWDE pisze.
+ */
 export function czasZapytania(kiedy: string | undefined, teraz = new Date()): string | undefined {
   if (!kiedy) return undefined;
   const proba = kiedy.trim().toLowerCase();
   if (proba === "" || proba === "teraz" || proba === "now") return undefined;
-  const data = new Date(kiedy);
+  const data = new Date(zegarScienny(kiedy.trim()));
   if (Number.isNaN(data.getTime())) return undefined;
   // Google odrzuca godzine wyjazdu z przeszlosci. Model liczy godziny sam i
   // bywa, ze spoznia sie o minute - wtedy lepiej odpowiedziec "teraz" niz
   // bledem.
   if (data.getTime() < teraz.getTime()) return undefined;
   return data.toISOString();
+}
+
+/**
+ * Czy `dokad` to numer linii, a nie cel podrozy?
+ *
+ * Zmierzone: na "kiedy jedzie najblizszy 111" model wolal `dokad: "111"` i
+ * `dokad: "przystanek 111"`. Google geokoduje to na cokolwiek, oddaje zero tras,
+ * a asystent mowi "nie znalazlem polaczenia" - czyli wyglada na awarie rozkladu,
+ * choc to zle pytanie. Lepiej odbic je od razu, bez palenia wywolania.
+ *
+ * Wzorzec jest ciasny celowo: sam numer, ewentualnie po slowie "linia" czy
+ * "przystanek". Prawdziwy adres ma nazwe ulicy ("Waniliowa 111") i tu nie wpada.
+ */
+export function wygladaNaNumerLinii(dokad: string): boolean {
+  return /^(?:linia|lini[ia]|autobus(?:em)?|tramwaj(?:em)?|przystanek|przystanku)?\s*\d{1,3}[a-z]?$/i.test(
+    dokad.trim()
+  );
 }
 
 export async function zaplanujTrase(
@@ -354,6 +396,18 @@ export async function zaplanujTrase(
     };
   }
   const dokad = adresMiejsca(zapytanie.dokad);
+  // Rozpoznana nazwa (skrot z `TRASY_MIEJSCA`) wraca zmieniona - wtedy to cel,
+  // nawet gdyby ktos nazwal wpis "111". Numer odbijamy tylko wtedy, gdy przeszedl
+  // przez slownik bez zmian, czyli poleci do Google jako adres.
+  if (dokad === zapytanie.dokad.trim() && wygladaNaNumerLinii(dokad)) {
+    return {
+      error:
+        `"${zapytanie.dokad}" to numer linii, a nie cel podrozy - to narzedzie planuje trase ` +
+        "A do B i nie umie wypisac kolejnych kursow jednej linii ani odjazdow z przystanku. " +
+        "Zapytaj uzytkownika, DOKAD chce dojechac, a potem zawolaj mnie jeszcze raz z tym celem; " +
+        "numer linii znajdziesz w odpowiedzi. NIE zgaduj godzin ani kierunku.",
+    };
+  }
 
   if (limitDzienny() <= 0) {
     return { error: "Planowanie tras jest wylaczone (TRASY_LIMIT_DZIENNY=0)." };

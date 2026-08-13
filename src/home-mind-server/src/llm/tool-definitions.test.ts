@@ -7,8 +7,8 @@ import {
 } from "./tool-definitions.js";
 
 describe("TOOL_DEFINITIONS", () => {
-  it("has 8 tools", () => {
-    expect(TOOL_DEFINITIONS).toHaveLength(8);
+  it("has 9 tools", () => {
+    expect(TOOL_DEFINITIONS).toHaveLength(9);
   });
 
   it("has the expected tool names", () => {
@@ -21,6 +21,7 @@ describe("TOOL_DEFINITIONS", () => {
       "get_history",
       "web_search",
       "zaplanuj_trase",
+      "odjazdy",
       "sprawdz_pamiec",
     ]);
   });

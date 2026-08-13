@@ -310,6 +310,13 @@ describe("godzinaSlownie", () => {
 });
 
 describe("czasZapytania", () => {
+  // Strefa jest tu trescia testu, a nie tlem: caly sens tej funkcji polega na
+  // tym, ze godzine czyta sie wedlug zegara w domu.
+  beforeEach(() => {
+    process.env.TZ = "Europe/Warsaw";
+  });
+
+  // 15:00 UTC = 17:00 w Warszawie.
   const teraz = new Date("2026-08-11T15:00:00Z");
 
   it("brak, 'teraz' i bzdura znacza teraz (czyli nic nie wysylamy)", () => {
@@ -319,11 +326,29 @@ describe("czasZapytania", () => {
   });
 
   it("godzina z przeszlosci jest odrzucana, bo Google ja odrzuca", () => {
-    expect(czasZapytania("2026-08-11T14:00:00Z", teraz)).toBeUndefined();
+    expect(czasZapytania("2026-08-11T16:00:00", teraz)).toBeUndefined();
   });
 
   it("godzina z przyszlosci idzie jako ISO", () => {
-    expect(czasZapytania("2026-08-11T18:30:00Z", teraz)).toBe("2026-08-11T18:30:00.000Z");
+    expect(czasZapytania("2026-08-11T18:30:00", teraz)).toBe("2026-08-11T16:30:00.000Z");
+  });
+
+  // Sedno awarii z 13.08: model przepisal `ISO Timestamp (now, UTC)` z promptu
+  // na godzine lokalna i zostawil "Z", przez co Google planowalo przejazd o dwie
+  // godziny za pozno. Zegar scienny bije deklaracje strefy.
+  it("koncowka Z jest ignorowana - liczy sie zegar scienny", () => {
+    expect(czasZapytania("2026-08-11T18:30:00Z", teraz)).toBe("2026-08-11T16:30:00.000Z");
+    expect(czasZapytania("2026-08-11T18:30:00Z", teraz)).toBe(
+      czasZapytania("2026-08-11T18:30:00", teraz)
+    );
+  });
+
+  it("jawne przesuniecie strefy tez jest ignorowane", () => {
+    expect(czasZapytania("2026-08-11T18:30:00+05:00", teraz)).toBe("2026-08-11T16:30:00.000Z");
+  });
+
+  it("sama data znaczy polnoc TUTAJ, nie polnoc UTC", () => {
+    expect(czasZapytania("2026-08-12", teraz)).toBe("2026-08-11T22:00:00.000Z");
   });
 });
 
@@ -394,13 +419,41 @@ describe("zaplanujTrase", () => {
 
   it("'przyjazd' wysyla arrivalTime zamiast departureTime", async () => {
     const fetchMock = odpowiedzOk();
-    const zaGodzine = new Date(Date.now() + 3600_000).toISOString();
+    // Zegar scienny za godzine - tak, jak pisze model. "sv-SE" daje
+    // "2026-08-13 17:24:25", jedyny format tej listy gotowy do sklejenia w ISO.
+    const zaGodzine = new Date(Date.now() + 3600_000).toLocaleString("sv-SE").replace(" ", "T");
 
     await zaplanujTrase({ dokad: "centrum", kiedy: zaGodzine, kiedyZnaczy: "przyjazd" });
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.arrivalTime).toBe(zaGodzine);
+    expect(body.arrivalTime).toBe(new Date(zaGodzine).toISOString());
     expect(body.departureTime).toBeUndefined();
+  });
+
+  // Zmierzone 13.08: na "kiedy jedzie najblizszy 111" model wolal dokad: "111",
+  // Google oddawalo zero tras i wychodzilo na to, ze rozklad nie dziala.
+  it("numer linii w polu 'dokad' odbijamy bez dzwonienia do Google", async () => {
+    const fetchMock = odpowiedzOk();
+
+    for (const dokad of ["111", "przystanek 111", "linia 4", "8"]) {
+      const wynik = await zaplanujTrase({ dokad });
+      expect(wynik).toHaveProperty("error");
+      expect((wynik as { error: string }).error).toContain("numer linii");
+    }
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    // Odbicie jest przed licznikiem - zle pytanie nie zjada limitu.
+    expect(zuzyteDzis()).toBe(0);
+  });
+
+  it("adres z numerem domu to nadal adres", async () => {
+    const fetchMock = odpowiedzOk();
+
+    await zaplanujTrase({ dokad: "Waniliowa 111" });
+
+    expect(fetchMock).toHaveBeenCalled();
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.destination.address).toBe("Waniliowa 111");
   });
 
   it("dolacza note o zrodle, zeby asystent nie obiecywal danych na zywo", async () => {

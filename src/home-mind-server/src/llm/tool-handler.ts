@@ -10,6 +10,7 @@ import { suggestRule } from "../rules/store.js";
 import { checkRestriction } from "./restricted.js";
 import { envOrUndefined } from "../env.js";
 import { zaplanujTrase } from "../trasy/klient.js";
+import { sprawdzOdjazdy } from "../trasy/odjazdy.js";
 import {
   type SearchBackend,
   SEARCH_BACKENDS,
@@ -575,6 +576,14 @@ export async function handleToolCall(
           skad: input.skad ? String(input.skad) : undefined,
           kiedy: input.kiedy ? String(input.kiedy) : undefined,
           kiedyZnaczy: input.kiedy_znaczy === "przyjazd" ? "przyjazd" : "wyjazd",
+        });
+        break;
+      }
+      case "odjazdy": {
+        result = await sprawdzOdjazdy({
+          linia: String(input.linia ?? ""),
+          przystanek: input.przystanek ? String(input.przystanek) : undefined,
+          kierunek: input.kierunek ? String(input.kierunek) : undefined,
         });
         break;
       }
