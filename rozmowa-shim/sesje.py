@@ -34,7 +34,11 @@ import time
 # Ta sama wartość co `ROZMOWA_TUR` po stronie serwera i z tego samego powodu:
 # historia jest w rozmowie potrzebna, ale to ta sama droga, która zatruła
 # asystenta przy awarii „Echo".
-MAX_TUR_SESJI = int(os.environ.get("ROZMOWA_TUR_SESJI", "6"))
+# 🔬 Podniesione 6 → 12 dnia 15.08. Powod z zycia: runda zagadek, w ktorej
+# asystent zgubil WLASNA zagadke i zapytal „czy to byly slowa z naszej
+# zagadki?", a Lech musial ja powtorzyc i w koncu odpuscil. Przy 6 turach
+# proces byl wymieniany w srodku rundy i tracil caly watek.
+MAX_TUR_SESJI = int(os.environ.get("ROZMOWA_TUR_SESJI", "12"))
 # Po tylu sekundach bezczynności proces jest ubijany — inaczej rozmowa, która
 # się nie „zakończyła", trzymałaby proces i kontekst w nieskończoność.
 BEZCZYNNOSC_S = float(os.environ.get("ROZMOWA_BEZCZYNNOSC", "600"))

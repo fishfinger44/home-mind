@@ -287,7 +287,12 @@ export class GeminiChatEngine implements IChatEngine {
     // rozmowna w petli narzedzi nizej.
     let historiaRozmowy: { role: string; content: string }[] = [];
     if (conversationId) {
-      historiaRozmowy = await this.conversations.getConversationHistory(conversationId, 10);
+      // 20, bo tyle trzyma magazyn rozmow — nizsza wartosc byla CICHYM SUFITEM
+      // nad `ROZMOWA_TUR`: podniesienie tamtego powyzej 10 nie dawalo nic, bo
+      // nie bylo czego kroic. Zlapane 15.08 na rundzie zagadek, w ktorej
+      // asystent zgubil wlasna zagadke i pytal „czy to byly slowa z naszej
+      // zagadki?".
+      historiaRozmowy = await this.conversations.getConversationHistory(conversationId, 20);
       for (const msg of historiaRozmowy) {
         contents.push({
           role: msg.role === "assistant" ? "model" : "user",
@@ -636,6 +641,14 @@ export class GeminiChatEngine implements IChatEngine {
           // ⚠️ Historia z LIMITEM. Jest tu potrzebna (to rozmowa), ale to ta sama
           // droga, ktora zatrula asystenta przy awarii "Echo" — wiec wpuszczamy
           // ostatnie kilka tur, a nie calosc.
+          //
+          // 🔑 `ROZMOWA_TUR` liczy WIADOMOSCI, nie tury: 6 znaczylo trzy wymiany
+          // zdan i to bylo za malo na runde zagadek (asystent gubil wlasna
+          // zagadke). Podniesione do 16 = osiem wymian.
+          // ⛔ Lawiny „Echo" nie ma tu czym rozpedzic tak jak przy komendach:
+          // sciezka rozmowna NIE MA narzedzi, wiec awaria „wywolanie jako
+          // tekst" nie istnieje, a zapalnikiem tamtej bylo przekrecone STT —
+          // od 15.08 wyraznie czystsze (Scribe Realtime).
           historia: historia.slice(-(this.config.rozmowaTur ?? 6)),
           ...(zaufany && mowca ? { mowca } : {}),
           // Wybor z panelu HA. Pola NIEOBECNE, gdy nikt nic nie wybral —
