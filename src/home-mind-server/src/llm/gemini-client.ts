@@ -379,6 +379,17 @@ export class GeminiChatEngine implements IChatEngine {
 
       iterations++;
 
+      // Nazwy narzedzi na poziomie `info`, a nie `debug`.
+      //
+      // 🔑 Powod jest konkretny: gdy tura „jak go jeszcze mozna rozweselic?"
+      // zajela 13,1 s i trzy przebiegi LLM, z logu NIE DALO SIE odczytac, co
+      // model wolal — bo lecial tam tylko `[usage]`. Liczba przebiegow bez ich
+      // powodu nie nadaje sie do niczego poza zgadywaniem.
+      console.log(
+        `[llm] przebieg ${iterations}, wywolania: ` +
+          functionCalls.map((p) => p.functionCall!.name).join(", ")
+      );
+
       // Echo the model turn back VERBATIM (parts include thoughtSignature, which
       // Gemini 3 requires on the follow-up), then answer each function call.
       contents.push({ role: "model", parts });
