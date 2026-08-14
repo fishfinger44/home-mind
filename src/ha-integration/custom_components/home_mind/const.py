@@ -56,6 +56,9 @@ DEFAULT_USER_ID = "default"
 DEFAULT_TIMEOUT = 120  # Claude with tool use can take 60+ seconds
 
 API_CHAT_ENDPOINT = "/api/chat"
+# Ta sama tura, ale oddawana kawalkami (SSE). Uzywana, gdy potok Assist umie
+# strumieniowac do TTS — wtedy asystent zaczyna mowic, zanim model skonczy.
+API_CHAT_STREAM_ENDPOINT = "/api/chat/stream"
 API_HEALTH_ENDPOINT = "/api/health"
 API_SEARCH_USAGE_ENDPOINT = "/api/search/usage"
 

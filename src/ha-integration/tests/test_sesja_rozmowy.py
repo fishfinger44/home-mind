@@ -43,6 +43,23 @@ class ConversationEntityFeature:
     CONTROL = 1
 
 
+class ChatLog:
+    """Dziennik rozmowy — u nas tylko po to, zeby zebrac delty.
+
+    Prawdziwy `ChatLog` wola `delta_listener`, na ktorym potok Assist opiera
+    strumieniowanie do TTS. Tutaj wystarczy, ze zbierze kawalki: sprawdzamy
+    zachowanie tury, nie samo HA.
+    """
+
+    def __init__(self):
+        self.delty = []
+
+    async def async_add_delta_content_stream(self, agent_id, stream):
+        async for kawalek in stream:
+            self.delty.append(kawalek)
+            yield kawalek
+
+
 class ConversationResult:
     def __init__(self, response=None, conversation_id=None, continue_conversation=False):
         self.response = response
@@ -86,6 +103,7 @@ def zbuduj_zaslepki() -> None:
     modul("homeassistant.components")
     modul(
         "homeassistant.components.conversation",
+        ChatLog=ChatLog,
         ConversationEntity=ConversationEntity,
         ConversationEntityFeature=ConversationEntityFeature,
         ConversationInput=ConversationInput,
@@ -138,6 +156,7 @@ def zbuduj_const() -> None:
         DEFAULT_USER_ID="default",
         DEFAULT_TIMEOUT=30,
         API_CHAT_ENDPOINT="/api/chat",
+        API_CHAT_STREAM_ENDPOINT="/api/chat/stream",
         HOME_ASSISTANT_AGENT="conversation.home_assistant",
     )
 
@@ -191,6 +210,22 @@ def agent(conv, prefer_local=False):
         return (a._odpowiedz, True)
 
     a._call_api = call_api
+
+    async def call_api_stream(chat_log, **k):
+        # Odwzorowuje to, co robi prawdziwa droga strumieniowa: wpycha delty do
+        # dziennika, a dopiero potem oddaje calosc. Dzieki temu test zlapie
+        # regresje, w ktorej tura przestaje karmic `chat_log` — czyli asystent
+        # przestaje mowic wczesniej, choc odpowiedz nadal wraca.
+        async def kawalki():
+            yield {"role": "assistant"}
+            yield {"content": a._odpowiedz}
+
+        async for _ in chat_log.async_add_delta_content_stream("test", kawalki()):
+            pass
+        return (a._odpowiedz, True)
+
+    a._call_api_stream = call_api_stream
+    a.entity_id = "conversation.home_mind"
     a._odpowiedz = "Zrobione."
 
     async def resolve(uid):
@@ -202,7 +237,10 @@ def agent(conv, prefer_local=False):
 
 async def uruchom(conv, a, tekst, cid=None, odpowiedz="Zrobione."):
     a._odpowiedz = odpowiedz
-    return await a.async_process(Wejscie(tekst, cid))
+    # Wolamy `_async_handle_message`, a nie `async_process`: to drugie nalezy
+    # do bazy HA i samo otwiera `chat_log`, czego bez prawdziwego HA nie ma jak
+    # zrobic. Nasza logika tury siedzi w calosci tutaj.
+    return await a._async_handle_message(Wejscie(tekst, cid), ChatLog())
 
 
 class Wynik:
@@ -327,6 +365,24 @@ async def main() -> int:
     sprawdz(
         "przed uzbieraniem odniesienia nie ma fałszywych alarmów",
         b._zbadaj_zanieczyszczenie("lech", 0.10) is False,
+    )
+
+    print("\n12. Strumieniowanie: tura głosowa karmi ChatLog")
+    # Bez delt w dzienniku potok Assist NIE zacznie mowic wczesniej — a tura
+    # i tak zwroci poprawna odpowiedz, wiec regresja bylaby niewidoczna z
+    # zewnatrz. Stad osobny warownik.
+    a = agent(conv)
+    dziennik = conv.ChatLog()
+    r = await a._async_handle_message(Wejscie("[lech:0.62] opowiedz żart", None), dziennik)
+    sprawdz("odpowiedź wróciła", r.response.speech == "Zrobione.")
+    sprawdz("delty trafiły do dziennika", len(dziennik.delty) >= 2)
+    sprawdz(
+        "pierwsza delta otwiera rolę asystenta",
+        dziennik.delty[0].get("role") == "assistant",
+    )
+    sprawdz(
+        "treść poszła jako delta",
+        any(d.get("content") == "Zrobione." for d in dziennik.delty),
     )
 
     print("\n" + ("WSZYSTKO ZIELONE" if sprawdz.ok else "SĄ BŁĘDY"))

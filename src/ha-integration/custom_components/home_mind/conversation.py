@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections import deque
@@ -12,6 +13,7 @@ import aiohttp
 
 from homeassistant.components import conversation as ha_conversation
 from homeassistant.components.conversation import (
+    ChatLog,
     ConversationEntity,
     ConversationEntityFeature,
     ConversationInput,
@@ -44,6 +46,7 @@ from .const import (
     DEFAULT_USER_ID,
     DEFAULT_TIMEOUT,
     API_CHAT_ENDPOINT,
+    API_CHAT_STREAM_ENDPOINT,
     HOME_ASSISTANT_AGENT,
 )
 
@@ -171,6 +174,10 @@ class HomeMindConversationAgent(ConversationEntity):
     _attr_has_entity_name = True
     _attr_name = None
     _attr_supported_features = ConversationEntityFeature.CONTROL
+    # Potok Assist zaczyna mowic, zanim model skonczy — ale TYLKO gdy agent to
+    # zglosi (`pipeline.py`: `tts_stream.supports_streaming_input AND
+    # intent_agent.supports_streaming`). Piper po naszej stronie juz to potrafi.
+    _attr_supports_streaming = True
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize the agent."""
@@ -209,8 +216,20 @@ class HomeMindConversationAgent(ConversationEntity):
         """Return supported languages."""
         return MATCH_ALL
 
-    async def async_process(self, user_input: ConversationInput) -> ConversationResult:
-        """Process a conversation input and return a response."""
+    async def _async_handle_message(
+        self, user_input: ConversationInput, chat_log: ChatLog
+    ) -> ConversationResult:
+        """Process a conversation input and return a response.
+
+        🔑 To bylo `async_process`. Przeniesione, bo bazowe `async_process`
+        otwiera `chat_log` i dopiero podaje go tutaj — a bez `chat_log` nie ma
+        jak wpychac delt, czyli nie ma strumieniowania do TTS. Zachowanie tury
+        jest bez zmian; dochodzi tylko dostep do dziennika rozmowy.
+
+        ⚠️ Wczesne wyjscia (cisza dla obcego glosu, odpowiedz agenta lokalnego)
+        `chat_log` NIE dotykaja i tak ma zostac — potok radzi sobie z tura, ktora
+        nie przyslala ani jednej delty.
+        """
         _LOGGER.debug("Processing conversation input: %s", user_input.text)
 
         # A speaker tag from voice-match has to come off before anything reads
@@ -365,14 +384,23 @@ class HomeMindConversationAgent(ConversationEntity):
                 return local_result
 
         try:
-            response_text, _tools_used = await self._call_api(
-                message=message,
-                user_id=user_id,
-                conversation_id=conversation_id,
-                is_voice=is_voice,
-                user_name=user_name,
-                identity_confidence=identity_confidence if rozpoznany else "unknown",
-            )
+            # Strumieniowo tylko przy glosie: przy rozmowie pisanej nie ma TTS,
+            # ktory mialby ruszyc wczesniej, wiec caly zysk znika, a zostaje
+            # dodatkowa droga, ktora moze sie zepsuc.
+            wspolne = {
+                "message": message,
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+                "is_voice": is_voice,
+                "user_name": user_name,
+                "identity_confidence": identity_confidence if rozpoznany else "unknown",
+            }
+            if is_voice:
+                response_text, _tools_used = await self._call_api_stream(
+                    chat_log, **wspolne
+                )
+            else:
+                response_text, _tools_used = await self._call_api(**wspolne)
             _LOGGER.debug(
                 "Got response: %s", response_text[:100] if response_text else "None"
             )
@@ -754,7 +782,49 @@ class HomeMindConversationAgent(ConversationEntity):
         jalowych, ktory zamyka mikrofon.
         """
         url = f"{self._api_url}{API_CHAT_ENDPOINT}"
+        payload = self._zbuduj_payload(
+            message, user_id, conversation_id, is_voice, user_name, identity_confidence
+        )
+        headers = self._naglowki_api()
 
+        _LOGGER.debug("Calling Home Mind API: %s with payload: %s", url, payload)
+
+        async with self._session.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=DEFAULT_TIMEOUT),
+        ) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                raise Exception(f"API error {response.status}: {error_text}")
+
+            data = await response.json()
+            tools = data.get("toolsUsed") or []
+            return (
+                data.get("response") or "I received your request but got no response.",
+                list(tools),
+            )
+
+    def _naglowki_api(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self._api_token}"} if self._api_token else {}
+
+    def _zbuduj_payload(
+        self,
+        message: str,
+        user_id: str,
+        conversation_id: str,
+        is_voice: bool = False,
+        user_name: str | None = None,
+        identity_confidence: str = "certain",
+    ) -> dict:
+        """Ciało żądania — wspólne dla drogi zwykłej i strumieniowej.
+
+        Wydzielone, żeby te dwie drogi nie mogły się rozjechać. Gdyby każda
+        budowała payload po swojemu, opcja dodana w jednym miejscu (limit
+        pamięci, tryb wyszukiwania) działałaby tylko przy jednym z trybów —
+        i to zależnie od tego, czy akurat gra strumień.
+        """
         payload = {
             "message": message,
             "userId": user_id,
@@ -799,25 +869,76 @@ class HomeMindConversationAgent(ConversationEntity):
         if search_mode := self.entry.options.get(CONF_WEB_SEARCH_MODE):
             payload["webSearchMode"] = search_mode
 
-        headers = {}
-        if self._api_token:
-            headers["Authorization"] = f"Bearer {self._api_token}"
+        return payload
 
-        _LOGGER.debug("Calling Home Mind API: %s with payload: %s", url, payload)
+    async def _call_api_stream(
+        self,
+        chat_log: ChatLog,
+        message: str,
+        user_id: str,
+        conversation_id: str,
+        is_voice: bool = False,
+        user_name: str | None = None,
+        identity_confidence: str = "certain",
+    ) -> tuple[str, list[str]]:
+        """To samo co `_call_api`, ale kawałkami — żeby TTS ruszył wcześniej.
 
-        async with self._session.post(
-            url,
-            json=payload,
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=DEFAULT_TIMEOUT),
-        ) as response:
-            if response.status != 200:
-                error_text = await response.text()
-                raise Exception(f"API error {response.status}: {error_text}")
+        🔑 PO CO. Odpowiedź rozmowna powstaje w kilka sekund, ale pierwsze
+        słowa są gotowe po ~2 s. Wpychając je do `chat_log` w miarę, jak
+        przychodzą, pozwalamy potokowi Assist zacząć mówić, zanim model
+        skończy — potok sam pilnuje, żeby nie wypowiedzieć całości drugi raz
+        (`_streamed_response_text` w `pipeline.py`).
 
-            data = await response.json()
-            tools = data.get("toolsUsed") or []
-            return (
-                data.get("response") or "I received your request but got no response.",
-                list(tools),
-            )
+        ⚠️ Delty trzeba wpychać przez `chat_log`, a NIE zwracać samemu tekstem:
+        potok nasłuchuje na `chat_log.delta_listener`, który sam podpiął przy
+        otwieraniu dziennika. Zwrócony tekst obsługuje dopiero koniec tury.
+        """
+        url = f"{self._api_url}{API_CHAT_STREAM_ENDPOINT}"
+        payload = self._zbuduj_payload(
+            message, user_id, conversation_id, is_voice, user_name, identity_confidence
+        )
+        zebrane: list[str] = []
+        narzedzia: list[str] = []
+        calosc_z_konca: str | None = None
+
+        async def kawalki():
+            """Zamienia SSE serwera na delty, których oczekuje `chat_log`."""
+            nonlocal calosc_z_konca
+            yield {"role": "assistant"}
+            async with self._session.post(
+                url,
+                json=payload,
+                headers=self._naglowki_api(),
+                timeout=aiohttp.ClientTimeout(total=DEFAULT_TIMEOUT),
+            ) as response:
+                if response.status != 200:
+                    tresc = await response.text()
+                    raise Exception(f"API error {response.status}: {tresc}")
+                zdarzenie = ""
+                async for surowa in response.content:
+                    linia = surowa.decode("utf-8").rstrip("\r\n")
+                    if linia.startswith("event:"):
+                        zdarzenie = linia[6:].strip()
+                    elif linia.startswith("data:"):
+                        try:
+                            dane = json.loads(linia[5:].strip())
+                        except json.JSONDecodeError:
+                            continue
+                        if zdarzenie == "chunk":
+                            tekst = dane.get("text") or ""
+                            if tekst:
+                                zebrane.append(tekst)
+                                yield {"content": tekst}
+                        elif zdarzenie == "done":
+                            narzedzia.extend(dane.get("toolsUsed") or [])
+                            calosc_z_konca = dane.get("response")
+                        elif zdarzenie == "error":
+                            raise Exception(f"API stream error: {dane}")
+
+        async for _ in chat_log.async_add_delta_content_stream(self.entity_id, kawalki()):
+            pass
+
+        # `done` niesie pełną odpowiedź i jest źródłem prawdy; sklejone kawałki
+        # są zapasem na wypadek, gdyby to zdarzenie nie doszło.
+        tekst = (calosc_z_konca or "".join(zebrane)).strip()
+        return (tekst or "I received your request but got no response.", narzedzia)

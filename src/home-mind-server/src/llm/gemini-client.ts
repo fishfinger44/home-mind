@@ -284,6 +284,11 @@ export class GeminiChatEngine implements IChatEngine {
     // Ustawiane, gdy ta tura poszla na sciezke rozmowna — wtedy `responseText`
     // jest juz gotowy i petla narzedzi nie ma nic wiecej do zrobienia.
     let przekazaneDoRozmowy = false;
+    // 🔴 Ustawiane, gdy kawalki poszly juz przez `onChunk` ze sciezki rozmownej.
+    // Bez tego domykajace `onChunk(responseText)` nizej wyslaloby CALA odpowiedz
+    // DRUGI RAZ, a odbiorca (HA) sklejalby ja z juz wypowiedziana — czyli
+    // asystent powtarzalby sam siebie.
+    let juzStrumieniowane = false;
 
     // WCZESNY ROUTER — skrot omijajacy decyzje modelu.
     //
@@ -303,10 +308,13 @@ export class GeminiChatEngine implements IChatEngine {
           factContents,
           historiaRozmowy,
           request.userName,
-          trustedIdentity
+          trustedIdentity,
+          conversationId,
+          onChunk
         );
         if (odpowiedzRozmowy) {
           responseText = odpowiedzRozmowy;
+          juzStrumieniowane = !!onChunk;
           przekazaneDoRozmowy = true;
         } else {
           // Shim padl. NIE odpowiadamy sami i nie zostawiamy czlowieka z niczym
@@ -394,10 +402,13 @@ export class GeminiChatEngine implements IChatEngine {
             factContents,
             historiaRozmowy,
             request.userName,
-            trustedIdentity
+            trustedIdentity,
+            conversationId,
+            onChunk
           );
           if (odpowiedzRozmowy) {
             responseText = odpowiedzRozmowy;
+            juzStrumieniowane = !!onChunk;
             przekazaneDoRozmowy = true;
             break;
           }
@@ -483,7 +494,7 @@ export class GeminiChatEngine implements IChatEngine {
 
     // Deliver the whole answer to the streaming callback in one shot (this engine
     // is non-streaming; the HA /api/chat path doesn't require token streaming).
-    if (onChunk && responseText) onChunk(responseText);
+    if (onChunk && responseText && !juzStrumieniowane) onChunk(responseText);
 
     const error =
       responseText === ""
@@ -514,18 +525,29 @@ export class GeminiChatEngine implements IChatEngine {
     fakty: string[],
     historia: { role: string; content: string }[],
     mowca?: string,
-    zaufany: boolean = true
+    zaufany: boolean = true,
+    /** Id rozmowy — shim trzyma po nim ZYWY proces `claude`, wiec kolejne tury
+     *  nie placa ~3 s startu obudowy (zmierzone: 1,77 s → 0,78 s do pierwszego
+     *  kawalka). Bez id kazda tura dostaje wlasny, jednorazowy proces. */
+    rozmowaId?: string,
+    /** Gdy podane, kawalki ida na biezaco — to one pozwalaja HA zaczac mowic,
+     *  zanim odpowiedz sie skonczy. */
+    onChunk?: StreamCallback
   ): Promise<string | null> {
     const adres = this.config.rozmowaUrl;
     if (!adres) return null;
     const start = Date.now();
     try {
-      const odp = await fetch(`${adres}/rozmowa`, {
+      // Strumien tylko wtedy, gdy jest komu oddawac kawalki. Inaczej stara
+      // koncowka: jeden JSON, zero roznicy w zachowaniu.
+      const koncowka = onChunk ? "/rozmowa/strumien" : "/rozmowa";
+      const odp = await fetch(`${adres}${koncowka}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           pytanie,
           fakty,
+          ...(rozmowaId ? { rozmowa_id: rozmowaId } : {}),
           // ⚠️ Historia z LIMITEM. Jest tu potrzebna (to rozmowa), ale to ta sama
           // droga, ktora zatrula asystenta przy awarii "Echo" — wiec wpuszczamy
           // ostatnie kilka tur, a nie calosc.
@@ -545,9 +567,55 @@ export class GeminiChatEngine implements IChatEngine {
         console.error(`[rozmowa] shim zwrocil ${odp.status}: ${tresc.slice(0, 200)}`);
         return null;
       }
-      const dane = (await odp.json()) as { odpowiedz?: string };
-      const tekst = (dane.odpowiedz ?? "").trim();
-      console.log(`[rozmowa] odpowiedz w ${((Date.now() - start) / 1000).toFixed(1)} s`);
+
+      if (!onChunk || !odp.body) {
+        const dane = (await odp.json()) as { odpowiedz?: string };
+        const tekst = (dane.odpowiedz ?? "").trim();
+        console.log(`[rozmowa] odpowiedz w ${((Date.now() - start) / 1000).toFixed(1)} s`);
+        return tekst || null;
+      }
+
+      // NDJSON: linia na kawalek, `{"koniec":true}` konczy, `{"blad":…}` zglasza
+      // usterke.
+      // ⚠️ Naglowki poszly PRZED trescia, wiec status 200 NIE znaczy, ze tura
+      // sie udala — blad moze przyjsc dopiero w strumieniu i trzeba go czytac
+      // z tresci.
+      let calosc = "";
+      let pierwszy: number | null = null;
+      let bladStrumienia: string | null = null;
+      let bufor = "";
+      const dekoder = new TextDecoder();
+      for await (const porcja of odp.body as unknown as AsyncIterable<Uint8Array>) {
+        bufor += dekoder.decode(porcja, { stream: true });
+        const linie = bufor.split("\n");
+        // Ostatni element to ogon bez `\n` — czeka na kolejna porcje.
+        bufor = linie.pop() ?? "";
+        for (const linia of linie) {
+          if (!linia.trim()) continue;
+          let obiekt: { tekst?: string; koniec?: boolean; blad?: string };
+          try {
+            obiekt = JSON.parse(linia);
+          } catch {
+            continue;
+          }
+          if (obiekt.blad) {
+            bladStrumienia = obiekt.blad;
+          } else if (obiekt.tekst) {
+            if (pierwszy === null) pierwszy = Date.now() - start;
+            calosc += obiekt.tekst;
+            onChunk(obiekt.tekst);
+          }
+        }
+      }
+      if (bladStrumienia) {
+        console.error(`[rozmowa] shim zglosil blad w strumieniu: ${bladStrumienia}`);
+        return null;
+      }
+      const tekst = calosc.trim();
+      console.log(
+        `[rozmowa] pierwszy kawalek po ${((pierwszy ?? 0) / 1000).toFixed(1)} s, ` +
+          `calosc w ${((Date.now() - start) / 1000).toFixed(1)} s`
+      );
       return tekst || null;
     } catch (e) {
       console.error(`[rozmowa] shim niedostepny: ${e instanceof Error ? e.message : String(e)}`);

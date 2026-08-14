@@ -29,10 +29,12 @@ wymaga usunięcia tej flagi, inaczej wywołanie padnie.
 
 import json
 import os
-import subprocess
 import sys
 import tempfile
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from sesje import Pula
 
 # 🔴 KATALOG NEUTRALNY — wykryte doswiadczalnie 14.08.2026.
 # `claude -p` dziedziczy katalog roboczy procesu i wciaga z niego kontekst
@@ -77,6 +79,8 @@ WYLACZONE = [
     "WebSearch", "WebFetch", "Task", "TodoWrite", "NotebookEdit",
 ]
 
+PULA = Pula(KATALOG_NEUTRALNY, WYLACZONE)
+
 PERSONA_DOMYSLNA = (
     "Jesteś domowym asystentem głosowym. Rozmawiasz po polsku, swobodnie i krótko — "
     "odpowiedź ma się nadawać do przeczytania na głos, więc bez list, nagłówków "
@@ -86,8 +90,27 @@ PERSONA_DOMYSLNA = (
 )
 
 
-def zbuduj_prompt_systemowy(dane: dict) -> str:
-    czesci = [dane.get("persona") or PERSONA_DOMYSLNA]
+def persona_stala(dane: dict) -> str:
+    """Część promptu, która NIE zmienia się z tury na turę.
+
+    🔑 Tylko to trafia do `--system-prompt`, bo prompt systemowy jest przybity
+    do procesu przy jego starcie (patrz `sesje.py`). Wszystko zmienne — mówca,
+    fakty, historia — jedzie w wiadomości użytkownika. Ta sama decyzja, którą
+    podjęliśmy dla cache'u Gemini, tylko z innego powodu.
+    """
+    return dane.get("persona") or PERSONA_DOMYSLNA
+
+
+def blok_zmienny(dane: dict, swieza_sesja: bool) -> str:
+    """Kontekst tury + samo pytanie, jako jedna wiadomość użytkownika.
+
+    ⚠️ `historia` jedzie WYŁĄCZNIE przy świeżej sesji. Żywy proces pamięta
+    poprzednie tury sam, więc dosyłanie naszej kopii dublowałoby rozmowę
+    i szybciej pchało ją w stronę awarii „Echo". Przy świeżej sesji (pierwsza
+    tura albo proces właśnie wymieniony po `MAX_TUR_SESJI`) historia jest
+    natomiast konieczna, żeby wymiana procesu nie ucinała wątku w pół zdania.
+    """
+    czesci: list[str] = []
 
     mowca = dane.get("mowca")
     if mowca:
@@ -109,14 +132,15 @@ def zbuduj_prompt_systemowy(dane: dict) -> str:
         czesci.append("## Co pamiętasz:\n" + "\n".join(f"- {f}" for f in fakty))
 
     historia = dane.get("historia") or []
-    if historia:
+    if historia and swieza_sesja:
         linie = [
             f"{'Użytkownik' if w.get('role') == 'user' else 'Ty'}: {w.get('content', '')}"
             for w in historia
         ]
         czesci.append("## Wcześniej w tej rozmowie:\n" + "\n".join(linie))
 
-    return "\n\n".join(czesci)
+    czesci.append((dane.get("pytanie") or "").strip())
+    return "\n\n".join(c for c in czesci if c)
 
 
 def wybierz_model(dane: dict) -> tuple[str, str, str | None]:
@@ -154,47 +178,50 @@ def wybierz_model(dane: dict) -> tuple[str, str, str | None]:
     return model, effort, None
 
 
-def zapytaj_claude(dane: dict) -> tuple[str | None, str | None]:
-    """Zwraca (odpowiedź, błąd) — dokładnie jedno z nich jest None."""
-    pytanie = (dane.get("pytanie") or "").strip()
-    if not pytanie:
-        return None, "puste pytanie"
+def strumien_odpowiedzi(dane: dict):
+    """Generator kawałków odpowiedzi. Rzuca `RuntimeError` z powodem błędu.
+
+    Jedno miejsce dla obu końcówek: `/rozmowa` skleja to w JSON (droga odwrotu),
+    `/rozmowa/strumien` oddaje kawałek po kawałku.
+    """
+    if not (dane.get("pytanie") or "").strip():
+        raise RuntimeError("puste pytanie")
 
     model, effort, blad = wybierz_model(dane)
     if blad:
-        return None, blad
-    # Do dziennika, bo inaczej nie da sie odroznic „panel pokazuje Opusa"
-    # od „Opus faktycznie odpowiedzial".
-    print(f"[rozmowa] model {model}, effort {effort or 'brak'}", flush=True)
+        raise RuntimeError(blad)
 
-    polecenie = ["claude", "-p", "--model", model]
-    if effort:
-        polecenie += ["--effort", effort]
-    polecenie += ["--system-prompt", zbuduj_prompt_systemowy(dane)]
-    # ⚠️ `--disallowed-tools` MUSI być ostatnie i rozwinięte na osobne argumenty;
-    # pytanie idzie przez stdin, bo inaczej ta flaga je połknie.
-    polecenie += ["--disallowed-tools", *WYLACZONE]
+    persona = persona_stala(dane)
+    # Klucz sesji = rozmowa. Bez niego (np. wywołanie z ręki) każde zapytanie
+    # dostaje własny, jednorazowy proces — czyli zachowanie jak przed zmianą.
+    klucz = (dane.get("rozmowa_id") or "").strip() or f"bez-id-{time.time()}"
 
     try:
-        wynik = subprocess.run(
-            polecenie,
-            input=pytanie,
-            capture_output=True,
-            text=True,
-            timeout=TIMEOUT_S,
-            # Patrz KATALOG_NEUTRALNY — bez tego doklejal sie CLAUDE.md projektu.
-            cwd=KATALOG_NEUTRALNY,
-        )
-    except subprocess.TimeoutExpired:
-        return None, f"przekroczony limit {TIMEOUT_S:.0f} s"
-    except FileNotFoundError:
-        return None, "nie znaleziono polecenia `claude` na hoście"
+        sesja, swieza = PULA.sesja(klucz, model, effort, persona)
+    except FileNotFoundError as e:
+        raise RuntimeError("nie znaleziono polecenia `claude` na hoście") from e
 
-    if wynik.returncode != 0:
-        return None, (wynik.stderr or "").strip()[:400] or f"kod wyjścia {wynik.returncode}"
+    print(
+        f"[rozmowa] model {model}, effort {effort or 'brak'}, "
+        f"sesja {'NOWA' if swieza else f'wznowiona (tura {sesja.tury + 1})'}",
+        flush=True,
+    )
 
-    odpowiedz = (wynik.stdout or "").strip()
-    return (odpowiedz, None) if odpowiedz else (None, "pusta odpowiedź")
+    # Jedna tura naraz na proces: to pojedynczy strumień stdin/stdout i dwa
+    # równoległe pytania rozjechałyby się nie do rozplątania.
+    with sesja.zamek:
+        try:
+            oddane = False
+            for kawalek in sesja.zapytaj(blok_zmienny(dane, swieza), TIMEOUT_S):
+                oddane = True
+                yield kawalek
+            if not oddane:
+                raise RuntimeError("pusta odpowiedź")
+        except RuntimeError:
+            # Proces w nieznanym stanie — nie zostawiamy go w puli, bo następna
+            # tura odziedziczyłaby po nim urwane wyjście.
+            PULA.zakoncz(klucz)
+            raise
 
 
 class Uchwyt(BaseHTTPRequestHandler):
@@ -208,7 +235,10 @@ class Uchwyt(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/zdrowie":
-            self._odpisz(200, {"stan": "ok", "model": MODEL, "effort": EFFORT})
+            self._odpisz(200, {
+                "stan": "ok", "model": MODEL, "effort": EFFORT,
+                "strumien": True, "sesje": PULA.stan(),
+            })
         elif self.path == "/modele":
             # Lista do wypelnienia wyboru w HA. Domysly ida razem z nia, zeby
             # panel mogl pokazac, co sie stanie, gdy nikt nic nie wybral.
@@ -225,7 +255,7 @@ class Uchwyt(BaseHTTPRequestHandler):
             self._odpisz(404, {"blad": "nie ma takiej sciezki"})
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/rozmowa":
+        if self.path not in ("/rozmowa", "/rozmowa/strumien", "/rozmowa/koniec"):
             self._odpisz(404, {"blad": "nie ma takiej sciezki"})
             return
         try:
@@ -235,12 +265,61 @@ class Uchwyt(BaseHTTPRequestHandler):
             self._odpisz(400, {"blad": f"zle wejscie: {e}"})
             return
 
-        odpowiedz, blad = zapytaj_claude(dane)
-        if blad:
-            print(f"[rozmowa] BLAD: {blad}", flush=True)
-            self._odpisz(502, {"blad": blad})
+        if self.path == "/rozmowa/koniec":
+            # Rozmowa się domknęła — proces nie ma po co żyć dalej z jej
+            # kontekstem. Bez tego czekalibyśmy na `BEZCZYNNOSC_S`.
+            PULA.zakoncz((dane.get("rozmowa_id") or "").strip())
+            self._odpisz(200, {"ok": True})
+            return
+
+        if self.path == "/rozmowa":
+            self._bez_strumienia(dane)
         else:
-            self._odpisz(200, {"odpowiedz": odpowiedz})
+            self._ze_strumieniem(dane)
+
+    def _bez_strumienia(self, dane: dict) -> None:
+        """Droga odwrotu: pełna odpowiedź jednym JSON-em, jak przed zmianą."""
+        try:
+            odpowiedz = "".join(strumien_odpowiedzi(dane)).strip()
+        except RuntimeError as e:
+            print(f"[rozmowa] BLAD: {e}", flush=True)
+            self._odpisz(502, {"blad": str(e)})
+            return
+        if not odpowiedz:
+            self._odpisz(502, {"blad": "pusta odpowiedź"})
+            return
+        self._odpisz(200, {"odpowiedz": odpowiedz})
+
+    def _ze_strumieniem(self, dane: dict) -> None:
+        """NDJSON: linia na kawałek, `{"koniec": true}` na końcu.
+
+        ⚠️ Nagłówki lecą PRZED pierwszym kawałkiem, więc błąd, który wyjdzie
+        w trakcie, nie może już zmienić kodu odpowiedzi — dlatego jedzie jako
+        `{"blad": …}` w treści. Wołający musi to sprawdzać; samo HTTP 200 nie
+        znaczy tu, że tura się udała.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+
+        def wyslij(obiekt: dict) -> None:
+            self.wfile.write((json.dumps(obiekt, ensure_ascii=False) + "\n").encode("utf-8"))
+            self.wfile.flush()
+
+        try:
+            for kawalek in strumien_odpowiedzi(dane):
+                wyslij({"tekst": kawalek})
+            wyslij({"koniec": True})
+        except RuntimeError as e:
+            print(f"[rozmowa] BLAD: {e}", flush=True)
+            try:
+                wyslij({"blad": str(e)})
+            except Exception:  # noqa: BLE001
+                pass
+        except (BrokenPipeError, ConnectionResetError):
+            # Odbiorca się rozłączył (np. HA przerwał turę) — to nie awaria.
+            print("[rozmowa] odbiorca rozlaczyl sie w trakcie", flush=True)
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002
         print(f"[rozmowa] {format % args}", file=sys.stderr, flush=True)
