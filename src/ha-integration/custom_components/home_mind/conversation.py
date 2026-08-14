@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from collections import deque
 from dataclasses import replace
 from typing import Any, Literal
@@ -157,6 +158,26 @@ PROG_ZAPASCI = 0.75
 OKNO_PODOBIENSTW = 20
 MIN_PROBEK_ODNIESIENIA = 5
 
+# WZNAWIANIE PRZERWANEJ ROZMOWY.
+#
+# Mikrofon bywa zamykany za wcześnie — cisza w złym momencie kończy turę,
+# a przy następnym wybudzeniu asystent zaczynał od zera i gubił wątek
+# (zgłoszone przez Lecha 15.08 przy rundzie zagadek).
+#
+# 🔑 Kluczem jest URZĄDZENIE, nie mówca — bo przerwana rozmowa najczęściej
+# wraca z tego samego satelity, a wymaganie pewnego rozpoznania sprawiłoby,
+# że wznowienie prawie nigdy by nie zaskoczyło (weryfikacja bywa zawodna przy
+# krótkich wypowiedziach — zmierzone 0,221 dla „Okej.").
+#
+# ⛔ Biometria zostaje jednak jako WETO, nie jako warunek: gdy poprzednią
+# rozmowę miała rozpoznana osoba, a teraz mówi rozpoznana INNA — nie wznawiamy.
+# Bez tego jedno wybudzenie oddawałoby cudzą historię.
+#
+# ⛔ Okno jest krótkie z rozmysłem. Dłuższe zlepiałoby rozmowy niezwiązane
+# ze sobą i zamieniało „wznowienie" w „asystent pamięta wszystko z rana" —
+# czyli w lawinę, przed którą sami się bronimy.
+OKNO_WZNOWIENIA_S = 180.0
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -201,6 +222,10 @@ class HomeMindConversationAgent(ConversationEntity):
         # odniesienie liczone w obrebie jednej sesji nie mialoby wtedy z czym
         # porownywac i przegapiloby dokladnie ten przypadek.
         self._podobienstwa_mowcy: dict[str, deque[float]] = {}
+        # Ostatnia rozmowa na urządzeniu:
+        # {urządzenie: (conversation_id, kiedy, mówca_lub_None)}.
+        # Patrz OKNO_WZNOWIENIA_S.
+        self._ostatnia_rozmowa: dict[str, tuple[str, float, str | None]] = {}
 
         self._attr_unique_id = entry.entry_id
         self._attr_device_info = dr.DeviceInfo(
@@ -322,7 +347,11 @@ class HomeMindConversationAgent(ConversationEntity):
         is_voice = user_input.agent_id is not None
 
         # Generate conversation ID if not provided
-        conversation_id = user_input.conversation_id or ulid.ulid_now()
+        conversation_id = user_input.conversation_id or self._wznow_lub_nowa(
+            user_id if pewnie_rozpoznany else None,
+            is_voice,
+            getattr(user_input, "device_id", None),
+        )
 
         stan = self._stan_rozmowy.get(conversation_id, {"wlasciciel": None, "obce": 0})
         wlasciciel = stan["wlasciciel"]
@@ -425,6 +454,20 @@ class HomeMindConversationAgent(ConversationEntity):
             trzymaj = self._trzymaj_mikrofon(
                 response_text, is_voice, wlasciciel
             ) and not self._is_farewell(message)
+
+            # Ślad do ewentualnego wznowienia. Zapisujemy po KAŻDEJ turze, nie
+            # tylko przy zamknięciu mikrofonu: znacznik czasu ma liczyć od
+            # ostatniej wymiany, a nie od początku rozmowy.
+            # ⛔ Pożegnanie ślad KASUJE — „dobranoc" znaczy koniec, a nie
+            # przerwę, i wracanie po nim do tamtego wątku byłoby dziwne.
+            if self._is_farewell(message):
+                self._ostatnia_rozmowa.pop(
+                    getattr(user_input, "device_id", None) or "bez-urzadzenia", None
+                )
+            elif is_voice:
+                self._zapamietaj_rozmowe(
+                    getattr(user_input, "device_id", None), conversation_id, wlasciciel
+                )
 
             if trzymaj and wlasciciel is None and pytania > self.MAX_PYTAN_BEZ_WLASCICIELA:
                 _LOGGER.info(
@@ -586,6 +629,63 @@ class HomeMindConversationAgent(ConversationEntity):
     # kazdej turze, po ktorej asystent NIE pyta — czyli przy zwyklej rozmowie
     # nigdy nie dochodzi nawet blisko.
     MAX_PYTAN_BEZ_WLASCICIELA = 10
+
+    def _wznow_lub_nowa(
+        self, mowca: str | None, is_voice: bool, urzadzenie: str | None
+    ) -> str:
+        """Id rozmowy: wznów przerwaną na tym urządzeniu albo załóż nową.
+
+        Rozwiązuje konkretną przypadłość: mikrofon bywa zamykany za wcześnie
+        (cisza w złym momencie kończy turę), a przy następnym wybudzeniu
+        asystent zaczynał od zera i gubił wątek — w środku rundy zagadek to
+        znaczyło, że nie pamiętał, o którą zagadkę toczy się gra.
+
+        Wznowienie NIE wymaga rozpoznania głosu, bo wtedy zaskakiwałoby rzadko.
+        Biometria działa tu jako WETO: odmawiamy tylko wtedy, gdy wiemy na
+        pewno, że to KTOŚ INNY niż poprzednio.
+
+        ⚠️ Zostaje więc jeden przypadek świadomie przepuszczany: nierozpoznany
+        głos budzi satelitę tuż po czyjejś rozmowie i dostaje jej historię.
+        Okno jest krótkie właśnie dlatego.
+        """
+        if not is_voice:
+            return ulid.ulid_now()
+
+        klucz = urzadzenie or "bez-urzadzenia"
+        wpis = self._ostatnia_rozmowa.get(klucz)
+        if wpis is None:
+            return ulid.ulid_now()
+
+        poprzednia, kiedy, poprzedni_mowca = wpis
+        wiek = time.monotonic() - kiedy
+        if wiek > OKNO_WZNOWIENIA_S:
+            return ulid.ulid_now()
+
+        # Weto biometryczne: obie strony rozpoznane i to dwie różne osoby.
+        if poprzedni_mowca and mowca and poprzedni_mowca != mowca:
+            _LOGGER.info(
+                "Nie wznawiam rozmowy '%s': poprzednio mówił %s, teraz %s",
+                poprzednia, poprzedni_mowca, mowca,
+            )
+            return ulid.ulid_now()
+
+        _LOGGER.info(
+            "Wznawiam rozmowę '%s' (przerwana %.0f s temu, mówca: %s)",
+            poprzednia, wiek, mowca or "nierozpoznany",
+        )
+        return poprzednia
+
+    def _zapamietaj_rozmowe(
+        self, urzadzenie: str | None, conversation_id: str, mowca: str | None
+    ) -> None:
+        """Ślad do wznowienia. Sufit, bo satelitów jest garść, a nie tysiące."""
+        if not conversation_id:
+            return
+        if len(self._ostatnia_rozmowa) > 32:
+            self._ostatnia_rozmowa.clear()
+        self._ostatnia_rozmowa[urzadzenie or "bez-urzadzenia"] = (
+            conversation_id, time.monotonic(), mowca,
+        )
 
     def _zbadaj_zanieczyszczenie(
         self, speaker: str | None, podobienstwo: float | None

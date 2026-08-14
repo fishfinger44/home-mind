@@ -199,6 +199,7 @@ def agent(conv, prefer_local=False):
     # pole obiektu trzeba dolozyc tutaj. Bez tego testy padaja na
     # AttributeError daleko od miejsca, ktore je wprowadzilo.
     a._podobienstwa_mowcy = {}
+    a._ostatnia_rozmowa = {}
     a._default_user_id = "default"
     a.entry = MagicMock()
     a.entry.options = {"prefer_local": prefer_local}
@@ -384,6 +385,35 @@ async def main() -> int:
         "treść poszła jako delta",
         any(d.get("content") == "Zrobione." for d in dziennik.delty),
     )
+
+    print("\n13. Wznawianie przerwanej rozmowy")
+    # Mikrofon bywa zamykany za wcześnie. Bez wznawiania asystent gubił wątek
+    # w środku rundy zagadek i pytał „czy to były słowa z naszej zagadki?".
+    a = agent(conv)
+    r1 = await uruchom(conv, a, "[lech:0.62] zadaj mi zagadkę")
+    cid1 = r1.conversation_id
+    r2 = await uruchom(conv, a, "[lech:0.62] nie wiem")     # nowe wybudzenie, bez cid
+    sprawdz("ta sama osoba wraca do TEJ SAMEJ rozmowy", r2.conversation_id == cid1)
+
+    # 🔑 Weto biometryczne: rozpoznany ktoś INNY nie dziedziczy cudzej historii.
+    r3 = await uruchom(conv, a, "[zuza:0.62] a mnie coś opowiedz")
+    sprawdz("inna rozpoznana osoba dostaje WŁASNĄ rozmowę", r3.conversation_id != cid1)
+
+    # Pożegnanie kasuje ślad — „dobranoc" znaczy koniec, nie przerwę.
+    b = agent(conv)
+    rb1 = await uruchom(conv, b, "[lech:0.62] opowiedz żart")
+    await uruchom(conv, b, "[lech:0.62] dobranoc")
+    rb3 = await uruchom(conv, b, "[lech:0.62] a jednak jeszcze jedno")
+    sprawdz("po pożegnaniu NIE wznawiamy", rb3.conversation_id != rb1.conversation_id)
+
+    # Okno jest skończone: stary ślad nie może wracać po godzinie.
+    c = agent(conv)
+    rc1 = await uruchom(conv, c, "[lech:0.62] opowiedz żart")
+    klucz = "bez-urzadzenia"
+    cid, _, mowca = c._ostatnia_rozmowa[klucz]
+    c._ostatnia_rozmowa[klucz] = (cid, 0.0, mowca)   # udajemy, że było dawno
+    rc2 = await uruchom(conv, c, "[lech:0.62] i co dalej")
+    sprawdz("po wygaśnięciu okna zaczynamy od nowa", rc2.conversation_id != rc1.conversation_id)
 
     print("\n" + ("WSZYSTKO ZIELONE" if sprawdz.ok else "SĄ BŁĘDY"))
     return 0 if sprawdz.ok else 1
