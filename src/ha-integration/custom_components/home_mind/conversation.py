@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import deque
 from dataclasses import replace
 from typing import Any, Literal
 
@@ -140,6 +141,19 @@ MAX_TUR_OBCYCH = 3
 # licznik wybacza jedna.
 PEWNE_ROZPOZNANIE = 0.35
 
+# DETEKTOR ZANIECZYSZCZONEJ TURY — obcy glos W TYM SAMYM nagraniu co mowca.
+#
+# Progi dobrane do jedynego zmierzonego materialu (rozmowa 14.08): tury czyste
+# 0,509-0,684, tura z doklejona cudza mowa 0,384. Przy sredniej ~0,62 daje to
+# 62% normy, wiec prog 75% lapie ten przypadek z zapasem i nie rusza wahania
+# 0,589/0,62 (95%), ktore od zwyklej zmiennosci glosu jest nieodroznialne.
+#
+# ⚠️ To sa progi z JEDNEJ rozmowy. Zanim cokolwiek na nich oprzec poza logiem,
+# zebrac wiecej trafien — patrz ostrzezenie w `_zbadaj_zanieczyszczenie`.
+PROG_ZAPASCI = 0.75
+OKNO_PODOBIENSTW = 20
+MIN_PROBEK_ODNIESIENIA = 5
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -172,6 +186,14 @@ class HomeMindConversationAgent(ConversationEntity):
         # rozmowa pisana moze trwac obok glosowej; wpis znika, gdy tura sie
         # domyka, wiec nie rosnie w nieskonczonosc.
         self._stan_rozmowy: dict[str, dict[str, Any]] = {}
+        # Ostatnie CZYSTE dopasowania per mowca — odniesienie dla detektora
+        # zanieczyszczonej tury (patrz `_zbadaj_zanieczyszczenie`).
+        #
+        # Per MOWCA, a nie per rozmowa, swiadomie: zanieczyszczona bywa juz
+        # PIERWSZA tura sesji (tak bylo 14.08 — 0,384 otwieralo rozmowe), a
+        # odniesienie liczone w obrebie jednej sesji nie mialoby wtedy z czym
+        # porownywac i przegapiloby dokladnie ten przypadek.
+        self._podobienstwa_mowcy: dict[str, deque[float]] = {}
 
         self._attr_unique_id = entry.entry_id
         self._attr_device_info = dr.DeviceInfo(
@@ -271,6 +293,11 @@ class HomeMindConversationAgent(ConversationEntity):
             )
         elif podobienstwo is not None:
             _LOGGER.debug("Głos '%s' dopasowany na %.3f", speaker, podobienstwo)
+
+        # Wynik jest CELOWO nieuzywany: detektor na tym etapie tylko obserwuje
+        # i zapisuje do logu. Zwraca bool, zeby dalo sie na nim oprzec decyzje,
+        # gdy juz zobaczymy, jak czesto bije — patrz `_zbadaj_zanieczyszczenie`.
+        self._zbadaj_zanieczyszczenie(speaker, podobienstwo)
 
         # Determine if this is a voice request
         is_voice = user_input.agent_id is not None
@@ -531,6 +558,62 @@ class HomeMindConversationAgent(ConversationEntity):
     # kazdej turze, po ktorej asystent NIE pyta — czyli przy zwyklej rozmowie
     # nigdy nie dochodzi nawet blisko.
     MAX_PYTAN_BEZ_WLASCICIELA = 10
+
+    def _zbadaj_zanieczyszczenie(
+        self, speaker: str | None, podobienstwo: float | None
+    ) -> bool:
+        """Czy w tym nagraniu slychac kogos jeszcze poza mowca.
+
+        SKAD SIE WZIELO. 14.08 Lech uslyszal w odpowiedziach slady cudzej mowy,
+        mimo ze biometria rozpoznala JEGO w kazdej turze. Bramka obcych tur nie
+        miala czego lapac, bo obcy glos nie przyszedl jako osobna tura — trafil
+        do TEGO SAMEGO nagrania. Jedno nagranie to jeden embedding i jedna
+        transkrypcja, wiec z punktu widzenia sesji tura naprawde jest Lecha.
+
+        🔑 SYGNAL. ECAPA liczy jeden wektor na CALYM segmencie, wiec drugi glos
+        rozmywa go i ciagnie wynik w dol. Zmierzone tego wieczora: tury czyste
+        0,509-0,684, a tura z doklejonym „Ja na przyklad kupilem zart" — 0,384,
+        czyli minimum sesji. Nie liczy sie wiec wartosc bezwzgledna (0,384 wciaz
+        przechodzi prog 0,30 i ma przechodzic), tylko ZAPASC wobec tego, jak ta
+        osoba wypada zwykle.
+
+        ⚠️ Wykrywa PRZYPADKI MOCNE. Druga podejrzana tura tego wieczora (0,589
+        przy sredniej 0,62) NIE zostanie zlapana i to jest swiadoma granica:
+        czulszy prog zaczalby oznaczac zwykle wahania glosu.
+
+        ⛔ NA RAZIE TYLKO OBSERWUJE — nie odrzuca tury i nie zmienia trasy.
+        Odrzucanie na podstawie jednej liczby kasowaloby czasem prawdziwa
+        wypowiedz, a to gorsze niz slad cudzego zdania w kontekscie. Najpierw
+        zbierzmy, jak czesto to bije.
+        """
+        if speaker is None or podobienstwo is None:
+            return False
+
+        historia = self._podobienstwa_mowcy.setdefault(
+            speaker, deque(maxlen=OKNO_PODOBIENSTW)
+        )
+        # Zanim uzbiera sie odniesienie, nie ma czego porownywac — a zgadywanie
+        # na dwoch probkach dawaloby falszywe alarmy na poczatku kazdej sesji.
+        if len(historia) < MIN_PROBEK_ODNIESIENIA:
+            historia.append(podobienstwo)
+            return False
+
+        srednia = sum(historia) / len(historia)
+        if podobienstwo < srednia * PROG_ZAPASCI:
+            _LOGGER.warning(
+                "Tura '%s' podejrzana o obcy głos W TYM SAMYM nagraniu: "
+                "dopasowanie %.3f przy zwykłych %.3f (%.0f%% normy, próg %.0f%%). "
+                "Treść wchodzi do rozmowy bez zmian — to na razie tylko sygnał.",
+                speaker, podobienstwo, srednia,
+                100 * podobienstwo / srednia, 100 * PROG_ZAPASCI,
+            )
+            # 🔑 Podejrzanej probki NIE dopisujemy do odniesienia. Wliczona
+            # obnizalaby srednia, czyli kazde kolejne zanieczyszczenie byloby
+            # trudniej wykryc — detektor sam by sie stepial.
+            return True
+
+        historia.append(podobienstwo)
+        return False
 
     @staticmethod
     def _oddaje_glos(response: str) -> bool:

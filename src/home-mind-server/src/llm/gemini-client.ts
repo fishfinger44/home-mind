@@ -22,6 +22,7 @@ import { TOOL_DEFINITIONS, toGeminiTools } from "./tool-definitions.js";
 import { handleToolCall, extractAndStoreFacts, recallFacts } from "./tool-handler.js";
 import type { KontekstPamieci } from "./tool-handler.js";
 import { trustsProfile } from "./interface.js";
+import { zdecyduj } from "./router-rozmowy.js";
 import type { WebSearchSettings } from "./tool-handler.js";
 import type {
   ChatRequest,
@@ -115,6 +116,18 @@ export class GeminiChatEngine implements IChatEngine {
   private ha: HomeAssistantClient;
   private scanner: DeviceScanner;
   private topology: TopologyScanner;
+
+  /** Ktore rozmowy mialy OSTATNIA ture na sciezce rozmownej.
+   *
+   *  Potrzebne wczesnemu routerowi do rozpoznania kontynuacji: „nie wiem" po
+   *  zagadce ma zostac na rozmowie, ale „tak" po pytaniu asystenta „czy zgasic
+   *  swiatlo?" absolutnie nie. Bez tej pamieci obu przypadkow nie da sie
+   *  odroznic, bo tekst wypowiedzi jest w obu tak samo ubogi.
+   *
+   *  ⚠️ Zyje w PAMIECI PROCESU i ginie przy odtworzeniu silnika (zmiana modelu,
+   *  przelacznik w HA). To jest w porzadku: brak wpisu znaczy „nie wiem", a
+   *  „nie wiem" prowadzi stara droga — czyli w bezpieczna strone. */
+  private ostatniaTuraRozmowna = new Map<string, boolean>();
 
   constructor(
     config: Config,
@@ -231,14 +244,37 @@ export class GeminiChatEngine implements IChatEngine {
     // i wlacznika (preferencja, przelaczana z HA bez restartu).
     const rozmowaAktywna =
       Boolean(this.config.rozmowaUrl) && this.config.rozmowaWlaczona !== false;
+    // Decyzja wczesnego routera. Liczona TUTAJ, bo potrzebna w dwoch miejscach:
+    // do skrotu ponizej i do zestawu narzedzi tuz obok.
+    const ostatniaAsystenta = [...historiaRozmowy].reverse().find((w) => w.role === "assistant");
+    const decyzjaRouteru = zdecyduj(message, {
+      poprzedniaNaRozmowie: conversationId
+        ? this.ostatniaTuraRozmowna.get(conversationId) === true
+        : false,
+      asystentPytal: (ostatniaAsystenta?.content ?? "")
+        .trim()
+        .replace(/["'”’)\]]+$/, "")
+        .endsWith("?"),
+    });
+
     const buildTools = (): unknown[] => {
       const zSzukaniem = webSearchEnabled && !useGrounding;
-      const set = rozmowaAktywna
+      // 🔴 WETO ODBIERA MODELOWI NARZEDZIE ROZMOWNE, a nie tylko blokuje nasz
+      // skrot. Zmierzone 14.08: przy „opowiedz zart i sprawdz czy okno w salonie
+      // jest zamkniete" model sam wywolal `odpowiedz_rozmowa` — wbrew opisowi
+      // tego narzedzia, ktory tego zabrania — i okno nie zostalo sprawdzone,
+      // a czlowiek uslyszal gladkie „nie mam dostepu do sterowania domem".
+      // Opis narzedzia okazal sie prosba, nie bariera. To jest bariera.
+      const zRozmowa = rozmowaAktywna && !decyzjaRouteru.wetoDomowe;
+      const set = zRozmowa
         ? (zSzukaniem ? HA_FUNCTION_TOOLS_WITH_SEARCH_ROZMOWA : HA_FUNCTION_TOOLS_ROZMOWA)
         : (zSzukaniem ? HA_FUNCTION_TOOLS_WITH_SEARCH : HA_FUNCTION_TOOLS);
       return useGrounding ? [set, { googleSearch: {} }] : [set];
     };
     let tools = buildTools();
+    if (rozmowaAktywna && decyzjaRouteru.wetoDomowe) {
+      console.log(`[rozmowa] ${decyzjaRouteru.powod} — narzedzie rozmowne zdjete z tej tury`);
+    }
 
     // 4. Tool loop
     let responseText = "";
@@ -249,7 +285,39 @@ export class GeminiChatEngine implements IChatEngine {
     // jest juz gotowy i petla narzedzi nie ma nic wiecej do zrobienia.
     let przekazaneDoRozmowy = false;
 
-    while (true) {
+    // WCZESNY ROUTER — skrot omijajacy decyzje modelu.
+    //
+    // 🔑 Stoi TUTAJ, a nie przed wejsciem do silnika, celowo: dalej jestesmy
+    // w `chat()`, wiec zapis tury do historii i `extractAndStoreFacts` ponizej
+    // dzialaja bez zmian. Gdyby skrot siedzial wyzej i omijal silnik, ekstrakcja
+    // pamieci zniknelaby po cichu — a rozmowa jest wlasnie tym miejscem, gdzie
+    // padaja fakty osobiste. (Ta sama zasada, co przy przekazaniu z petli.)
+    //
+    // Kosztuje zero wywolan sieciowych. Gdy nie ma pewnosci, nic nie robi
+    // i tura idzie stara droga — patrz `router-rozmowy.ts`.
+    if (rozmowaAktywna) {
+      if (decyzjaRouteru.naRozmowe) {
+        console.log(`[rozmowa] router skraca: ${decyzjaRouteru.powod}`);
+        const odpowiedzRozmowy = await this.zapytajRozmowa(
+          message,
+          factContents,
+          historiaRozmowy,
+          request.userName,
+          trustedIdentity
+        );
+        if (odpowiedzRozmowy) {
+          responseText = odpowiedzRozmowy;
+          przekazaneDoRozmowy = true;
+        } else {
+          // Shim padl. NIE odpowiadamy sami i nie zostawiamy czlowieka z niczym
+          // — po prostu wchodzimy w normalna petle, gdzie Gemini odpowie jak
+          // przed istnieniem tego skrotu.
+          console.warn("[rozmowa] shim niedostepny — wracam na normalna sciezke");
+        }
+      }
+    }
+
+    while (!przekazaneDoRozmowy) {
       let data: GeminiResponse;
       try {
         data = await this.generate(
@@ -376,6 +444,21 @@ export class GeminiChatEngine implements IChatEngine {
     // 5. Persist + extract facts (fire-and-forget)
     if (conversationId && responseText) {
       this.conversations.storeMessage(conversationId, userId, "assistant", responseText);
+    }
+    // Slad dla wczesnego routera przy NASTEPNEJ turze — patrz `ostatniaTuraRozmowna`.
+    // Zapisujemy zawsze, takze `false`: tura domowa w srodku pogawedki musi
+    // ZAMKNAC kontynuacje, inaczej „tak" po pytaniu o zgaszenie swiatla dalej
+    // uchodziloby za odpowiedz na zagadke sprzed dwoch tur.
+    if (conversationId) {
+      // Sufit, bo serwer chodzi tygodniami, a kazde wybudzenie satelity to nowy
+      // `conversationId` — bez tego mapa rosnie w nieskonczonosc. Kasujemy
+      // najstarszy wpis (Map trzyma kolejnosc wstawiania), a utrata sladu jest
+      // nieszkodliwa: brak wpisu = „nie wiem" = stara droga.
+      if (this.ostatniaTuraRozmowna.size >= 500) {
+        const najstarszy = this.ostatniaTuraRozmowna.keys().next().value;
+        if (najstarszy !== undefined) this.ostatniaTuraRozmowna.delete(najstarszy);
+      }
+      this.ostatniaTuraRozmowna.set(conversationId, przekazaneDoRozmowy);
     }
     // Only a speaker we are sure of gets facts written about them personally: a
     // misattributed fact cannot be untangled later, it simply becomes something

@@ -176,6 +176,10 @@ class Wejscie:
 def agent(conv, prefer_local=False):
     a = object.__new__(conv.HomeMindConversationAgent)
     a._stan_rozmowy = {}
+    # Agent budowany przez `object.__new__` omija `__init__`, wiec KAZDE nowe
+    # pole obiektu trzeba dolozyc tutaj. Bez tego testy padaja na
+    # AttributeError daleko od miejsca, ktore je wprowadzilo.
+    a._podobienstwa_mowcy = {}
     a._default_user_id = "default"
     a.entry = MagicMock()
     a.entry.options = {"prefer_local": prefer_local}
@@ -292,6 +296,38 @@ async def main() -> int:
     r = await uruchom(conv, a, "[zuza:0.55] otwórz rolety")
     sprawdz("Zuza dostaje SWOJĄ sesję", r.response.speech == "Zrobione.")
     sprawdz("właściciel = zuza", a._stan_rozmowy[r.conversation_id]["wlasciciel"] == "zuza")
+
+    print("\n11. Detektor obcego głosu W TYM SAMYM nagraniu (zapaść dopasowania)")
+    # Odtworzone z rozmowy 14.08: tury czyste ~0,6, a tura z doklejona cudza
+    # mowa 0,384. Detektor porownuje z tym, jak ta osoba wypada ZWYKLE, bo
+    # 0,384 to wciaz poprawne rozpoznanie — prog 0,30 przechodzi i ma przechodzic.
+    a = agent(conv)
+    for podobienstwo in ("0.62", "0.65", "0.59", "0.68", "0.61"):
+        await uruchom(conv, a, f"[lech:{podobienstwo}] zapal światło")
+    odniesienie = list(a._podobienstwa_mowcy["lech"])
+    sprawdz("odniesienie uzbierane z 5 czystych tur", len(odniesienie) == 5)
+
+    sprawdz(
+        "tura 0.384 uznana za podejrzaną",
+        a._zbadaj_zanieczyszczenie("lech", 0.384) is True,
+    )
+    sprawdz(
+        "podejrzana próbka NIE weszła do odniesienia (detektor się nie tępi)",
+        list(a._podobienstwa_mowcy["lech"]) == odniesienie,
+    )
+    sprawdz(
+        "zwykłe wahanie 0.589 NIE jest alarmem",
+        a._zbadaj_zanieczyszczenie("lech", 0.589) is False,
+    )
+    sprawdz(
+        "bez znacznika podobieństwa detektor milczy",
+        a._zbadaj_zanieczyszczenie("lech", None) is False,
+    )
+    b = agent(conv)
+    sprawdz(
+        "przed uzbieraniem odniesienia nie ma fałszywych alarmów",
+        b._zbadaj_zanieczyszczenie("lech", 0.10) is False,
+    )
 
     print("\n" + ("WSZYSTKO ZIELONE" if sprawdz.ok else "SĄ BŁĘDY"))
     return 0 if sprawdz.ok else 1
