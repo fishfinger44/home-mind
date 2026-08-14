@@ -241,6 +241,39 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ["czego_szukasz"],
     },
   },
+  {
+    // 🔑 To NIE jest przelaczenie w tryb. Kierowanie dzieje sie CO TURE: ta tura
+    // idzie na rozmowe, nastepna moze byc zwykla komenda i pojdzie normalna
+    // droga z pelnymi narzedziami. Nie ma z czego "wychodzic", bo nigdzie sie
+    // nie weszlo — stad nazwa czasownikowa, a nie "przelacz_tryb".
+    //
+    // ⚠️ Opis celowo spokojny, bez "ZAWSZE" i "KONIECZNIE". Nadmierne
+    // wyzwalanie boli tu bardziej niz niedomiar: komenda skierowana na rozmowe
+    // trafia w sciezke BEZ narzedzi i nie da sie jej wykonac, a rozmowa
+    // skierowana na dom da najwyzej slabsza odpowiedz.
+    name: "odpowiedz_rozmowa",
+    description:
+      "Uzyj, gdy CALE pytanie nie potrzebuje niczego z domu: zart, zagadka, pogawedka, " +
+      "wiedza ogolna, opinia, ciekawostka. Odpowiedz przygotuje wtedy mocniejszy model, " +
+      "ktory ma dostep do pamieci o domownikach — bedzie ciekawsza niz Twoja. " +
+      "NIE uzywaj, jesli pytanie wymaga stanu urzadzen, historii, pogody, rozkladu jazdy " +
+      "albo wykonania czegokolwiek w domu — takie pytania obsluz sam, narzedziami. " +
+      "Gdy w jednej wypowiedzi jest i pogawedka, i polecenie dla domu ('opowiedz zart i zgas swiatlo'), " +
+      "NIE uzywaj tego narzedzia — wykonaj polecenie, bo dom jest wazniejszy niz zart. " +
+      "W razie watpliwosci odpowiadaj sam.",
+    parameters: {
+      type: "object",
+      properties: {
+        powod: {
+          type: "string",
+          description:
+            "Jednym zdaniem, dlaczego to pytanie nie potrzebuje domu — trafia do logow, " +
+            "zeby dalo sie pozniej sprawdzic, czy kierowanie dziala.",
+        },
+      },
+      required: ["powod"],
+    },
+  },
 ];
 
 export function toAnthropicTools(tools: ToolDefinition[]): Anthropic.Tool[] {

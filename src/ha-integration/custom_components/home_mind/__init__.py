@@ -8,14 +8,19 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN
+from .const import DOMAIN, KLUCZ_KOORDYNATORA
 
 if TYPE_CHECKING:
     from homeassistant.helpers.typing import ConfigType
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.CONVERSATION, Platform.SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.CONVERSATION,
+    Platform.SENSOR,
+    Platform.SWITCH,
+    Platform.SELECT,
+]
 
 # Ile sekund CISZY konczy ture — i wylacznie ciszy.
 #
@@ -186,5 +191,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
+        # Koordynator sciezki rozmownej jest wspolny dla switcha i selectow,
+        # wiec nie nalezy do zadnej platformy z osobna i musi zniknac tutaj.
+        # Zostawiony trzymalby sesje i odpytywal serwer po przeladowaniu wpisu.
+        hass.data[DOMAIN].get(KLUCZ_KOORDYNATORA, {}).pop(entry.entry_id, None)
 
     return unload_ok

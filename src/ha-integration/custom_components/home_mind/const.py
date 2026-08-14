@@ -95,3 +95,13 @@ SPEAKER_TAG_PATTERN = r"^\[([A-Za-z0-9_\- ]{1,32})(?::([0-9]*\.?[0-9]+))?\]\s+"
 CLOUD_SIGNUP_URL = "https://homemind.veganostr.com"
 
 API_CONFIG_LLM_ENDPOINT = "/api/config/llm"
+
+# Sciezka rozmowna — zarty, zagadki, pogawedka. Osobny endpoint od wyboru
+# modelu, bo to zwykly wlacznik i nie ma po co odsylac providera z modelem.
+API_CONFIG_ROZMOWA_ENDPOINT = "/api/config/rozmowa"
+
+# Klucz w hass.data pod ktorym siedzi wspolny koordynator sciezki rozmownej
+# (przelacznik + dwie listy wyboru). Osobny od `entry.entry_id`, pod ktorym
+# __init__ trzyma juz dane wpisu. Stoi tutaj, a nie w `rozmowa.py`, zeby
+# `__init__` mogl posprzatac po wpisie bez importowania modulu platformy.
+KLUCZ_KOORDYNATORA = "koordynator_rozmowy"

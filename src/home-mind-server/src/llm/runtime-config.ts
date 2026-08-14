@@ -38,6 +38,24 @@ export interface LlmOverride {
    *  override rather than per provider because it only ever applies to Ollama:
    *  Gemini's OpenAI-compatible endpoint rejects the parameter with a 400. */
   thinking?: boolean;
+
+  /** Czy zarty, zagadki i pogawedka maja isc na sciezke rozmowna (Claude
+   *  z abonamentu przez shim na hoscie).
+   *
+   *  Brak wartosci znaczy "nie wybrano" i spada na domyslna z .env — tak samo
+   *  jak przy `thinking`. ⚠️ To jest tylko WLACZNIK: bez adresu shima
+   *  (`ROZMOWA_URL`) funkcji nie ma i zadne ustawienie tego nie zmieni. */
+  rozmowa?: boolean;
+
+  /** Model i poziom wysilku dla sciezki rozmownej — wybierane z HA.
+   *
+   *  🔑 Brak wartosci znaczy "nie wybrano" i wtedy serwer NIE wysyla tych pol
+   *  do shima, ktory spada na swoje domyslne (`ROZMOWA_MODEL`/`ROZMOWA_EFFORT`
+   *  w jednostce systemd). Domysl nalezy do shima, bo to on wola `claude`
+   *  i tylko on wie, co ta binarka przyjmie — my przekazujemy WYBOR, nie
+   *  konfiguracje. */
+  rozmowaModel?: string;
+  rozmowaEffort?: string;
 }
 
 /** Only the string entries of an untrusted object — the override file is
@@ -82,6 +100,16 @@ export function loadLlmOverride(): LlmOverride | null {
         // must stay "not chosen" and keep falling back to the .env default,
         // rather than being read as an explicit "off".
         ...(typeof data.thinking === "boolean" ? { thinking: data.thinking } : {}),
+        // Ta sama zasada co przy `thinking`: brak pola to "nie wybrano".
+        ...(typeof data.rozmowa === "boolean" ? { rozmowa: data.rozmowa } : {}),
+        // Pusty napis tez znaczy "nie wybrano" — inaczej wyczyszczenie pola
+        // w recznie edytowanym pliku wyslaloby do shima pusty model.
+        ...(typeof data.rozmowaModel === "string" && data.rozmowaModel
+          ? { rozmowaModel: data.rozmowaModel }
+          : {}),
+        ...(typeof data.rozmowaEffort === "string" && data.rozmowaEffort
+          ? { rozmowaEffort: data.rozmowaEffort }
+          : {}),
       };
     }
   } catch (err) {

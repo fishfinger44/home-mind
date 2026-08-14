@@ -73,6 +73,14 @@ function buildActiveConfig() {
     ...(typeof storedOverride.thinking === "boolean"
       ? { llmThinking: storedOverride.thinking }
       : {}),
+    // Ta sama zasada: brak wyboru zostawia domyslna z .env.
+    ...(typeof storedOverride.rozmowa === "boolean"
+      ? { rozmowaWlaczona: storedOverride.rozmowa }
+      : {}),
+    // Model i wysilek nie maja odpowiednika w .env — brak wyboru zostawia je
+    // nieustawione, a wtedy domyslne poda shim.
+    ...(storedOverride.rozmowaModel ? { rozmowaModel: storedOverride.rozmowaModel } : {}),
+    ...(storedOverride.rozmowaEffort ? { rozmowaEffort: storedOverride.rozmowaEffort } : {}),
   };
   if (storedOverride.apiKey) {
     if (storedOverride.provider === "anthropic") c.anthropicApiKey = storedOverride.apiKey;
@@ -193,6 +201,74 @@ function applyLlm(
   );
 }
 
+// Lista modeli dla panelu w HA — pobierana ZE SHIMA, nie trzymana tutaj.
+//
+// 🔑 Shim jest jedynym miejscem, ktore wie, co `claude` na tym hoscie przyjmie,
+// wiec on ja definiuje, a serwer tylko podaje dalej. Dzieki temu HA nigdy nie
+// pokaze modelu, ktory padlby dopiero przy pierwszym pytaniu.
+//
+// Najlepszym staraniem: gdy shim lezy, panel dostaje pusta liste i pokazuje
+// wybor jako niedostepny — zamiast wywalac caly odczyt ustawien.
+async function pobierzModeleRozmowy(): Promise<{
+  modele: { id: string; nazwa: string; effort: boolean }[];
+  wysilki: string[];
+  domyslny?: string;
+  effortDomyslny?: string;
+}> {
+  const pusto = { modele: [], wysilki: [] };
+  const adres = activeConfig.rozmowaUrl;
+  if (!adres) return pusto;
+  try {
+    const odp = await fetch(`${adres}/modele`, { signal: AbortSignal.timeout(3000) });
+    if (!odp.ok) return pusto;
+    return (await odp.json()) as Awaited<ReturnType<typeof pobierzModeleRozmowy>>;
+  } catch (e) {
+    console.warn(`[rozmowa] nie moge pobrac listy modeli: ${e instanceof Error ? e.message : e}`);
+    return pusto;
+  }
+}
+
+// Wlacza/wylacza sciezke rozmowna w locie — wola ja POST /api/config/rozmowa.
+//
+// 🔑 Silnik jest odtwarzany tak samo jak przy zmianie providera, wiec zmiana
+// dziala od nastepnej tury, bez restartu kontenera. Adresu shima to NIE dotyka:
+// on nalezy do .env, bo jest infrastruktura, a nie preferencja.
+function applyRozmowa(zmiana: {
+  wlaczona?: boolean;
+  model?: string;
+  effort?: string;
+}): void {
+  if (!storedOverride) {
+    // Nadpisania jeszcze nie ma (nikt nie ruszal wyboru modelu) — zakladamy je
+    // na biezacych wartosciach, zeby bylo gdzie zapisac wybor.
+    storedOverride = {
+      provider: activeConfig.llmProvider,
+      model: activeConfig.llmModel,
+      apiKeys: {},
+      baseUrls: {},
+    };
+  }
+  // Tylko pola faktycznie podane. Panel wysyla po jednej gałce naraz, wiec
+  // przepisanie calosci kasowaloby po cichu dwa pozostale ustawienia.
+  storedOverride = {
+    ...storedOverride,
+    ...(typeof zmiana.wlaczona === "boolean" ? { rozmowa: zmiana.wlaczona } : {}),
+    ...(zmiana.model ? { rozmowaModel: zmiana.model } : {}),
+    ...(zmiana.effort ? { rozmowaEffort: zmiana.effort } : {}),
+  };
+  activeConfig = buildActiveConfig();
+  currentExtractor = createFactExtractor(activeConfig);
+  currentEngine = createChatEngine(
+    activeConfig, memory, conversations, currentExtractor, ha, scanner, topology
+  );
+  saveLlmOverride(storedOverride);
+  console.log(
+    `  Rozmowa przez abonament: ${activeConfig.rozmowaWlaczona !== false ? "wlaczona" : "wylaczona"}` +
+      ` (model: ${activeConfig.rozmowaModel ?? "domyslny shima"},` +
+      ` wysilek: ${activeConfig.rozmowaEffort ?? "domyslny shima"})`
+  );
+}
+
 // Initialize STT (optional — only when STT_PROVIDER is set)
 const stt = createSttService(config);
 if (stt) {
@@ -272,8 +348,16 @@ app.use(
             : true,
       hasSearchApiKey: !!activeConfig.geminiSearchApiKey,
       thinking: activeConfig.llmThinking,
+      // `dostepna` mowi, czy shim jest w ogole skonfigurowany — UI moze wtedy
+      // pokazac przelacznik jako niedostepny zamiast udawac, ze cos zrobi.
+      rozmowaDostepna: !!activeConfig.rozmowaUrl,
+      rozmowaWlaczona: activeConfig.rozmowaWlaczona !== false,
+      rozmowaModel: activeConfig.rozmowaModel,
+      rozmowaEffort: activeConfig.rozmowaEffort,
     }),
     apply: applyLlm,
+    applyRozmowa,
+    modeleRozmowy: pobierzModeleRozmowy,
   },
     // Probed on every read of the form, so pulling a model shows up without a
     // restart. Reads the live config, not the startup one, so it follows a

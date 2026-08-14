@@ -45,6 +45,35 @@ const ConfigSchema = z
       .optional()
       .transform((v) => v !== "false"),
 
+    // Sciezka ROZMOWNA — adres shima na hoscie i wlacznik.
+    //
+    // 🔑 Dwie rozne rzeczy, celowo rozdzielone: `rozmowaUrl` to INFRASTRUKTURA
+    // (gdzie stoi shim — nalezy do .env i nie zmienia sie z UI), a
+    // `rozmowaWlaczona` to PREFERENCJA, ktora Lech przelacza z HA bez restartu.
+    // Brak adresu = funkcji nie ma i zaden przelacznik jej nie wyczaruje.
+    rozmowaUrl: z.string().optional().transform((v) => (v ?? "").trim()),
+    rozmowaWlaczona: z
+      .string()
+      .optional()
+      .transform((v) => v !== "false"),
+    rozmowaTur: z
+      .string()
+      .optional()
+      .transform((v) => {
+        const n = Number(v);
+        return Number.isFinite(n) && n > 0 ? Math.floor(n) : 6;
+      }),
+    // ⚠️ CELOWO BEZ ODCZYTU Z `process.env` — patrz `loadConfig` nizej, gdzie
+    // reszta pol dostaje swoja zmienna, a te dwa nie.
+    //
+    // Shim ma wlasne `ROZMOWA_MODEL`/`ROZMOWA_EFFORT` w jednostce systemd i to
+    // on jest od domyslnych. Gdyby serwer czytal zmienne o tych samych nazwach
+    // ze swojego `.env`, powstalyby dwa miejsca o identycznych nazwach i roznym
+    // zasiegu — a to dokladnie ta pomylka, przez ktora wpis w `.env` „nie
+    // dziala". Tu ladują WYLACZNIE wybory z panelu HA (z pliku nadpisania).
+    rozmowaModel: z.string().optional(),
+    rozmowaEffort: z.string().optional(),
+
     // Home Assistant
     haUrl: z.string().url("HA_URL must be a valid URL"),
     haToken: z.string().min(1, "HA_TOKEN is required"),
@@ -148,6 +177,9 @@ export function loadConfig(): Config {
     ollamaBaseUrl: emptyToUndefined(process.env.OLLAMA_BASE_URL),
     ollamaVramGb: emptyToUndefined(process.env.OLLAMA_VRAM_GB),
     llmThinking: emptyToUndefined(process.env.LLM_THINKING),
+    rozmowaUrl: emptyToUndefined(process.env.ROZMOWA_URL),
+    rozmowaWlaczona: emptyToUndefined(process.env.ROZMOWA_WLACZONA),
+    rozmowaTur: emptyToUndefined(process.env.ROZMOWA_TUR),
     haUrl: process.env.HA_URL,
     haToken: process.env.HA_TOKEN,
     haSkipTlsVerify: process.env.HA_SKIP_TLS_VERIFY,

@@ -39,13 +39,22 @@ const NATIVE_BASE =
 
 const MAX_TOOL_ITERATIONS = 8;
 
+// Sciezka ROZMOWNA jest widoczna dla modelu tylko wtedy, gdy jest i adres
+// shima, i wlacznik. Zestawy narzedzi licza sie RAZ, ale wybor nastepuje przy
+// kazdym zapytaniu — dzieki temu przelacznik z UI dziala od razu, bez restartu.
+// 🔑 Gdy sciezka jest wylaczona, `odpowiedz_rozmowa` nie trafia do definicji,
+// wiec model go NIE WIDZI i zachowanie asystenta jest jak przed ta zmiana.
+const BEZ_ROZMOWY = TOOL_DEFINITIONS.filter((t) => t.name !== "odpowiedz_rozmowa");
+
 // With grounding, the model searches server-side via googleSearch, so our own
 // web_search tool is redundant and is left out. In every other search mode
 // (micro-call / Tavily / Brave) it is the only way to the internet, so it stays.
-const HA_FUNCTION_TOOLS = toGeminiTools(
+const HA_FUNCTION_TOOLS = toGeminiTools(BEZ_ROZMOWY.filter((t) => t.name !== "web_search"));
+const HA_FUNCTION_TOOLS_WITH_SEARCH = toGeminiTools(BEZ_ROZMOWY);
+const HA_FUNCTION_TOOLS_ROZMOWA = toGeminiTools(
   TOOL_DEFINITIONS.filter((t) => t.name !== "web_search")
 );
-const HA_FUNCTION_TOOLS_WITH_SEARCH = toGeminiTools(TOOL_DEFINITIONS);
+const HA_FUNCTION_TOOLS_WITH_SEARCH_ROZMOWA = toGeminiTools(TOOL_DEFINITIONS);
 
 interface GeminiPart {
   text?: string;
@@ -197,9 +206,12 @@ export class GeminiChatEngine implements IChatEngine {
 
     // 3. Assemble conversation contents
     const contents: GeminiContent[] = [];
+    // Wyciagniete z bloku `if`, bo tej samej historii potrzebuje sciezka
+    // rozmowna w petli narzedzi nizej.
+    let historiaRozmowy: { role: string; content: string }[] = [];
     if (conversationId) {
-      const history = await this.conversations.getConversationHistory(conversationId, 10);
-      for (const msg of history) {
+      historiaRozmowy = await this.conversations.getConversationHistory(conversationId, 10);
+      for (const msg of historiaRozmowy) {
         contents.push({
           role: msg.role === "assistant" ? "model" : "user",
           parts: [{ text: msg.content }],
@@ -215,10 +227,15 @@ export class GeminiChatEngine implements IChatEngine {
     contents.push({ role: "user", parts: [{ text: `${blokZmienny}\n\n${message}` }] });
 
     const systemInstruction = { parts: [{ text: systemPromptText }] };
+    // Sciezka rozmowna wymaga OBU rzeczy: adresu shima (infrastruktura, .env)
+    // i wlacznika (preferencja, przelaczana z HA bez restartu).
+    const rozmowaAktywna =
+      Boolean(this.config.rozmowaUrl) && this.config.rozmowaWlaczona !== false;
     const buildTools = (): unknown[] => {
-      const set = webSearchEnabled && !useGrounding
-        ? HA_FUNCTION_TOOLS_WITH_SEARCH
-        : HA_FUNCTION_TOOLS;
+      const zSzukaniem = webSearchEnabled && !useGrounding;
+      const set = rozmowaAktywna
+        ? (zSzukaniem ? HA_FUNCTION_TOOLS_WITH_SEARCH_ROZMOWA : HA_FUNCTION_TOOLS_ROZMOWA)
+        : (zSzukaniem ? HA_FUNCTION_TOOLS_WITH_SEARCH : HA_FUNCTION_TOOLS);
       return useGrounding ? [set, { googleSearch: {} }] : [set];
     };
     let tools = buildTools();
@@ -228,6 +245,9 @@ export class GeminiChatEngine implements IChatEngine {
     const groundingQueries: string[] = [];
     let iterations = 0;
     let forceAnswer = false;
+    // Ustawiane, gdy ta tura poszla na sciezke rozmowna — wtedy `responseText`
+    // jest juz gotowy i petla narzedzi nie ma nic wiecej do zrobienia.
+    let przekazaneDoRozmowy = false;
 
     while (true) {
       let data: GeminiResponse;
@@ -292,6 +312,44 @@ export class GeminiChatEngine implements IChatEngine {
         const fc = p.functionCall!;
         toolsUsed.push(fc.name);
         wywolania.push({ nazwa: fc.name, argumenty: fc.args ?? {} });
+
+        // 🔑 Sciezka ROZMOWNA. Wychodzimy z petli z ustawionym `responseText`,
+        // a NIE omijamy silnika — dzieki temu caly kod ponizej dziala bez
+        // zmian: zapis tury do historii, `extractAndStoreFacts`, `trustedIdentity`,
+        // `toolsUsed`. Gdyby home-mind wolal shim z zewnatrz, ekstrakcja
+        // pamieci zostalaby po cichu pominieta, a rozmowa jest wlasnie tym
+        // miejscem, gdzie padaja fakty osobiste.
+        if (fc.name === "odpowiedz_rozmowa") {
+          console.log(`[rozmowa] przekazuje: ${String(fc.args?.powod ?? "bez powodu")}`);
+          const odpowiedzRozmowy = await this.zapytajRozmowa(
+            message,
+            factContents,
+            historiaRozmowy,
+            request.userName,
+            trustedIdentity
+          );
+          if (odpowiedzRozmowy) {
+            responseText = odpowiedzRozmowy;
+            przekazaneDoRozmowy = true;
+            break;
+          }
+          // Shim padl albo nie zdazyl. Nie zostawiamy czlowieka bez odpowiedzi:
+          // oddajemy sterowanie Gemini z jawna informacja, zeby odpowiedzial sam.
+          console.warn("[rozmowa] shim niedostepny — odpowiada Gemini");
+          responseParts.push({
+            functionResponse: {
+              name: fc.name,
+              ...(fc.id ? { id: fc.id } : {}),
+              response: {
+                result:
+                  "Sciezka rozmowna niedostepna. Odpowiedz sam, krotko i po polsku, " +
+                  "nie wspominajac o tej usterce.",
+              },
+            },
+          });
+          continue;
+        }
+
         const result = await handleToolCall(this.ha, fc.name, fc.args ?? {}, searchSettings, trustedIdentity, userId, kontekstPamieci);
         responseParts.push({
           functionResponse: {
@@ -301,6 +359,8 @@ export class GeminiChatEngine implements IChatEngine {
           },
         });
       }
+      if (przekazaneDoRozmowy) break;
+
       contents.push({ role: "user", parts: responseParts });
 
       if (iterations >= MAX_TOOL_ITERATIONS) {
@@ -353,6 +413,63 @@ export class GeminiChatEngine implements IChatEngine {
         : undefined;
 
     return { response: responseText, toolsUsed, factsLearned: 0, ...(error ? { error } : {}) };
+  }
+
+  /**
+   * Pyta shim na hoscie, ktory rozmawia przez abonament Claude.
+   *
+   * Zwraca `null` przy KAZDEJ usterce — brak odpowiedzi nie moze wywrocic tury,
+   * bo po drugiej stronie stoi czlowiek i czeka. Wolajacy oddaje wtedy pytanie
+   * z powrotem Gemini.
+   *
+   * ⚠️ Imie rozmowcy jedzie tylko przy `zaufany` — na urzadzeniu wspoldzielonym
+   * nie wiadomo, kto mowi, a zle przypisane imie w rozmowie brzmi gorzej niz
+   * jego brak. Ta sama zasada, co przy zapisie faktow osobistych.
+   */
+  private async zapytajRozmowa(
+    pytanie: string,
+    fakty: string[],
+    historia: { role: string; content: string }[],
+    mowca?: string,
+    zaufany: boolean = true
+  ): Promise<string | null> {
+    const adres = this.config.rozmowaUrl;
+    if (!adres) return null;
+    const start = Date.now();
+    try {
+      const odp = await fetch(`${adres}/rozmowa`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pytanie,
+          fakty,
+          // ⚠️ Historia z LIMITEM. Jest tu potrzebna (to rozmowa), ale to ta sama
+          // droga, ktora zatrula asystenta przy awarii "Echo" — wiec wpuszczamy
+          // ostatnie kilka tur, a nie calosc.
+          historia: historia.slice(-(this.config.rozmowaTur ?? 6)),
+          ...(zaufany && mowca ? { mowca } : {}),
+          // Wybor z panelu HA. Pola NIEOBECNE, gdy nikt nic nie wybral —
+          // wtedy domyslne poda shim, bo to on wie, co przyjmie `claude`.
+          ...(this.config.rozmowaModel ? { model: this.config.rozmowaModel } : {}),
+          ...(this.config.rozmowaEffort ? { effort: this.config.rozmowaEffort } : {}),
+        }),
+        // Shim ma wlasny limit; ten jest o kilka sekund dluzszy, zeby zdazyl
+        // odpowiedziec wlasnym, czytelnym bledem zamiast zostac zerwanym.
+        signal: AbortSignal.timeout(25_000),
+      });
+      if (!odp.ok) {
+        const tresc = await odp.text().catch(() => "");
+        console.error(`[rozmowa] shim zwrocil ${odp.status}: ${tresc.slice(0, 200)}`);
+        return null;
+      }
+      const dane = (await odp.json()) as { odpowiedz?: string };
+      const tekst = (dane.odpowiedz ?? "").trim();
+      console.log(`[rozmowa] odpowiedz w ${((Date.now() - start) / 1000).toFixed(1)} s`);
+      return tekst || null;
+    } catch (e) {
+      console.error(`[rozmowa] shim niedostepny: ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    }
   }
 
   private async generate(

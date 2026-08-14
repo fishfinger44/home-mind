@@ -76,6 +76,19 @@ services:
       # Ile VRAM ma karta - tylko po to, by wybor modelu w HA umial powiedziec
       # "zmiesci sie" zamiast samego rozmiaru. Nie zmienia niczego w dzialaniu.
       - OLLAMA_VRAM_GB=${OLLAMA_VRAM_GB:-}
+      # Sciezka ROZMOWNA — zarty, zagadki, pogawedka, wiedza ogolna. Odpowiada
+      # Claude z ABONAMENTU przez shim na hoscie (rozmowa-shim/shim.py), bo
+      # poswiadczenia OAuth leza na hoscie i nie maja czego szukac w kontenerze.
+      # Server ma network_mode: host, wiec siega po loopback.
+      #
+      # 🔑 To jest CALY przelacznik: pusta wartosc = narzedzie `odpowiedz_rozmowa`
+      # nie trafia do definicji, model go nie widzi, asystent dziala jak przedtem.
+      # 🔬 Zmierzone: rozmowa 4,5-8,2 s (Sonnet 5, effort low). Komendy zostaja
+      # na Gemini i 1,2 s — kierowanie jest CO TURE, nie jest to tryb.
+      - ROZMOWA_URL=${ROZMOWA_URL:-}
+      # Ile ostatnich tur historii jedzie do rozmowy. Historia jest potrzebna,
+      # ale to ta sama droga, ktora zatrula asystenta przy awarii "Echo".
+      - ROZMOWA_TUR=${ROZMOWA_TUR:-6}
       - HA_URL=${HA_URL}
       - HA_TOKEN=${HA_TOKEN}
       - HA_SKIP_TLS_VERIFY=${HA_SKIP_TLS_VERIFY:-false}

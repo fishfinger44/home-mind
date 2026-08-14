@@ -7,8 +7,8 @@ import {
 } from "./tool-definitions.js";
 
 describe("TOOL_DEFINITIONS", () => {
-  it("has 9 tools", () => {
-    expect(TOOL_DEFINITIONS).toHaveLength(9);
+  it("has 10 tools", () => {
+    expect(TOOL_DEFINITIONS).toHaveLength(10);
   });
 
   it("has the expected tool names", () => {
@@ -23,6 +23,10 @@ describe("TOOL_DEFINITIONS", () => {
       "zaplanuj_trase",
       "odjazdy",
       "sprawdz_pamiec",
+      // Sciezka rozmowna. ⚠️ Jest w definicjach ZAWSZE, ale silnik pokazuje ja
+      // modelowi tylko przy ustawionym ROZMOWA_URL — patrz NARZEDZIA_AKTYWNE
+      // w gemini-client.ts. Bez tego przelacznika model jej nie widzi.
+      "odpowiedz_rozmowa",
     ]);
   });
 
