@@ -83,6 +83,64 @@ interface GeminiResponse {
 }
 
 /**
+ * Sklej porcje strumienia w te same `parts`, ktore dalby jeden zwykly request.
+ *
+ * 🔴 TO JEST NAJRYZYKOWNIEJSZY KAWALEK STRUMIENIOWANIA GEMINI i dlatego siedzi
+ * osobno, pod testami. Powod: przy odpowiedzi z narzedziami tura modelu jest
+ * ODSYLANA Z POWROTEM DOSLOWNIE, bo `parts` niosa `thoughtSignature`, ktorego
+ * Gemini 3 wymaga przy kontynuacji. Zgubienie go albo rozbicie jednego
+ * `functionCall` na dwa konczy sie bledem 400 przy nastepnym przebiegu —
+ * czyli awaria daleko od przyczyny.
+ *
+ * ⚠️ Tekst SKLEJAMY, `functionCall` NIGDY. To nie jest symetria dla urody:
+ * tekst przychodzi po kawalku i ma byc jednym akapitem, a kazde wywolanie
+ * narzedzia jest osobnym zadaniem. Sklejenie dwoch wywolan w jedno to dokladnie
+ * awaria „puste odpowiedzi przy sterowaniu wieloma encjami", ktora kosztowala
+ * nas `splitConcatenatedJson()` po stronie OpenAI-compat.
+ *
+ * `onTekst` dostaje WYLACZNIE tekst przeznaczony dla czlowieka — czesci
+ * oznaczone jako `thought` sa zbierane, ale nie wypowiadane.
+ */
+export function scalCzesci(
+  zebrane: GeminiPart[],
+  nowe: GeminiPart[] | undefined,
+  onTekst?: (kawalek: string) => void
+): void {
+  for (const czesc of nowe ?? []) {
+    const mysl = czesc.thought === true;
+    if (czesc.functionCall) {
+      zebrane.push({ ...czesc });
+      continue;
+    }
+    if (typeof czesc.text === "string") {
+      const ostatnia = zebrane[zebrane.length - 1];
+      const mozeDolaczyc =
+        ostatnia !== undefined &&
+        !ostatnia.functionCall &&
+        typeof ostatnia.text === "string" &&
+        (ostatnia.thought === true) === mysl;
+      if (mozeDolaczyc) {
+        ostatnia.text += czesc.text;
+        // Podpis potrafi przyjsc dopiero z pozniejsza porcja tej samej czesci.
+        if (czesc.thoughtSignature) ostatnia.thoughtSignature = czesc.thoughtSignature;
+      } else {
+        zebrane.push({ ...czesc });
+      }
+      if (!mysl && czesc.text && onTekst) onTekst(czesc.text);
+      continue;
+    }
+    // Czesc bez tekstu i bez wywolania (np. sam `thoughtSignature`) — dopinamy
+    // do ostatniej, zeby nie zgubic pola wymaganego przy kontynuacji.
+    const ostatnia = zebrane[zebrane.length - 1];
+    if (ostatnia && czesc.thoughtSignature) {
+      ostatnia.thoughtSignature = czesc.thoughtSignature;
+    } else {
+      zebrane.push({ ...czesc });
+    }
+  }
+}
+
+/**
  * How long to wait before retrying a 429.
  *
  * Google returns a RetryInfo with a `retryDelay` like "27s" for per-minute rate
@@ -105,6 +163,12 @@ export function parseRetryDelay(body: string): number | undefined {
 }
 
 const MAX_429_ATTEMPTS = 3;
+
+/** Kody, po ktorych warto sprobowac jeszcze raz — usterka jest po stronie
+ *  Google i mija sama. ⛔ NIE dopisywac tu 4xx: te znacza, ze zadanie jest zle
+ *  i ponawianie go tylko przedluza czekanie czlowieka. */
+const PONAWIALNE = new Set([500, 502, 503, 504]);
+const MAX_PRZEJSCIOWE_PROBY = 3;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -333,7 +397,17 @@ export class GeminiChatEngine implements IChatEngine {
           contents,
           forceAnswer ? undefined : tools,
           isVoice,
-          !useGrounding
+          !useGrounding,
+          // Strumien tylko wtedy, gdy jest komu oddawac kawalki i nie zostal
+          // wylaczony w `.env`. Wylacznik jest tu celowo: to najmlodsza czesc
+          // tej sciezki, a `GEMINI_STREAM=false` przywraca stare zachowanie
+          // bez przebudowy obrazu.
+          onChunk && this.config.geminiStream !== false
+            ? (kawalek) => {
+                juzStrumieniowane = true;
+                onChunk(kawalek);
+              }
+            : undefined
         );
       } catch (err) {
         // A key whose Google project has no Search grounding (the free tier lists
@@ -642,7 +716,9 @@ export class GeminiChatEngine implements IChatEngine {
     // Retrying a grounding 429 is pointless — that quota is 0 for the whole
     // month, not for the next few seconds — so the caller disables it there and
     // falls back to a search tool instead.
-    allowRetryOn429 = true
+    allowRetryOn429 = true,
+    /** Gdy podane, jedziemy `streamGenerateContent` i oddajemy tekst na biezaco. */
+    onTekst?: (kawalek: string) => void
   ): Promise<GeminiResponse> {
     const apiKey = this.config.openaiApiKey; // the Gemini API key (reused)
     if (!apiKey) throw new Error("Gemini API key is not set (OPENAI_API_KEY)");
@@ -657,7 +733,10 @@ export class GeminiChatEngine implements IChatEngine {
       body.toolConfig = { includeServerSideToolInvocations: true };
     }
 
-    const url = `${NATIVE_BASE}/models/${this.config.llmModel}:generateContent`;
+    const strumien = !!onTekst;
+    const url = strumien
+      ? `${NATIVE_BASE}/models/${this.config.llmModel}:streamGenerateContent?alt=sse`
+      : `${NATIVE_BASE}/models/${this.config.llmModel}:generateContent`;
 
     for (let attempt = 1; ; attempt++) {
       const resp = await fetch(url, {
@@ -666,6 +745,9 @@ export class GeminiChatEngine implements IChatEngine {
         body: JSON.stringify(body),
       });
 
+      if (resp.ok && strumien && resp.body) {
+        return await this.czytajStrumien(resp.body, onTekst!);
+      }
       if (resp.ok) return (await resp.json()) as GeminiResponse;
 
       const text = await resp.text();
@@ -682,7 +764,81 @@ export class GeminiChatEngine implements IChatEngine {
         continue;
       }
 
+      // 🔴 503 „high demand" po stronie Google JEST PRZEJSCIOWE — i dotad
+      // konczylo ture komunikatem „Sorry, I couldn't process that request",
+      // czyli awaria dostawcy trwajaca sekunde stawala sie awaria asystenta.
+      // Zlapane 14.08 przy wdrazaniu strumienia: te same pytania powtorzone
+      // chwile pozniej przechodzily bez zmian w kodzie (A/B 5/5 i 5/5, wiec to
+      // NIE byla wina strumienia — tylko chwilowa niewydolnosc Gemini).
+      //
+      // Krotsze czekanie niz przy 429: tam limit jest minutowy i trzeba go
+      // przeczekac, tu wystarczy chwila, a po drugiej stronie stoi czlowiek.
+      if (PONAWIALNE.has(resp.status) && attempt < MAX_PRZEJSCIOWE_PROBY) {
+        const wait = [500, 1500, 3000][Math.min(attempt - 1, 2)];
+        console.warn(
+          `[gemini] ${resp.status} (przejsciowe) — ponawiam za ${wait / 1000}s ` +
+            `(proba ${attempt}/${MAX_PRZEJSCIOWE_PROBY})`
+        );
+        await sleep(wait);
+        continue;
+      }
+
       throw new Error(`Gemini API error ${resp.status}: ${text.slice(0, 500)}`);
     }
+  }
+
+  /**
+   * Zamienia SSE z `streamGenerateContent` w jedna odpowiedz — taka samą, jaką
+   * dalby zwykly request — oddajac po drodze tekst przez `onTekst`.
+   *
+   * ⚠️ Reszta silnika NIE WIE, ze cos sie strumieniowalo. To celowe: petla
+   * narzedzi, odsylanie tury modelu i obsluga bledow zostaja bez zmian, wiec
+   * strumien nie moze wprowadzic wlasnej klasy usterek do kodu, ktory juz
+   * dziala.
+   */
+  private async czytajStrumien(
+    body: ReadableStream<Uint8Array>,
+    onTekst: (kawalek: string) => void
+  ): Promise<GeminiResponse> {
+    const czesci: GeminiPart[] = [];
+    let finishReason: string | undefined;
+    let grounding: { webSearchQueries?: string[]; groundingChunks?: unknown[] } | undefined;
+    let usage: GeminiResponse["usageMetadata"];
+
+    let bufor = "";
+    const dekoder = new TextDecoder();
+    for await (const porcja of body as unknown as AsyncIterable<Uint8Array>) {
+      bufor += dekoder.decode(porcja, { stream: true });
+      const linie = bufor.split("\n");
+      bufor = linie.pop() ?? "";
+      for (const linia of linie) {
+        if (!linia.startsWith("data:")) continue;
+        const surowe = linia.slice(5).trim();
+        if (!surowe || surowe === "[DONE]") continue;
+        let porcjaOdp: GeminiResponse;
+        try {
+          porcjaOdp = JSON.parse(surowe) as GeminiResponse;
+        } catch {
+          continue;
+        }
+        const kandydat = porcjaOdp.candidates?.[0];
+        scalCzesci(czesci, kandydat?.content?.parts, onTekst);
+        if (kandydat?.finishReason) finishReason = kandydat.finishReason;
+        if (kandydat?.groundingMetadata) grounding = kandydat.groundingMetadata;
+        // Rozliczenie przychodzi narastajaco — liczy sie ostatnie.
+        if (porcjaOdp.usageMetadata) usage = porcjaOdp.usageMetadata;
+      }
+    }
+
+    return {
+      candidates: [
+        {
+          content: { parts: czesci },
+          ...(finishReason ? { finishReason } : {}),
+          ...(grounding ? { groundingMetadata: grounding } : {}),
+        },
+      ],
+      ...(usage ? { usageMetadata: usage } : {}),
+    };
   }
 }

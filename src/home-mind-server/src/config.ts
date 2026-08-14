@@ -73,6 +73,17 @@ const ConfigSchema = z
     // dziala". Tu ladują WYLACZNIE wybory z panelu HA (z pliku nadpisania).
     rozmowaModel: z.string().optional(),
     rozmowaEffort: z.string().optional(),
+    // Czy odpowiedzi Gemini maja plynac kawalkami (`streamGenerateContent`),
+    // zeby TTS ruszal przed koncem wypowiedzi. Domyslnie TAK.
+    //
+    // ⚠️ Wylacznik istnieje, bo to najmlodsza czesc tej sciezki, a scalanie
+    // porcji dotyka `thoughtSignature`, ktorego Gemini 3 wymaga przy
+    // kontynuacji z narzedziami. `GEMINI_STREAM=false` wraca do jednego
+    // requestu bez przebudowy obrazu.
+    geminiStream: z
+      .string()
+      .optional()
+      .transform((v) => v !== "false"),
 
     // Home Assistant
     haUrl: z.string().url("HA_URL must be a valid URL"),
@@ -180,6 +191,7 @@ export function loadConfig(): Config {
     rozmowaUrl: emptyToUndefined(process.env.ROZMOWA_URL),
     rozmowaWlaczona: emptyToUndefined(process.env.ROZMOWA_WLACZONA),
     rozmowaTur: emptyToUndefined(process.env.ROZMOWA_TUR),
+    geminiStream: emptyToUndefined(process.env.GEMINI_STREAM),
     haUrl: process.env.HA_URL,
     haToken: process.env.HA_TOKEN,
     haSkipTlsVerify: process.env.HA_SKIP_TLS_VERIFY,
