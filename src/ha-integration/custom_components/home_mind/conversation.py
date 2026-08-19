@@ -368,6 +368,29 @@ class HomeMindConversationAgent(ConversationEntity):
         # HA rozumie „zapal swiatlo" i wykonalby polecenie z tla, nie docierajac
         # ani tu, ani na serwer, gdzie leza reguly. Ta sama dziura wymagala juz
         # raz osobnej latki przy ograniczeniach urzadzen.
+        # 🔴 PUSTA tura to NIE jest obcy człowiek — to najczęściej NASZ WŁASNY głośnik.
+        # Zmierzone 19.08: satelita otwiera mikrofon ~1 s po wysłaniu tekstu do lektora,
+        # czyli DZIESIĄTKI SEKUND przed końcem odtwarzania (odpowiedź 26,8 s: mikrofon
+        # o 19:19:48, koniec grania o 19:20:16). Łapie własną odpowiedź, biometria ją
+        # słusznie odrzuca (podobieństwo 0,03), transkrypcja przychodzi pusta — a stara
+        # bramka liczyła to jako turę obcą i po `MAX_TUR_OBCYCH` ZAMYKAŁA sesję.
+        # Skutek: asystent kończył pytaniem i nie słuchał odpowiedzi.
+        # Pusta tura nie niesie żadnej treści, więc nie ma czego pilnować — przepuszczamy
+        # ją w ciszy, NIE ruszając licznika obcych i NIE zamykając nasłuchu.
+        if is_voice and not message.strip():
+            _LOGGER.info(
+                "Pusta tura (%s) — najpewniej własne odtwarzanie; trzymam nasłuch",
+                f"podobieństwo {podobienstwo:.3f}" if podobienstwo is not None
+                else "bez znacznika",
+            )
+            intent_response = intent.IntentResponse(language=user_input.language)
+            intent_response.async_set_speech("")
+            return ConversationResult(
+                response=intent_response,
+                conversation_id=conversation_id,
+                continue_conversation=CONTINUE_CONVERSATION,
+            )
+
         if is_voice and wlasciciel is not None and user_id != wlasciciel:
             stan = {"wlasciciel": wlasciciel, "obce": stan["obce"] + 1}
             trzymaj = stan["obce"] < MAX_TUR_OBCYCH

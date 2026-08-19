@@ -739,7 +739,13 @@ export class GeminiChatEngine implements IChatEngine {
     const body: Record<string, unknown> = {
       systemInstruction,
       contents,
-      generationConfig: { maxOutputTokens: isVoice ? 500 : 2048 },
+      // 🔴 500 tokenow dla glosu bylo za malo, odkad dluga tresc (bajka, opowiadanie)
+      // idzie ARGUMENTEM do `script.opowiedz_dluga_historie`: model probowal zmiescic
+      // cala bajke w wywolaniu narzedzia, obcinalo go na 500 i zostawalo `completion=0`,
+      // czyli BRAK ODPOWIEDZI (zmierzone 19.08). 2048 to okolo 1400 slow, czyli bajka
+      // na kilka minut. Krotkosc zwyklych odpowiedzi trzyma regula r15 i prompt,
+      // nie ten limit.
+      generationConfig: { maxOutputTokens: isVoice ? 2048 : 4096 },
     };
     if (tools && tools.length > 0) {
       body.tools = tools;
