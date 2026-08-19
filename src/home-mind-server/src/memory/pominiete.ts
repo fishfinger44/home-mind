@@ -86,6 +86,39 @@ export function zapiszPominiecie(wpis: Pominiecie): void {
 }
 
 /**
+ * Wyrzuć wpisy typu `bramka` starsze niż podana chwila.
+ *
+ * Wołane przez nocny przegląd procedur PO tym, jak je przeczytał i ocenił —
+ * wtedy nie niosą już nic nowego, a plik przestaje puchnąć bez potrzeby.
+ * Wpisy `filtr` ZOSTAJĄ: to jedyny ślad po fakcie, którego pamięć nie przyjęła,
+ * i nikt ich nie przegląda automatycznie.
+ */
+export function usunPrzejrzaneBramki(doKiedy: string): number {
+  try {
+    const plik = sciezka();
+    if (!existsSync(plik)) return 0;
+    const linie = readFileSync(plik, "utf-8").split("\n").filter(Boolean);
+    const zostaje = linie.filter((l) => {
+      try {
+        const w = JSON.parse(l) as { rodzaj?: string; kiedy?: string };
+        if (w.rodzaj !== "bramka") return true;
+        return !w.kiedy || Date.parse(w.kiedy) > Date.parse(doKiedy);
+      } catch {
+        return true;   // uszkodzonej linii nie kasujemy — nie wiadomo, co to było
+      }
+    });
+    const usuniete = linie.length - zostaje.length;
+    if (usuniete > 0) {
+      writeFileSync(plik, zostaje.length ? zostaje.join("\n") + "\n" : "", "utf-8");
+    }
+    return usuniete;
+  } catch (err) {
+    console.error("[pominiete] nie udalo sie posprzatac wpisow:", err);
+    return 0;
+  }
+}
+
+/**
  * Identyfikator wpisu, wyliczany z jego treści.
  *
  * Plik jest dziennikiem dopisywanym linia po linii i nie przechowuje żadnych

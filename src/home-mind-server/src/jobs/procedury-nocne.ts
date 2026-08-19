@@ -17,7 +17,7 @@
  */
 
 import type { IFactExtractor } from "../llm/interface.js";
-import { czytajPominiecia } from "../memory/pominiete.js";
+import { czytajPominiecia, usunPrzejrzaneBramki } from "../memory/pominiete.js";
 import { szukajProceduryWsadowo, type TuraDoPrzegladu } from "../memory/procedury.js";
 
 /**
@@ -72,12 +72,17 @@ export class ProceduryJob {
    */
   async uruchom(): Promise<string[]> {
     const granica = Date.now() - 24 * 60 * 60 * 1000;
+    const teraz = new Date().toISOString();
     const tury: TuraDoPrzegladu[] = czytajPominiecia(500)
       .filter((w) => w.rodzaj === "bramka" && Date.parse(w.kiedy) >= granica)
       .map((w) => ({ tresc: w.tresc, odpowiedz: w.odpowiedz, wywolania: w.wywolania }));
 
     if (tury.length === 0) {
       console.log("[procedury] nocny przeglad: brak polecen z ostatniej doby");
+      // Nawet gdy z ostatniej doby nic nie ma, starsze polecenia zdazyly juz byc
+      // przejrzane w swojej nocy — nie ma po co ich trzymac.
+      const p = usunPrzejrzaneBramki(teraz);
+      if (p) console.log(`[procedury] posprzatane wpisy polecen: ${p}`);
       return [];
     }
 
@@ -86,6 +91,10 @@ export class ProceduryJob {
       `[procedury] nocny przeglad: ${tury.length} polecen, propozycji: ${zapisane.length}` +
         (zapisane.length ? ` (${zapisane.join(", ")})` : "")
     );
+    // Przejrzane polecenia nie niosa juz nic nowego: propozycje sa zapisane osobno,
+    // a wpisy `filtr` (jedyny slad po odrzuconym fakcie) zostaja nietkniete.
+    const posprzatane = usunPrzejrzaneBramki(teraz);
+    if (posprzatane) console.log(`[procedury] posprzatane wpisy polecen: ${posprzatane}`);
     return zapisane;
   }
 }
