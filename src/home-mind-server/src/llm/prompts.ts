@@ -84,9 +84,16 @@ If the user asks about something — energy, solar production, weather, security
 
 For any **future/forecast** weather ("weather on Friday", "will it rain tomorrow", "temperature this weekend"), copy this call and change only the entity and type:
 \`\`\`
-{"domain":"weather","service":"get_forecasts","entity_id":"weather.dom","data":{"type":"daily"},"return_response":true}
+{"domain":"weather","service":"get_forecasts","entity_id":"weather.forecast_dom","data":{"type":"daily"},"return_response":true}
 \`\`\`
-(\`"hourly"\` instead of \`"daily"\` for today's hour-by-hour.) 🔴 \`service\` must be there — dropping it is the single most common failure on this call. The forecast comes back in the tool result — accurate and free. \`get_state\` on a weather entity only gives the CURRENT conditions, NOT the forecast. Do **NOT** web_search for weather — search results are climate averages, not the real forecast.
+(\`"hourly"\` instead of \`"daily"\` for today's hour-by-hour.) 🔴 \`service\` must be there — dropping it is the single most common failure on this call.
+🔴 Read times from **\`czas_lokalny\`** ("jutro, piątek 21 sierpnia, godz. 02:00") — it is computed
+for the house clock. The raw \`datetime\` is UTC and reading it literally shifts everything by the
+offset. ⚠️ "tonight" / "dziś w nocy" means the hours AFTER midnight, which carry TOMORROW's date —
+20.08 the assistant answered with the next day's storms for a dry night because of exactly this.
+🔴 Any question about a PART of the day (night, morning, afternoon, evening, "o której") needs
+\`"type":"hourly"\`. The daily entry summarises the WHOLE day — asked about tonight it answers with
+this afternoon's storm. The forecast comes back in the tool result — accurate and free. \`get_state\` on a weather entity only gives the CURRENT conditions, NOT the forecast. Do **NOT** web_search for weather — search results are climate averages, not the real forecast.
 
 ## "TODAY'S X" AND PAST-DATA QUERIES
 
@@ -160,8 +167,15 @@ If you don't see a matching entity, call **search_entities** with keywords (syst
 
 ## WEATHER FORECAST
 For future weather (tomorrow, Friday, weekend) copy this exactly, changing only entity and type:
-\`{"domain":"weather","service":"get_forecasts","entity_id":"weather.dom","data":{"type":"daily"},"return_response":true}\`
-🔴 Never drop \`service\` — that is what breaks this call. Accurate + free. get_state gives only CURRENT weather. Do NOT web_search for forecasts.
+\`{"domain":"weather","service":"get_forecasts","entity_id":"weather.forecast_dom","data":{"type":"daily"},"return_response":true}\`
+🔴 Never drop \`service\` — that is what breaks this call. Accurate + free.
+🔴 Read times from **\`czas_lokalny\`** ("jutro, piątek 21 sierpnia, godz. 02:00") — it is computed
+for the house clock. The raw \`datetime\` is UTC and reading it literally shifts everything by the
+offset. ⚠️ "tonight" / "dziś w nocy" means the hours AFTER midnight, which carry TOMORROW's date —
+20.08 the assistant answered with the next day's storms for a dry night because of exactly this.
+🔴 Any question about a PART of the day (night, morning, afternoon, evening, "o której") needs
+\`"type":"hourly"\`. The daily entry summarises the WHOLE day — asked about tonight it answers with
+this afternoon's storm. get_state gives only CURRENT weather. Do NOT web_search for forecasts.
 
 ## "TODAY'S X" / PAST-DATA QUERIES
 - Daily totals → **get_history** over today's range, NOT the current instantaneous sensor.

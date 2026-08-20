@@ -65,7 +65,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       "Call a Home Assistant service. `domain` AND `service` are BOTH required and BOTH sit at " +
       "the top level — never inside `data`. Three shapes, copy them:\n" +
       "control:  {\"domain\":\"light\",\"service\":\"turn_on\",\"entity_id\":\"light.salon\",\"data\":{\"brightness_pct\":60}}\n" +
-      "read:     {\"domain\":\"weather\",\"service\":\"get_forecasts\",\"entity_id\":\"weather.dom\",\"data\":{\"type\":\"daily\"},\"return_response\":true}\n" +
+      "read:     {\"domain\":\"weather\",\"service\":\"get_forecasts\",\"entity_id\":\"weather.forecast_dom\",\"data\":{\"type\":\"daily\"},\"return_response\":true}\n" +
       "film:     {\"domain\":\"media_assistant\",\"service\":\"find_and_play\",\"data\":{\"title\":\"Gumisie\",\"service\":\"disneyplus\"}}\n" +
       "In the last one the two `service` fields mean DIFFERENT things — see the `service` parameter.",
     parameters: {

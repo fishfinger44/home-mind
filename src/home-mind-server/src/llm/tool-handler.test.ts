@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { handleToolCall, entityIdFrom, extractAndStoreFacts, filterExtractedFacts, normalizeTimestamp, truncateHistory, recallFacts, resolveSearchMode, groundedGeminiSearch, readBraveQuotaHeaders, QuotaError, suggestionTitle,
   daneUslugi,
   znormalizujWywolanie,
+  naZegarDomowy,
   sprawdzPamiec,
 } from "./tool-handler.js";
 import type { KontekstPamieci } from "./tool-handler.js";
@@ -1270,6 +1271,35 @@ describe("daneUslugi", () => {
       service: "log",
       data: { name: "Test", message: "x", domain: "light" },
     });
+  });
+});
+
+describe("naZegarDomowy", () => {
+  const prognoza = (dt: string) => ({
+    service_response: { "weather.dom": { forecast: [{ datetime: dt, condition: "rainy" }] } },
+  });
+
+  it("dokleja czas lokalny i etykiete dnia", () => {
+    const jutro = new Date();
+    jutro.setDate(jutro.getDate() + 1);
+    jutro.setHours(2, 0, 0, 0);
+    const w = naZegarDomowy(prognoza(jutro.toISOString())) as any;
+    const wpis = w.service_response["weather.dom"].forecast[0];
+    expect(wpis.czas_lokalny).toContain("jutro");
+    expect(wpis.czas_lokalny).toContain("02:00");
+    // Surowy `datetime` zostaje — cokolwiek na nim polega, ma dzialac dalej.
+    expect(wpis.datetime).toBe(jutro.toISOString());
+  });
+
+  it("podaje dzisiejsza date liczona LOKALNIE", () => {
+    const w = naZegarDomowy(prognoza(new Date().toISOString())) as any;
+    expect(typeof w.dzis_lokalnie).toBe("string");
+    expect(w.service_response["weather.dom"].forecast[0].czas_lokalny).toContain("dzisiaj");
+  });
+
+  it("nie wywraca sie na odpowiedzi bez prognozy", () => {
+    expect(naZegarDomowy({ cokolwiek: 1 })).toEqual({ cokolwiek: 1 });
+    expect(naZegarDomowy(null)).toBe(null);
   });
 });
 

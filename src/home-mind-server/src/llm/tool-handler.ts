@@ -615,6 +615,10 @@ export async function handleToolCall(
           Object.keys(data).length > 0 ? data : undefined,
           wantsResponse
         );
+
+        if (wyw.domain === "weather" && wyw.service === "get_forecasts") {
+          result = naZegarDomowy(result, String(data.type ?? "daily"));
+        }
         break;
       }
 
@@ -754,6 +758,83 @@ export interface WywolanieUslugi {
  * wywołanie bez `domain` na górze i tak jest nieważne, wyciągnięcie go stamtąd
  * może tylko pomóc; wywołanie, które ma je na górze, zostawiamy w spokoju.
  */
+/**
+ * Prognoza czasem domowym, z podpisanym dniem.
+ *
+ * 🔴 Zapłacone 20.08: asystent zapowiedział na noc burze i czterdzieści kilka
+ * milimetrów deszczu, a noc była sucha — pomylił się o DOBĘ. Nie zmyślał:
+ * `weather.get_forecasts` oddaje czasy w UTC (`2026-08-21T00:00:00+00:00`), więc
+ * „druga w nocy z czwartku na piątek" leży w prognozie pod datą 21 sierpnia. Model
+ * czytał tę datę jako „jutro" i opowiadał o jutrzejszej dobie.
+ *
+ * Do tego dochodzi rozjazd, którego nie da się zgadnąć z samej daty: dla człowieka
+ * „dziś w nocy" to godziny PO północy, czyli już następny dzień kalendarza.
+ *
+ * 🔑 Liczy to więc kod, nie model — tak samo jak godziny słownie w rozkładzie jazdy.
+ * Do każdego wpisu dokładamy czas lokalny, dzień tygodnia i etykietę „dziś/jutro/
+ * pojutrze", a `datetime` zostawiamy nietknięte, żeby nic, co na nim polega, nie
+ * przestało działać.
+ */
+export function naZegarDomowy(wynik: unknown, typ = "daily"): unknown {
+  const dzisiaj = new Date();
+  const doDaty = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const etykieta = (d: Date): string => {
+    const roznica =
+      (new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() -
+        new Date(dzisiaj.getFullYear(), dzisiaj.getMonth(), dzisiaj.getDate()).getTime()) /
+      86_400_000;
+    if (roznica === 0) return "dzisiaj";
+    if (roznica === 1) return "jutro";
+    if (roznica === 2) return "pojutrze";
+    return `za ${roznica} dni`;
+  };
+
+  const przepisz = (wpis: Record<string, unknown>): Record<string, unknown> => {
+    const surowy = wpis.datetime;
+    if (typeof surowy !== "string") return wpis;
+    const kiedy = new Date(surowy);
+    if (Number.isNaN(kiedy.getTime())) return wpis;
+    const dzien = kiedy.toLocaleDateString("pl-PL", { weekday: "long", day: "numeric", month: "long" });
+    const godzina = kiedy.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
+    return {
+      ...wpis,
+      czas_lokalny: `${etykieta(kiedy)}, ${dzien}, godz. ${godzina}`,
+    };
+  };
+
+  if (!wynik || typeof wynik !== "object") return wynik;
+  const kopia = JSON.parse(JSON.stringify(wynik)) as Record<string, unknown>;
+  const odpowiedz = kopia.service_response as Record<string, unknown> | undefined;
+  if (!odpowiedz) return kopia;
+
+  for (const encja of Object.values(odpowiedz)) {
+    const blok = encja as { forecast?: unknown };
+    if (Array.isArray(blok?.forecast)) {
+      blok.forecast = blok.forecast.map((w) => przepisz(w as Record<string, unknown>));
+    }
+  }
+  // Bez tego model odmierza doby od DZISIAJ wyliczonego z UTC — a o 1:00 w nocy
+  // czasu lokalnego UTC pokazuje jeszcze dzień poprzedni.
+  kopia.dzis_lokalnie = dzisiaj.toLocaleDateString("pl-PL", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+
+  // 🔴 Ostrzeżenie idzie RAZEM Z DANYMI, nie tylko do promptu: 20.08 model zapytany
+  // o noc sięgnął po prognozę dzienną, zobaczył przy dzisiejszej dacie `lightning`
+  // — burzę, która przeszła PO POŁUDNIU — i zapowiedział nawałnicę na noc, która
+  // była sucha. Podsumowanie doby nie mówi NIC o porze.
+  if (typ !== "hourly") {
+    kopia.uwaga =
+      "To podsumowanie CALEJ doby, nie konkretnej pory. O noc, ranek, popoludnie " +
+      "czy godzine pytaj ponownie z type: \"hourly\" — inaczej odpowiesz o godzinach, " +
+      "ktore juz minely.";
+  }
+  return kopia;
+}
+
 export function znormalizujWywolanie(
   input: Record<string, unknown>,
   znaneUslugi?: Map<string, Set<string>>
