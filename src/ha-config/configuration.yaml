@@ -1,0 +1,95 @@
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+google_assistant:
+  project_id: home-assistant-fish
+  service_account: !include google_key.json
+  report_state: true
+  exposed_domains:
+    - switch
+    - light
+    - cover
+    - media_player
+
+# Powiązanie Home Generative Agent z kontenerem pgvector
+home_generative_agent:
+  database_url: "postgresql://hga_admin:MojeBezpieczneHaslo123!@192.168.88.227:5432/home_assistant_ai"
+logger:
+  default: info
+  logs:
+    custom_components.pyscript: debug
+
+input_boolean:
+  ha_zamykanie:
+    # Zapalana przez automat "System: flaga zamykania HA" na zdarzeniu shutdown.
+    # initial: false => po kazdym starcie wraca do off, bez osobnego resetu.
+    name: HA sie zamyka
+    icon: mdi:power-plug-off
+    initial: false
+
+# Teksty scen z bajki potrafia rosnac przy kazdej turze — do historii
+# nie musza trafiac.
+recorder:
+  exclude:
+    entities:
+      - sensor.gra_scena
+      - image.gra_ilustracja
+
+# Panel mostka Gemini STT (kontener na mediaserwerze) — podmiana klucza API
+# Długie treści (bajki, opowieści, historie) NIE mieszczą się w oknie potoku głosowego:
+# satelita daje syntezie 8 s od zapowiedzi strumienia, a 2000 słów model pisze 30-60 s.
+# Dlatego takie rzeczy syntezujemy DO PLIKU na mediaserwerze i odtwarzamy jak muzykę —
+# z pauzą, przewijaniem i możliwością powtórzenia. Potok kończy się na „już opowiadam".
+rest_command:
+  zapisz_opowiesc:
+    url: http://192.168.88.228:8880/v1/opowiesc
+    method: POST
+    content_type: application/json
+    # Bez "voice" i "speed" — serwer sam pyta HA, jakim glosem i w jakim tempie
+    # mowi dzis asystent, wiec podmiana lektora w integracji zmienia takze bajki.
+    payload: '{"input": {{ tekst | tojson }}, "nazwa": {{ (nazwa | default("opowiesc")) | tojson }}}'
+    timeout: 300
+
+  # Dluga WYPOWIEDZ agenta — inna droga niz bajka.
+  #
+  # 🔑 Bajka jest przygotowana swiadomie i zostaje w bibliotece (pauza, wznawianie).
+  # Wypowiedz jest jednorazowa: agent wymyslil ja przed chwila, nie miesci sie
+  # w limicie potoku (satelita daje syntezie 8 s) i NIE MA byc zapisywana —
+  # inaczej panel zapycha sie 16-sekundowymi anegdotami.
+  #
+  # Ten POST nic nie syntezuje, tylko odklada tekst i oddaje adres. Synteza
+  # dzieje sie dopiero przy pobraniu, grupa po grupie: pierwszy dzwiek po ~2,7 s
+  # zamiast 10 s, ktore zajmowal zapis calosci do pliku.
+  przygotuj_wypowiedz:
+    url: http://192.168.88.228:8880/v1/wypowiedz
+    method: POST
+    content_type: application/json
+    payload: '{"input": {{ tekst | tojson }}}'
+    timeout: 30
+
+  # Bajka z biblioteki, szukana po tytule. Dopasowanie robi kokoro — porownywanie
+  # napisow szablonem Jinja jest udreka, a tytul przychodzi z mowy, wiec musi byc
+  # tolerancyjne na ogonki i odmiane.
+  zagraj_bajke:
+    url: http://192.168.88.228:8880/opowiesci/znajdz
+    method: POST
+    content_type: application/json
+    payload: '{"tytul": {{ tytul | tojson }}}'
+    timeout: 30
+
+# Panel opowieści (kontener kokoro-api na mediaserwerze). Ten sam wzorzec co panel
+# biometrii: HA nie musi o nim wiedzieć nic poza adresem.
+panel_iframe:
+  opowiesci:
+    title: Opowieści
+    icon: mdi:book-open-page-variant
+    url: http://192.168.88.228:8880/panel
+    require_admin: false

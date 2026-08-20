@@ -449,10 +449,14 @@ opowiedz_dluga_historie:
       selector:
         text:
   sequence:
-  - action: rest_command.zapisz_opowiesc
+  # 🔑 Od 20.08 NIE zapisujemy tego do biblioteki. Bajki przygotowuje sie swiadomie
+  # w panelu i tam maja pauze oraz wznawianie; wypowiedz agenta jest jednorazowa,
+  # a panel zapychal sie 16-sekundowymi anegdotami.
+  # Ten POST nic nie syntezuje — odklada tekst i oddaje adres. Synteza rusza dopiero
+  # przy pobraniu, grupa po grupie: pierwszy dzwiek po ~2,7 s zamiast po 10 s.
+  - action: rest_command.przygotuj_wypowiedz
     data:
       tekst: '{{ tekst }}'
-      nazwa: '{{ nazwa | default("opowiesc") }}'
     response_variable: wynik
   - choose:
     - conditions: '{{ wynik.status == 200 }}'
@@ -492,23 +496,32 @@ zagraj_opowiesc_po_ciszy:
       selector:
         text:
   sequence:
-  - wait_for_trigger:
-    # Agent skonczyl mowic.
-    - trigger: state
+  # ⚠️ Czekamy TYLKO wtedy, gdy satelita naprawde ma cos do powiedzenia. Gdy prosba
+  # przyszla z telefonu, panelu albo API, satelita stoi w `idle` i zaden trigger nie
+  # nadejdzie — skrypt wisialby pelne 25 s, zanim timeout puscilby go dalej
+  # (zmierzone 20.08 na tescie przez REST).
+  - if:
+    - condition: state
       entity_id: assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego
-      from: responding
-    # ...albo nie powiedzial nic i tura po prostu sie domknela. Bez tego drugiego
-    # wyjscia cicha odpowiedz kosztowalaby PELNE 25 s czekania na trigger, ktory
-    # nigdy by nie przyszedl — czyli lekarstwo gorsze od choroby.
-    - trigger: state
-      entity_id: assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego
-      to: idle
-    timeout:
-      seconds: 25
-    # Gdy agent nic nie powiedzial (albo juz skonczyl), nie ma na co czekac — gramy.
-    continue_on_timeout: true
-  - delay:
-      milliseconds: 400
+      state:
+      - responding
+      - processing
+    then:
+    - wait_for_trigger:
+      # Agent skonczyl mowic.
+      - trigger: state
+        entity_id: assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego
+        from: responding
+      # ...albo nie powiedzial nic i tura po prostu sie domknela.
+      - trigger: state
+        entity_id: assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego
+        to: idle
+      timeout:
+        seconds: 25
+      # Gdy agent nic nie powiedzial (albo juz skonczyl), nie ma na co czekac — gramy.
+      continue_on_timeout: true
+    - delay:
+        milliseconds: 400
   - action: media_player.play_media
     target:
       entity_id: media_player.respeaker_xvf3800_assistant_media_player
@@ -518,3 +531,34 @@ zagraj_opowiesc_po_ciszy:
   # `restart`, a nie `single`: prosba o druga opowiesc w trakcie czekania ma
   # zastapic poprzednia, a nie zostac po cichu odrzucona.
   mode: restart
+
+zagraj_bajke_z_biblioteki:
+  alias: Zagraj gotowa bajke z biblioteki
+  description: >-
+    Bajek agent NIE WYMYSLA. Przygotowuje sie je wczesniej w panelu Opowiesci —
+    swiadomie, z mozliwoscia poprawienia tekstu przed synteza — a tutaj tylko
+    odnajdujemy wlasciwa po tytule i puszczamy. Dopasowanie robi kokoro, bo tytul
+    przychodzi z mowy i musi byc tolerancyjne na odmiane i ogonki.
+  fields:
+    tytul:
+      description: Tytul bajki, tak jak powiedzial go domownik
+      required: true
+      selector:
+        text:
+  sequence:
+  - action: rest_command.zagraj_bajke
+    data:
+      tytul: '{{ tytul }}'
+    response_variable: wynik
+  # 🔴 Skrypt MUSI oddac wynik, inaczej agent melduje sukces, ktorego nie bylo.
+  # Zmierzone 20.08: na prosbe o Czerwonego Kapturka (ktorego w bibliotece NIE MA)
+  # powiedzial „puszczona z biblioteki" — bo `call_service` bez odpowiedzi wyglada
+  # dla niego jak powodzenie. Zasada nadrzedna domu mowi wprost: brak bledu nie
+  # jest dowodem sukcesu.
+  - variables:
+      odpowiedz: >-
+        {{ {'zagrano': wynik.status == 200,
+            'szczegoly': wynik.content if wynik.content is defined else none} }}
+  - stop: Bajka obsluzona
+    response_variable: odpowiedz
+  mode: single
