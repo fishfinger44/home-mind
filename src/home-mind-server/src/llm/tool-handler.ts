@@ -1,4 +1,4 @@
-import type { HomeAssistantClient, HistoryEntry } from "../ha/client.js";
+import type { HomeAssistantClient, HistoryEntry, KatalogUslug } from "../ha/client.js";
 import type { IMemoryStore } from "../memory/interface.js";
 import type { IFactExtractor, UzyteNarzedzie, WebSearchMode } from "./interface.js";
 import type { ExtractedFact, Fact } from "../memory/types.js";
@@ -514,8 +514,75 @@ export async function handleToolCall(
         // Wyprostuj kształt ZANIM cokolwiek na jego podstawie zdecydujesz —
         // inaczej sprawdzanie uprawnień oglądałoby puste `domain`/`service`
         // i przepuszczało wywołanie, które za chwilę i tak dojdzie do skutku.
-        const wyw = znormalizujWywolanie(input);
-        const celEncja = entityIdFrom({ ...input, data: wyw.data });
+        // Katalog usług rozstrzyga dwie rzeczy, których po samym kształcie
+        // wywołania rozstrzygnąć się nie da — patrz `znormalizujWywolanie`
+        // i `entity_id` niżej. Gdy HA nie odpowie, lecimy jak dotąd: to ma
+        // poprawiać typowe pomyłki, a nie być kolejnym miejscem awarii.
+        let katalog: KatalogUslug | undefined;
+        try {
+          katalog = await ha.getServices();
+        } catch (e) {
+          console.log(`[tool] nie udalo sie pobrac listy uslug: ${e}`);
+        }
+        const nazwyUslug = katalog
+          ? new Map([...katalog].map(([d, u]) => [d, new Set(u.keys())]))
+          : undefined;
+
+        const wyw = znormalizujWywolanie(input, nazwyUslug);
+
+        // 🔴 Bez nazwy usługi Home Assistant odpowiada samym "400: Bad Request",
+        // a model — nie wiedząc, co poprawić — próbuje wariantów tej samej
+        // pomyłki albo idzie w web_search (zmierzone 20.08: pytanie o pogodę
+        // przeszło tak w 16 s zamiast pół sekundy). Mówimy więc wprost, czego
+        // brakuje, i wymieniamy usługi, które w tej domenie istnieją.
+        // Domena z JEDNĄ usługą nie zostawia wyboru, więc brak `service` da się
+        // uzupełnić bez zgadywania. To nie jest domysł „pewnie chodziło o…",
+        // tylko jedyna możliwość: `weather` wystawia sam `get_forecasts`, a
+        // model gubił przy nim `service` w KAŻDYM pytaniu o prognozę — także po
+        // wpisaniu gotowego JSON-a do promptu (sprawdzone 20.08, 4 próby).
+        if (!wyw.service && wyw.domain) {
+          const uslugi = katalog?.get(wyw.domain);
+          if (uslugi && uslugi.size === 1) {
+            wyw.service = [...uslugi.keys()][0];
+            console.log(
+              `[tool] ${wyw.domain} ma jedna usluge — uzupelniam brakujace service=${wyw.service}`
+            );
+          }
+        }
+
+        if (!wyw.service) {
+          const dostepne = wyw.domain ? katalog?.get(wyw.domain) : undefined;
+          const podpowiedz = dostepne
+            ? ` Uslugi w domenie '${wyw.domain}': ${[...dostepne.keys()].slice(0, 12).join(", ")}.`
+            : "";
+          result = {
+            error:
+              "Brak pola 'service' — to NAZWA USLUGI Home Assistanta " +
+              "(np. 'turn_on', 'find_and_play', 'get_forecasts') i stoi obok " +
+              "'domain', nie w 'data'." +
+              podpowiedz +
+              " Jesli usluga ma wlasny argument o tej samej nazwie (np. nazwa " +
+              "aplikacji dla media_assistant), zostaw go w 'data'.",
+          };
+          console.log(
+            `[tool] call_service bez pola service (domain=${wyw.domain ?? "?"}) — odsylam podpowiedz`
+          );
+          break;
+        }
+
+        let celEncja = entityIdFrom({ ...input, data: wyw.data });
+
+        // Usługa bez `target` nie przyjmuje `entity_id`; HA odbija takie
+        // wywołanie jako 400. `media_assistant.find_and_play` nigdy celu nie
+        // miało, a model dokladal `entity_id` odruchowo, bo tak wyglada
+        // wiekszosc uslug HA.
+        const opisUslugi = katalog?.get(wyw.domain ?? "")?.get(wyw.service);
+        if (celEncja && opisUslugi && !opisUslugi.przyjmujeCel) {
+          console.log(
+            `[tool] ${wyw.domain}.${wyw.service} nie przyjmuje entity_id — pomijam '${celEncja}'`
+          );
+          celEncja = undefined;
+        }
 
         const zakaz = checkRestriction(
           wyw.domain,
@@ -687,7 +754,10 @@ export interface WywolanieUslugi {
  * wywołanie bez `domain` na górze i tak jest nieważne, wyciągnięcie go stamtąd
  * może tylko pomóc; wywołanie, które ma je na górze, zostawiamy w spokoju.
  */
-export function znormalizujWywolanie(input: Record<string, unknown>): WywolanieUslugi {
+export function znormalizujWywolanie(
+  input: Record<string, unknown>,
+  znaneUslugi?: Map<string, Set<string>>
+): WywolanieUslugi {
   const dane = { ...(input.data as Record<string, unknown> | undefined) };
 
   const zagniezdzone = dane.data;
@@ -704,10 +774,24 @@ export function znormalizujWywolanie(input: Record<string, unknown>): WywolanieU
     delete dane.domain;
   }
 
+  // 🔴 `service` w `data` to DWIE różne rzeczy naraz i nie da się ich odróżnić
+  // po samym kształcie: raz jest nazwą usługi, którą model wsadził o poziom za
+  // nisko, raz WŁASNYM ARGUMENTEM usługi. `media_assistant.find_and_play` ma
+  // pole `service` na nazwę aplikacji — 20.08 kosztowało to Gumisie: z
+  // `data: {query, service: "disneyplus"}` robiło się wywołanie
+  // `media_assistant.disneyplus`, którego nie ma, a Disney+ ginął po drodze.
+  // Model dostawał w odpowiedzi samo "400: Bad Request" i strzelał na oślep.
+  //
+  // Rozstrzyga lista usług, które HA naprawdę wystawia (`znaneUslugi`). Bez
+  // niej — gdy odpytanie HA się nie powiodło — zostaje stare zachowanie, bo
+  // dla usług BEZ własnego pola `service` jest poprawne i częstsze.
   let service = typeof input.service === "string" ? input.service : undefined;
   if (!service && typeof dane.service === "string") {
-    service = dane.service;
-    delete dane.service;
+    const uslugiDomeny = domain ? znaneUslugi?.get(domain) : undefined;
+    if (!uslugiDomeny || uslugiDomeny.has(dane.service)) {
+      service = dane.service;
+      delete dane.service;
+    }
   }
 
   return { domain, service, data: dane };

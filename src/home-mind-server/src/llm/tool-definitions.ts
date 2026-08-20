@@ -62,7 +62,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "call_service",
     description:
-      "Call a Home Assistant service to control devices (turn on/off lights, set thermostat, etc.)",
+      "Call a Home Assistant service. `domain` AND `service` are BOTH required and BOTH sit at " +
+      "the top level — never inside `data`. Three shapes, copy them:\n" +
+      "control:  {\"domain\":\"light\",\"service\":\"turn_on\",\"entity_id\":\"light.salon\",\"data\":{\"brightness_pct\":60}}\n" +
+      "read:     {\"domain\":\"weather\",\"service\":\"get_forecasts\",\"entity_id\":\"weather.dom\",\"data\":{\"type\":\"daily\"},\"return_response\":true}\n" +
+      "film:     {\"domain\":\"media_assistant\",\"service\":\"find_and_play\",\"data\":{\"title\":\"Gumisie\",\"service\":\"disneyplus\"}}\n" +
+      "In the last one the two `service` fields mean DIFFERENT things — see the `service` parameter.",
     parameters: {
       type: "object",
       properties: {
@@ -73,7 +78,14 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         service: {
           type: "string",
           description:
-            "Service name (e.g., 'turn_on', 'turn_off', 'toggle'). For lights: use 'turn_on' with data to set brightness/color — there is no separate 'set_color' service.",
+            "The HOME ASSISTANT service name, at the top level: 'turn_on', 'turn_off', 'toggle', " +
+            "'get_forecasts', 'get_events', 'find_and_play', 'search'. Omitting it is the single " +
+            "most common failure here — without it the call cannot be made at all. " +
+            "⚠️ A few services carry their OWN field named `service` inside `data`: " +
+            "media_assistant.find_and_play takes data.service = the streaming app ('disneyplus', " +
+            "'netflix'). That is a different field. The app name NEVER belongs at the top level, " +
+            "and the service name NEVER belongs inside `data`. " +
+            "For lights: use 'turn_on' with data to set brightness/color — there is no separate 'set_color' service.",
         },
         entity_id: {
           type: "string",

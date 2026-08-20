@@ -21,9 +21,20 @@ interface CacheEntry<T> {
   timestamp: number;
 }
 
+/** domena -> usługa -> czy przyjmuje `entity_id` (ma `target`). */
+export type KatalogUslug = Map<string, Map<string, { przyjmujeCel: boolean }>>;
+
 export class HomeAssistantClient {
   private baseUrl: string;
   private token: string;
+
+  /** Adres i token do rzeczy, których REST nie wystawia — patrz `area-aliases.ts`. */
+  get adres(): string {
+    return this.baseUrl;
+  }
+  get poswiadczenie(): string {
+    return this.token;
+  }
   private skipTlsVerify: boolean;
 
   // Cache settings
@@ -186,6 +197,44 @@ export class HomeAssistantClient {
         name.toLowerCase().includes(lowerQuery)
       );
     });
+  }
+
+  /**
+   * Nazwy usług, jakie Home Assistant naprawdę wystawia, per domena.
+   *
+   * 🔑 Po co: rozstrzygnięcie, czy `service` w `data` jest NAZWĄ USŁUGI, którą
+   * model wsadził o poziom za nisko, czy WŁASNYM ARGUMENTEM usługi. Obie rzeczy
+   * wyglądają identycznie — `media_assistant.find_and_play` ma pole `service`
+   * na nazwę aplikacji, więc "disneyplus" trafiało tam, gdzie oczekiwano
+   * "find_and_play", i wywołanie szło do usługi, której nie ma.
+   *
+   * Lista zmienia się tylko przy dokładaniu integracji, stąd godzina cache.
+   */
+  private uslugiCache: { kiedy: number; mapa: KatalogUslug } | null = null;
+
+  async getServices(): Promise<KatalogUslug> {
+    const teraz = Date.now();
+    if (this.uslugiCache && teraz - this.uslugiCache.kiedy < 3600_000) {
+      return this.uslugiCache.mapa;
+    }
+
+    const lista = await this.fetch<
+      { domain: string; services: Record<string, { target?: unknown }> }[]
+    >("/api/services");
+
+    const mapa: KatalogUslug = new Map();
+    for (const wpis of lista) {
+      const uslugi = new Map<string, { przyjmujeCel: boolean }>();
+      for (const [nazwa, opis] of Object.entries(wpis.services ?? {})) {
+        // Usługa BEZ `target` nie przyjmuje `entity_id` — Home Assistant odbija
+        // takie wywołanie jako 400, a model nie ma z czego wywnioskować czemu.
+        uslugi.set(nazwa, { przyjmujeCel: opis?.target != null });
+      }
+      mapa.set(wpis.domain, uslugi);
+    }
+
+    this.uslugiCache = { kiedy: teraz, mapa };
+    return mapa;
   }
 
   /**

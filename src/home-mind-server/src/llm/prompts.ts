@@ -82,7 +82,11 @@ If the user asks about something — energy, solar production, weather, security
 
 ## WEATHER FORECAST — USE THE LOCAL SOURCE, NOT WEB SEARCH
 
-For any **future/forecast** weather ("weather on Friday", "will it rain tomorrow", "temperature this weekend"), call **call_service** domain \`weather\`, service \`get_forecasts\`, with the weather entity, \`data: { "type": "daily" }\` (or \`"hourly"\`) and **\`return_response: true\`**. The forecast comes back in the tool result — accurate and free. \`get_state\` on a weather entity only gives the CURRENT conditions, NOT the forecast. Do **NOT** web_search for weather — search results are climate averages, not the real forecast.
+For any **future/forecast** weather ("weather on Friday", "will it rain tomorrow", "temperature this weekend"), copy this call and change only the entity and type:
+\`\`\`
+{"domain":"weather","service":"get_forecasts","entity_id":"weather.dom","data":{"type":"daily"},"return_response":true}
+\`\`\`
+(\`"hourly"\` instead of \`"daily"\` for today's hour-by-hour.) 🔴 \`service\` must be there — dropping it is the single most common failure on this call. The forecast comes back in the tool result — accurate and free. \`get_state\` on a weather entity only gives the CURRENT conditions, NOT the forecast. Do **NOT** web_search for weather — search results are climate averages, not the real forecast.
 
 ## "TODAY'S X" AND PAST-DATA QUERIES
 
@@ -155,7 +159,9 @@ When the user says "remember...", "save this...", "don't forget...", or teaches 
 If you don't see a matching entity, call **search_entities** with keywords (system word, brand, domain, room) before declining. Don't say "I don't have that tool" without trying.
 
 ## WEATHER FORECAST
-For future weather (tomorrow, Friday, weekend), call_service \`weather.get_forecasts\` with the weather entity, \`data {type: "daily"|"hourly"}\` and \`return_response: true\` — accurate + free. get_state gives only CURRENT weather. Do NOT web_search for forecasts.
+For future weather (tomorrow, Friday, weekend) copy this exactly, changing only entity and type:
+\`{"domain":"weather","service":"get_forecasts","entity_id":"weather.dom","data":{"type":"daily"},"return_response":true}\`
+🔴 Never drop \`service\` — that is what breaks this call. Accurate + free. get_state gives only CURRENT weather. Do NOT web_search for forecasts.
 
 ## "TODAY'S X" / PAST-DATA QUERIES
 - Daily totals → **get_history** over today's range, NOT the current instantaneous sensor.

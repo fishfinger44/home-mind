@@ -1215,6 +1215,47 @@ describe("daneUslugi", () => {
     });
   });
 
+  // 🔴 Gumisie, 20.08: `media_assistant.find_and_play` ma WLASNE pole `service`
+  // (nazwa aplikacji). Bezwarunkowe branie go z `data` robilo z wywolania
+  // `media_assistant.disneyplus` — uslugi, ktorej nie ma — i gubilo Disney+.
+  it("nie bierze z data pola service, ktore jest argumentem uslugi", () => {
+    const znane = new Map([
+      ["media_assistant", new Set(["find_and_play", "search", "youtube_show"])],
+    ]);
+    expect(
+      znormalizujWywolanie(
+        { domain: "media_assistant", data: { query: "Gumisie", service: "disneyplus" } },
+        znane
+      )
+    ).toEqual({
+      domain: "media_assistant",
+      service: undefined,
+      data: { query: "Gumisie", service: "disneyplus" },
+    });
+  });
+
+  it("bierze z data service, gdy to naprawde nazwa uslugi", () => {
+    const znane = new Map([["calendar", new Set(["create_event", "get_events"])]]);
+    expect(
+      znormalizujWywolanie(
+        { domain: "calendar", data: { service: "get_events", entity_id: "calendar.x" } },
+        znane
+      )
+    ).toEqual({
+      domain: "calendar",
+      service: "get_events",
+      data: { entity_id: "calendar.x" },
+    });
+  });
+
+  // Bez katalogu (HA nie odpowiedzialo) zostaje stare zachowanie: dla uslug bez
+  // wlasnego pola `service` jest poprawne i o wiele czestsze.
+  it("bez listy uslug zachowuje sie jak dotad", () => {
+    expect(
+      znormalizujWywolanie({ domain: "calendar", data: { service: "get_events" } })
+    ).toEqual({ domain: "calendar", service: "get_events", data: {} });
+  });
+
   // logbook.log ma WLASNE pole `domain` — bezwarunkowe usuwanie zabraloby mu
   // poprawny argument, wiec ruszamy tylko gdy na gorze go brakuje.
   it("nie zabiera pola domain uslugom, ktore maja je na gorze", () => {
