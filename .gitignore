@@ -308,3 +308,6 @@ data-piper/voices.json
 *.bak_*
 *.bak-*
 *.przed_*
+
+# Nagrania z porownan lektorow — material odsluchowy, nie kod.
+data-piper/porownanie_*/
