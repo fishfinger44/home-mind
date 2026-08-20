@@ -1,4 +1,5 @@
 import type { HomeAssistantClient } from "./client.js";
+import { pobierzAliasyObszarow, przytnijAliasy } from "./area-aliases.js";
 
 /**
  * Single Jinja2 template that returns the full home layout as JSON in one call.
@@ -54,6 +55,8 @@ interface AreaData {
   id: string;
   name: string;
   entities: EntityRef[];
+  /** Jak ten pokój nazywa domownik — dopisywane po skanie, patrz `area-aliases.ts`. */
+  aliases?: string[];
 }
 
 interface FloorData {
@@ -93,6 +96,27 @@ export class TopologyScanner {
     try {
       const raw = await this.ha.renderTemplate(LAYOUT_TEMPLATE);
       const data = JSON.parse(raw.trim()) as LayoutData;
+      // Aliasy dokładamy PO ułożeniu topologii i osobnym kanałem, bo rejestr
+      // obszarów żyje tylko na WebSockecie. Gdy się nie uda — layout zostaje
+      // bez nich, czyli dokładnie tak, jak działał do 20.08.
+      try {
+        const aliasy = await pobierzAliasyObszarow(this.ha.adres, this.ha.poswiadczenie);
+        let opisane = 0;
+        for (const area of [...data.floors.flatMap((f) => f.areas), ...data.unassigned]) {
+          const dla = aliasy.get(area.id);
+          if (!dla) continue;
+          const przyciete = przytnijAliasy(area.name, dla);
+          if (przyciete.length > 0) {
+            area.aliases = przyciete;
+            opisane++;
+          }
+        }
+        console.log(`[topology] Aliasy obszarow: ${opisane} pokoi opisanych po polsku`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[topology] Aliasy obszarow niedostepne (${msg}) — layout bez nich`);
+      }
+
       this.layoutData = data;
       this.lastScanTime = Date.now();
 
@@ -146,7 +170,7 @@ export class TopologyScanner {
       for (const area of floor.areas.sort((a, b) => a.name.localeCompare(b.name))) {
         const ents = entitiesOf(area);
         if (ents.length === 0) continue;
-        lines.push(`- ${area.name}: ${formatEntities(ents)}`);
+        lines.push(`- ${nazwaObszaru(area)}: ${formatEntities(ents)}`);
       }
       lines.push("");
     }
@@ -156,7 +180,7 @@ export class TopologyScanner {
       for (const area of data.unassigned.sort((a, b) => a.name.localeCompare(b.name))) {
         const ents = entitiesOf(area);
         if (ents.length === 0) continue;
-        lines.push(`- ${area.name}: ${formatEntities(ents)}`);
+        lines.push(`- ${nazwaObszaru(area)}: ${formatEntities(ents)}`);
       }
       lines.push("");
     }
@@ -172,6 +196,15 @@ export class TopologyScanner {
  * w prompcie przy każdej turze; `media_player.denon_avr_x2400h` „Denon muzyka"
  * jest różnicą między zatrzymaniem muzyki a zatrzymaniem niczego.
  */
+/**
+ * „Living Room (salon, salonie)" — nazwa systemowa plus to, jak pokój nazywa
+ * domownik. Bez tego model dostaje samą angielską nazwę i polecenie „w salonie"
+ * nie ma się o co zaczepić.
+ */
+function nazwaObszaru(area: AreaData): string {
+  return area.aliases?.length ? `${area.name} (${area.aliases.join(", ")})` : area.name;
+}
+
 function formatEntities(ents: EntityRef[]): string {
   return ents
     .slice()
