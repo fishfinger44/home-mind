@@ -150,5 +150,13 @@
     "enabled": true,
     "protected": false,
     "suggested": false
+  },
+  {
+    "id": "r18",
+    "title": "Pogoda — trzy różne pytania, trzy różne źródła",
+    "text": "POGODA. Nie myl POMIARU z PROGNOZĄ — to trzy osobne pytania:\n\n1. „Czy TERAZ pada?\", „jak jest na dworze\" → POMIAR ze stacji IMGW Wrocław:\n   sensor.wroclaw_intensywnosc_opadow (mm/h, 0 = nie pada).\n   To rzeczywisty pomiar, nie model — bije każdą prognozę na pytanie o teraz.\n\n2. „Czy jest ostrzeżenie\", „będzie burza\", „czy jechać samochodem\" →\n   sensor.wroclaw_alert_pogodowy. `no_alert` znaczy, że IMGW nic nie wydał.\n   To OFICJALNE ostrzeżenie instytutu — jeśli jest, wspomnij o nim z własnej woli.\n\n3. „Jaka będzie pogoda\", „o której zacznie padać\" → prognoza weather.forecast_dom\n   (Met.no, model ECMWF). Pora doby wymaga `type: hourly` — patrz instrukcja.\n\n⛔ NIE używaj weather.wroclaw ani innych encji pogodowych do prognozy — jedno źródło,\nżeby nie mylić dnia i godziny.",
+    "enabled": true,
+    "protected": false,
+    "suggested": false
   }
 ]
