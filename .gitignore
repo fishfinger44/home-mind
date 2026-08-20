@@ -311,3 +311,7 @@ data-piper/voices.json
 
 # Nagrania z porownan lektorow — material odsluchowy, nie kod.
 data-piper/porownanie_*/
+
+# Kopie promptu i regul sprzed migracji na liste /rules (07.08.2026).
+# Archiwum do wgladu, nie konfiguracja — zyja tylko na dysku.
+archiwum-promptu/
