@@ -11,7 +11,11 @@ const LAYOUT_TEMPLATE = `
 {%- for fid in floors() -%}
   {%- set ans = namespace(areas=[]) -%}
   {%- for aid in floor_areas(fid) -%}
-    {%- set ans.areas = ans.areas + [{"id": aid, "name": area_name(aid), "entities": area_entities(aid) | list}] -%}
+    {%- set ens = namespace(items=[]) -%}
+    {%- for e in area_entities(aid) -%}
+      {%- set ens.items = ens.items + [{"id": e, "name": state_attr(e, "friendly_name")}] -%}
+    {%- endfor -%}
+    {%- set ans.areas = ans.areas + [{"id": aid, "name": area_name(aid), "entities": ens.items}] -%}
     {%- set ns.assigned = ns.assigned + [aid] -%}
   {%- endfor -%}
   {%- set ns.floors = ns.floors + [{"id": fid, "name": floor_name(fid), "areas": ans.areas}] -%}
@@ -19,16 +23,37 @@ const LAYOUT_TEMPLATE = `
 {%- set orphans = namespace(areas=[]) -%}
 {%- for aid in areas() -%}
   {%- if aid not in ns.assigned -%}
-    {%- set orphans.areas = orphans.areas + [{"id": aid, "name": area_name(aid), "entities": area_entities(aid) | list}] -%}
+    {%- set ens = namespace(items=[]) -%}
+    {%- for e in area_entities(aid) -%}
+      {%- set ens.items = ens.items + [{"id": e, "name": state_attr(e, "friendly_name")}] -%}
+    {%- endfor -%}
+    {%- set orphans.areas = orphans.areas + [{"id": aid, "name": area_name(aid), "entities": ens.items}] -%}
   {%- endif -%}
 {%- endfor -%}
 {{ {"floors": ns.floors, "unassigned": orphans.areas} | tojson }}
 `.trim();
 
+/**
+ * Nazwa encji, nie tylko jej identyfikator.
+ *
+ * 🔴 Powód z 18.08.2026, zapłacony w domu: model dostawał WYŁĄCZNIE
+ * identyfikatory, więc widząc `media_player.denon`, `media_player.denon_2`
+ * i `media_player.denon_avr_x2400h` nie miał jak zgadnąć, że muzyka gra na
+ * trzeciej. Przez kilka tur zatrzymywał martwą encję HEOS i uczciwie meldował,
+ * że nic z tego nie wyszło. Nazwy („Denon radio", „Denon wejścia",
+ * „Denon muzyka") są w Home Assistancie od dawna — po prostu nigdy nie
+ * docierały do promptu.
+ */
+interface EntityRef {
+  id: string;
+  /** `friendly_name`; `null`, gdy encja nie istnieje albo go nie ma. */
+  name: string | null;
+}
+
 interface AreaData {
   id: string;
   name: string;
-  entities: string[];
+  entities: EntityRef[];
 }
 
 interface FloorData {
@@ -101,8 +126,8 @@ export class TopologyScanner {
   }
 
   private buildLayout(data: LayoutData, exposed?: Set<string>): string {
-    const entitiesOf = (area: AreaData): string[] =>
-      exposed ? area.entities.filter((e) => exposed.has(e)) : area.entities;
+    const entitiesOf = (area: AreaData): EntityRef[] =>
+      exposed ? area.entities.filter((e) => exposed.has(e.id)) : area.entities;
     // Check if there's anything useful to show
     const hasFloors = data.floors.some((f) => f.areas.length > 0);
     const hasOrphans = data.unassigned.length > 0;
@@ -121,7 +146,7 @@ export class TopologyScanner {
       for (const area of floor.areas.sort((a, b) => a.name.localeCompare(b.name))) {
         const ents = entitiesOf(area);
         if (ents.length === 0) continue;
-        lines.push(`- ${area.name}: ${ents.sort().join(", ")}`);
+        lines.push(`- ${area.name}: ${formatEntities(ents)}`);
       }
       lines.push("");
     }
@@ -131,11 +156,37 @@ export class TopologyScanner {
       for (const area of data.unassigned.sort((a, b) => a.name.localeCompare(b.name))) {
         const ents = entitiesOf(area);
         if (ents.length === 0) continue;
-        lines.push(`- ${area.name}: ${ents.sort().join(", ")}`);
+        lines.push(`- ${area.name}: ${formatEntities(ents)}`);
       }
       lines.push("");
     }
 
     return lines.join("\n").trimEnd();
   }
+}
+
+/**
+ * Nazwę dokładamy tylko wtedy, gdy NIE wynika z identyfikatora.
+ *
+ * `light.lampa_w_kuchni` „Lampa w kuchni" nie wnosi nic i kosztowałoby miejsce
+ * w prompcie przy każdej turze; `media_player.denon_avr_x2400h` „Denon muzyka"
+ * jest różnicą między zatrzymaniem muzyki a zatrzymaniem niczego.
+ */
+function formatEntities(ents: EntityRef[]): string {
+  return ents
+    .slice()
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((e) => (e.name && !nazwaWynikaZId(e.id, e.name) ? `${e.id} "${e.name}"` : e.id))
+    .join(", ");
+}
+
+function nazwaWynikaZId(id: string, nazwa: string): boolean {
+  const uprosc = (t: string) =>
+    t
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\u0142/g, "l")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
+  return uprosc(id.split(".").slice(1).join(".")) === uprosc(nazwa);
 }
