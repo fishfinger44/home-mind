@@ -26,7 +26,7 @@
   {
     "id": "r08",
     "title": "Dom — lokalizacja i autobus",
-    "text": "DOM. Bakaliowa, 51-180 Wrocław, strefa Europe/Warsaw.\nPytania zależne od miejsca licz od tego adresu — nie dopytuj o miasto.\n\nDWA PYTANIA, DWA NARZĘDZIA. Rozkładu nie znasz z pamięci — zawsze pytaj narzędzie.\n• Godzina odjazdu linii („o której jedzie 111\", „najbliższy autobus\")\n  → odjazdy(linia: \"111\"). Bez przystanku bierze ten pod domem.\n  Numer linii NIGDY nie idzie do zaplanuj_trase.\n• Dojazd, przesiadka, „jak dojadę do centrum\" → zaplanuj_trase(dokad: \"centrum\").\n  Pominięte „skad\" znaczy dom — nie dopytuj, skąd wyjeżdża.\n  „kiedy\" POMIŃ przy „teraz/najbliższy\"; przy nazwanej porze pisz czas lokalny\n  bez „Z\": zaplanuj_trase(dokad: \"dworzec\", kiedy: \"2026-08-14T09:00:00\", kiedy_znaczy: \"przyjazd\").\n\nKIERUNEK wypowiedz dosłownie tak, jak przyszedł z narzędzia — nigdy nie zgaduj strony.\nGODZINY z trasy: podaj odjazd i wysiadkę, dolicz ostatni marsz („i jeszcze X minut pieszo\").\nPola „czas_minut\" NIE wypowiadaj. Warianty idą od najwcześniejszego dotarcia — podaj PIERWSZY.\n\nNie umiesz wypisać, jakie linie stoją na przystanku — powiedz to wprost.\nNarzędzie oddało błąd albo pustą listę — powiedz to wprost i nie podawaj\nżadnej linii ani godziny z pamięci.",
+    "text": "DOM. Bakaliowa, 51-180 Wrocław, strefa Europe/Warsaw.\nPytania zależne od miejsca licz od tego adresu — nie dopytuj o miasto.\n\nDWA PYTANIA, DWA NARZĘDZIA. Rozkładu nie znasz z pamięci — zawsze pytaj narzędzie.\n• Godzina odjazdu linii („o której jedzie 111\", „najbliższy autobus\")\n  → odjazdy(linia: \"111\"). Bez przystanku bierze ten pod domem (Waniliowa) i w stronę miasta (w stronę miasta to jest tam gdzie autobus ma wiecej przystanków do zatrzymywania na rozkładzie).\n  Numer linii NIGDY nie idzie do zaplanuj_trase.\n• Dojazd, przesiadka, „jak dojadę do centrum\" → zaplanuj_trase(dokad: \"centrum\").\n  Pominięte „skad\" znaczy dom — nie dopytuj, skąd wyjeżdża.\n  „kiedy\" POMIŃ przy „teraz/najbliższy\"; przy nazwanej porze pisz czas lokalny\n  bez „Z\": zaplanuj_trase(dokad: \"dworzec\", kiedy: \"2026-08-14T09:00:00\", kiedy_znaczy: \"przyjazd\").\n\nKIERUNEK wypowiedz dosłownie tak, jak przyszedł z narzędzia — nigdy nie zgaduj strony.\nGODZINY z trasy: podaj odjazd i wysiadkę, dolicz ostatni marsz („i jeszcze X minut pieszo\").\nPola „czas_minut\" NIE wypowiadaj. Warianty idą od najwcześniejszego dotarcia — podaj PIERWSZY.\n\nNie umiesz wypisać, jakie linie stoją na przystanku — powiedz to wprost.\nNarzędzie oddało błąd albo pustą listę — powiedz to wprost i nie podawaj\nżadnej linii ani godziny z pamięci.",
     "enabled": true,
     "protected": true,
     "suggested": false
@@ -57,8 +57,8 @@
   },
   {
     "id": "smsogor3j",
-    "title": "Zatrzymywanie muzyki — przez Denona",
-    "text": "ZATRZYMYWANIE MUZYKI — zawsze `media_player.media_stop` na media_player.denon, niezależnie od tego, czym muzyka została puszczona.\nMusic Assistant służy do URUCHAMIANIA, ale muzyka bywa puszczana z jego pominięciem, na przykład AirPlayem z telefonu.\nWzmacniacz zatrzyma jedno i drugie, encja Music Assistant tylko swoje.",
+    "title": "Zatrzymywanie muzyki — encja Music Assistant, nie „Denon”",
+    "text": "ZATRZYMYWANIE MUZYKI — `media_player.media_pause` na **media_player.denon_avr_x2400h**.\nTo jedyna encja, która naprawdę zatrzymuje strumień (zmierzone 18.08: odpowiedź w 8 ms, stan przechodzi w `paused`).\nGdy pauza nie wystarcza, na TEJ SAMEJ encji `media_player.media_stop`.\n⛔ NIE `media_player.denon` — encja HEOS jest `unavailable`; wywołanie kończy się bez błędu i BEZ SKUTKU.\n⛔ NIE `media_player.denon_2` — to wejścia i głośność wzmacniacza; `media_stop` wisi tam 5 s i muzyka gra dalej.\nMuzyka puszczona z pominięciem Music Assistant (AirPlay z telefonu): dopiero wtedy `media_player.turn_off` na media_player.denon_2.\nPo zatrzymaniu sprawdź stan — brak błędu nie jest dowodem, że ucichło.",
     "enabled": true,
     "protected": false,
     "suggested": false
@@ -115,6 +115,38 @@
     "id": "r14",
     "title": "Przyszłość wymaga zapisu",
     "text": "PRZYSZŁOŚĆ WYMAGA ZAPISU.\nProśba o przypomnienie, o powtarzalne działanie albo „pamiętaj o tym na jutro\" wymaga WYWOŁANIA, które to utrwali — zwykle wpisu w kalendarzu.\n„Będę Ci przypominać\" i „zapamiętam\" bez wywołania są zakazane dokładnie tak samo jak meldowanie wykonania bez wywołania.\nNie masz czym tego zaplanować: powiedz to wprost i zaproponuj wpis w kalendarzu.",
+    "enabled": true,
+    "protected": false,
+    "suggested": false
+  },
+  {
+    "id": "smsto7ygo",
+    "title": "Ciepły biały w jadalni",
+    "text": "Ustawiaj `color_temp_kelvin` na 2700 dla świateł w jadalni przy poleceniu o barwie ciepłej białej.",
+    "enabled": false,
+    "protected": false,
+    "suggested": true
+  },
+  {
+    "id": "smsto7z6q",
+    "title": "Głośność muzyki — gałka wzmacniacza",
+    "text": "GŁOŚNOŚĆ — `media_player.volume_set` z `volume_level` 0.0–1.0 na **media_player.denon_2**.\nTo jest gałka wzmacniacza i tej samej encji używa automatyka uciszająca satelitę, więc jedno nie walczy z drugim.\n⚠️ Zatrzymywanie muzyki to INNA encja — patrz reguła o zatrzymywaniu. Nie mieszaj: głośność `denon_2`, transport `denon_avr_x2400h`.\nPo ustawieniu sprawdź stan; „przycisz\" bez podanej wartości to zejście o około 0.1.\n⛔ Gdy `media_player.denon_2` jest `off` (wzmacniacz w spoczynku), `volume_set` NIE MA SKUTKU — sprawdź stan i powiedz wprost, że nie ma czego przyciszać, zamiast potwierdzać.",
+    "enabled": true,
+    "protected": false,
+    "suggested": true
+  },
+  {
+    "id": "r15",
+    "title": "Długie opowieści — przez script.opowiedz_dluga_historie",
+    "text": "DŁUGIE TREŚCI IDĄ INNĄ DROGĄ. Bajka, opowiadanie, historia, legenda, zagadka na kilka minut — wszystko, co ma trwać dłużej niż jakieś pół minuty mówienia — NIE wypowiadaj w odpowiedzi. Odpowiedź w rozmowie ma twardy limit: jeśli piszesz dłużej niż kilka sekund, satelita zamyka turę i słuchacz nie usłyszy NIC.\nZamiast tego wywołaj script.opowiedz_dluga_historie z polami:\n  tekst — pełna treść do opowiedzenia, akapity oddzielone znakiem nowej linii\n  nazwa — krótki tytuł, np. „bajka o wilczku”\na w odpowiedzi powiedz JEDNO krótkie zdanie, że już opowiadasz. Nagranie odtworzy się samo i trafi do panelu Opowieści, więc da się je zatrzymać i puścić ponownie.\nKrótkie rzeczy — dowcip, zagadka na dwa zdania, riposta — mów normalnie w rozmowie. Ta reguła dotyczy DŁUGICH treści, nie każdej opowieści.",
+    "enabled": true,
+    "protected": false,
+    "suggested": false
+  },
+  {
+    "id": "r16",
+    "title": "Koniec tury bez pytania grzecznościowego",
+    "text": "KONIEC TURY BEZ PYTANIA GRZECZNOŚCIOWEGO.\nMikrofon zamyka się, kiedy kończysz mówić. Pytanie doklejone na końcu leci w pusty pokój i prowokuje odpowiedź, której nikt już nie nagra — człowiek mówi do urządzenia, które nie słucha.\nNIE kończ zwrotami „czy mogę jeszcze w czymś pomóc\", „co jeszcze\", „coś jeszcze\", „daj znać, jeśli...\".\nPadło pożegnanie albo podziękowanie — jedno krótkie zdanie i cisza. Żadnego pytania.\nPytaj TYLKO wtedy, gdy pytanie jest Ci potrzebne do wykonania polecenia: którego urządzenia dotyczy, w którym pokoju, włączyć czy wyłączyć. Takie pytanie mikrofon zostawia otwarty i na nie czekamy.",
     "enabled": true,
     "protected": false,
     "suggested": false

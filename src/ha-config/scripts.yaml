@@ -430,3 +430,46 @@ zagraj_muzyke:
               target:
                 entity_id: "{{ cel }}"
               continue_on_error: true
+opowiedz_dluga_historie:
+  alias: Opowiedz dluga historie
+  description: >-
+    Bajka, opowiesc albo dluga historia. Tekst idzie do syntezy NA PLIK i wraca jako
+    adres, ktory satelita odtwarza jak muzyke. Dzieki temu nie obowiazuja limity potoku
+    glosowego (satelita daje syntezie 8 s), a mozna to pauzowac i puscic drugi raz.
+  fields:
+    tekst:
+      description: Pelna tresc do opowiedzenia
+      required: true
+      selector:
+        text:
+          multiline: true
+    nazwa:
+      description: Krotka nazwa, pojawi sie w nazwie pliku
+      required: false
+      selector:
+        text:
+  sequence:
+  - action: rest_command.zapisz_opowiesc
+    data:
+      tekst: '{{ tekst }}'
+      nazwa: '{{ nazwa | default("opowiesc") }}'
+    response_variable: wynik
+  - choose:
+    - conditions: '{{ wynik.status == 200 }}'
+      sequence:
+      - action: media_player.play_media
+        target:
+          entity_id: media_player.respeaker_xvf3800_assistant_media_player
+        data:
+          media_content_type: music
+          # HA sam parsuje odpowiedz JSON, wiec `content` to juz slownik —
+          # `from_json` na slowniku wywala sie bledem 500.
+          media_content_id: >-
+            http://192.168.88.228:8880{{ wynik.content.url if wynik.content is mapping
+            else (wynik.content | from_json).url }}
+    default:
+    - action: system_log.write
+      data:
+        level: error
+        message: 'Nie udalo sie zapisac opowiesci: {{ wynik }}'
+  mode: single

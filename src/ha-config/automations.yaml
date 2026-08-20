@@ -600,15 +600,15 @@
   mode: single
 - id: '1785936600001'
   alias: Satelita XVF3800 - odpowiedz na glosniku Google
-  description: Przekierowuje odpowiedz TTS z satelity reSpeaker na glosnik Google Cast
+  description: Przekierowuje odpowiedz TTS z satelity reSpeaker na glosnik Google
+    Cast
   triggers:
   - trigger: event
     event_type: esphome.tts_uri
   conditions:
   - condition: template
-    value_template: >-
-      {{ states('input_text.satelita_google_glosnosc') in
-         ['', 'unknown', 'unavailable'] }}
+    value_template: "{{ states('input_text.satelita_google_glosnosc') in\n   ['',
+      'unknown', 'unavailable'] }}"
     alias: Glosnik Google nie jest zajety wlasna muzyka
   actions:
   - action: media_player.play_media
@@ -621,8 +621,8 @@
   max: 5
 - id: '1785936600002'
   alias: Satelita XVF3800 - kontynuacja rozmowy bez wake worda
-  description: Po zakonczeniu odpowiedzi na glosniku Google otwiera nasluch, zeby nie
-    trzeba bylo powtarzac Okay Nabu
+  description: Po zakonczeniu odpowiedzi na glosniku Google otwiera nasluch, zeby
+    nie trzeba bylo powtarzac Okay Nabu
   triggers:
   - trigger: state
     entity_id: media_player.google_asystent
@@ -643,150 +643,101 @@
   mode: single
 - id: '1785936600010'
   alias: Satelita XVF3800 - pauza na czas komendy
-  description: >-
-    Po wybudzeniu satelity ucisza to, co gra. Nic nie jest pauzowane poza
-    muzyką Music Assistant na głośniku Google — reszta tylko cichnie.
-    Denon i Apple TV to JEDNA gałka: Apple TV gra przez wzmacniacz, więc
-    ścisza się sam wzmacniacz. Pauza kłóciła się z prośbą o włączenie muzyki
-    (zatrzymanie i start biły się o ten sam odtwarzacz); głośność nie zmienia
-    stanu odtwarzacza, więc ten konflikt znika. Głośnik Google z tego samego
-    powodu co zawsze: jego sesji Cast nie kontrolujemy.
+  description: 'Po wybudzeniu satelity ucisza to, co gra. Nic nie jest pauzowane poza
+    muzyką Music Assistant na głośniku Google — reszta tylko cichnie. Denon i Apple
+    TV to JEDNA gałka: Apple TV gra przez wzmacniacz, więc ścisza się sam wzmacniacz.
+    Pauza kłóciła się z prośbą o włączenie muzyki (zatrzymanie i start biły się o
+    ten sam odtwarzacz); głośność nie zmienia stanu odtwarzacza, więc ten konflikt
+    znika. Głośnik Google z tego samego powodu co zawsze: jego sesji Cast nie kontrolujemy.'
   triggers:
   - trigger: state
     entity_id: assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego
     to: listening
   conditions:
   - condition: template
-    value_template: >-
-      {{ ['media_player.denon_avr_x2400h', 'media_player.denon',
-          'media_player.google_asystent_2', 'media_player.pokoj_dzienny',
-          'media_player.google_asystent']
-         | select('is_state', 'playing') | list | count > 0 }}
+    value_template: "{{ ['media_player.denon_avr_x2400h', 'media_player.denon',\n
+      \   'media_player.google_asystent_2', 'media_player.pokoj_dzienny',\n    'media_player.google_asystent']\n
+      \  | select('is_state', 'playing') | list | count > 0 }}"
     alias: Cokolwiek gra
   actions:
   - variables:
-      # Zostaje tu tylko muzyka Music Assistant na glosniku Google. Denon
-      # i Apple TV wyszly do przyciszania nizej.
-      do_pauzy: >-
-        {{ ['media_player.google_asystent_2']
-           | select('is_state', 'playing') | list }}
-      google_gra: "{{ is_state('media_player.google_asystent', 'playing') }}"
-      # Wszystko, co slychac z tej strony pokoju, idzie przez wzmacniacz:
-      # muzyka z Music Assistant, radio z HEOS i dzwiek z Apple TV po HDMI.
-      # Dlatego jedna galka — media_player.denon_2 (integracja denonavr) —
-      # a nie glosnosc kazdego zrodla z osobna. Glosnosc Apple TV przez pyatv
-      # nie ruszalaby wzmacniacza, wiec nie ma po co jej dotykac.
-      avr_zrodla: >-
-        {{ ['media_player.denon_avr_x2400h', 'media_player.denon',
-            'media_player.pokoj_dzienny', 'media_player.denon_2'] }}
-      avr_gra: >-
-        {{ states('media_player.denon_2') not in ['off', 'unavailable', 'unknown']
-           and state_attr('media_player.denon_2', 'volume_level') is not none
-           and (avr_zrodla | select('is_state', 'playing') | list | count > 0) }}
-      # Para "pierwotna|przyciszona" policzona RAZ, tutaj. Wczesniej pomocnik byl
-      # zapisywany, a nastepny krok odczytywal go z powrotem — niepotrzebny wyscig
-      # o to, czy stan zdazyl sie odswiezyc, przy wartosci, ktora i tak znamy.
-      # Gdy pomocnik juz cos trzyma (drugie wybudzenie na przyciszonym
-      # wzmacniaczu), zostaje stara para — inaczej polowa utrwalilaby sie jako
-      # nowa "pierwotna" i kazda komenda sciszalaby dom o kolejna polowe.
-      avr_zapis: >-
-        {% set zapisana = states('input_text.satelita_denon_glosnosc') %}
-        {%- if zapisana not in ['', 'unknown', 'unavailable'] -%}
-        {{ zapisana }}
-        {%- else -%}
-        {%- set teraz = state_attr('media_player.denon_2', 'volume_level') | float(0) -%}
-        {{ teraz | round(3) }}|{{ (teraz * 0.5) | round(3) }}
-        {%- endif -%}
-      avr_docelowa: "{{ avr_zapis.split('|')[1] | float(0) }}"
-  # Remember exactly what was paused, so nothing the user paused earlier gets
-  # resumed by accident.
+      do_pauzy: "{{ ['media_player.google_asystent_2']\n   | select('is_state', 'playing')
+        | list }}"
+      google_gra: '{{ is_state(''media_player.google_asystent'', ''playing'') }}'
+      avr_zrodla: "{{ ['media_player.denon_avr_x2400h', 'media_player.denon',\n    'media_player.pokoj_dzienny',
+        'media_player.denon_2'] }}"
+      avr_gra: "{{ states('media_player.denon_2') not in ['off', 'unavailable', 'unknown']\n
+        \  and state_attr('media_player.denon_2', 'volume_level') is not none\n   and
+        (avr_zrodla | select('is_state', 'playing') | list | count > 0) }}"
+      avr_zapis: '{% set zapisana = states(''input_text.satelita_denon_glosnosc'')
+        %} {%- if zapisana not in ['''', ''unknown'', ''unavailable''] -%} {{ zapisana
+        }} {%- else -%} {%- set teraz = state_attr(''media_player.denon_2'', ''volume_level'')
+        | float(0) -%} {{ teraz | round(3) }}|{{ (teraz * 0.5) | round(3) }} {%- endif
+        -%}'
+      avr_docelowa: '{{ avr_zapis.split(''|'')[1] | float(0) }}'
   - action: input_text.set_value
     target:
       entity_id: input_text.satelita_pauza_lista
     data:
-      value: "{{ do_pauzy | join(',') }}"
+      value: '{{ do_pauzy | join('','') }}'
   - if:
     - condition: template
-      value_template: "{{ do_pauzy | count > 0 }}"
+      value_template: '{{ do_pauzy | count > 0 }}'
     then:
     - action: media_player.media_pause
       target:
-        entity_id: "{{ do_pauzy }}"
+        entity_id: '{{ do_pauzy }}'
       continue_on_error: true
-  # Wzmacniacz: przyciszenie do polowy, nigdy pauza.
   - if:
     - condition: template
-      value_template: "{{ avr_gra }}"
+      value_template: '{{ avr_gra }}'
     then:
     - action: input_text.set_value
       target:
         entity_id: input_text.satelita_denon_glosnosc
       data:
-        # Para "pierwotna|przyciszona", nie sama pierwotna: przywracanie musi
-        # umiec rozpoznac, ze ktos ruszyl glosnoscia w trakcie okna, a to widac
-        # tylko po porownaniu z wartoscia, ktora sami ustawilismy.
-        value: "{{ avr_zapis }}"
+        value: '{{ avr_zapis }}'
     - action: media_player.volume_set
       target:
         entity_id: media_player.denon_2
       data:
-        # Polowa poprzedniej glosnosci — decyzja Lecha 11.08. Nie zero jak przy
-        # glosniku Google: tam mikrofon satelity stoi tuz obok. Jesli komendy
-        # zaczna sie przekrecac przy glosnej muzyce, to jest pierwszy podejrzany.
-        volume_level: "{{ avr_docelowa }}"
+        volume_level: '{{ avr_docelowa }}'
       continue_on_error: true
-  # Google speaker: duck instead of pausing, and remember the level to restore.
-  # Its own volume is not managed by Music Assistant here, so the ducked value
-  # is not overwritten on track change.
   - if:
     - condition: template
-      value_template: "{{ google_gra }}"
+      value_template: '{{ google_gra }}'
     then:
     - action: input_text.set_value
       target:
         entity_id: input_text.satelita_google_glosnosc
       data:
-        # Zapisz TYLKO gdy jeszcze nic nie zapisano. Drugie wybudzenie na juz
-        # przyciszonym glosniku nadpisywalo oryginal wartoscia przyciszona i
-        # przywracanie oddawalo 0.05 zamiast 0.25.
-        value: >-
-          {% set zapisana = states('input_text.satelita_google_glosnosc') %}
-          {% if zapisana not in ['', 'unknown', 'unavailable'] %}{{ zapisana }}
-          {% else %}{{ state_attr('media_player.google_asystent', 'volume_level')
-             | float(0.4) | round(3) }}{% endif %}
+        value: "{% set zapisana = states('input_text.satelita_google_glosnosc') %}
+          {% if zapisana not in ['', 'unknown', 'unavailable'] %}{{ zapisana }} {%
+          else %}{{ state_attr('media_player.google_asystent', 'volume_level')\n   |
+          float(0.4) | round(3) }}{% endif %}"
     - action: media_player.volume_set
       target:
         entity_id: media_player.google_asystent
       data:
-        # Zero, nie 20%: mikrofon satelity stoi tuz obok tego glosnika, wiec
-        # nawet cichy podklad ladowal w nagraniu komendy. Glosnosc 0 to NIE
-        # pauza — sesja Cast leci dalej nietknieta, wiec powod, dla ktorego
-        # tego glosnika nie pauzujemy, pozostaje spelniony. Oryginalny poziom
-        # jest zapamietany wyzej i wraca przy wznawianiu.
         volume_level: 0
       continue_on_error: true
   mode: single
-
 - id: '1785936600012'
   alias: Satelita XVF3800 - nie wznawiaj gdy komenda kazała wyłączyć
-  description: >-
-    Gdy komendą było zatrzymanie muzyki, kasuje listę do wznowienia. Bez tego
-    prośba "wyłącz muzykę" kończyła się jej ponownym włączeniem.
+  description: Gdy komendą było zatrzymanie muzyki, kasuje listę do wznowienia. Bez
+    tego prośba "wyłącz muzykę" kończyła się jej ponownym włączeniem.
   triggers:
   - trigger: event
     event_type: esphome.stt_text
   conditions:
   - condition: template
-    value_template: >-
-      {% set t = (trigger.event.data.text | default('')) | lower %}
-      {% set stop = ['wyłącz', 'wylacz', 'zatrzymaj', 'stop', 'przestań',
-                     'przestan', 'wystarczy', 'zgaś', 'zgas', 'ucisz',
-                     'cisza', 'zamilcz'] %}
-      {% set media = ['muzyk', 'utwór', 'utwor', 'piosenk', 'grani', 'graj',
-                      'odtwarza', 'radio', 'album', 'playlist', 'film',
-                      'seans', 'apple tv', 'głośnik', 'glosnik', 'denon'] %}
-      {{ (stop | select('in', t) | list | count > 0)
-         and (media | select('in', t) | list | count > 0) }}
+    value_template: "{% set t = (trigger.event.data.text | default('')) | lower %}
+      {% set stop = ['wyłącz', 'wylacz', 'zatrzymaj', 'stop', 'przestań',\n               'przestan',
+      'wystarczy', 'zgaś', 'zgas', 'ucisz',\n               'cisza', 'zamilcz'] %}\n{%
+      set media = ['muzyk', 'utwór', 'utwor', 'piosenk', 'grani', 'graj',\n                'odtwarza',
+      'radio', 'album', 'playlist', 'film',\n                'seans', 'apple tv',
+      'głośnik', 'glosnik', 'denon'] %}\n{{ (stop | select('in', t) | list | count
+      > 0)\n   and (media | select('in', t) | list | count > 0) }}"
     alias: Komenda o zatrzymaniu czegoś, co gra
   actions:
   - action: input_text.set_value
@@ -795,107 +746,85 @@
     data:
       value: ''
   mode: single
-
 - id: '1785936600011'
   alias: Satelita XVF3800 - wznów odtwarzanie po odpowiedzi
-  description: >-
-    Wznawia to, co zostało zapauzowane, i przywraca głośność głośnika Google —
-    dopiero gdy HAL skończy mówić.
+  description: Wznawia to, co zostało zapauzowane, i przywraca głośność głośnika Google
+    — dopiero gdy HAL skończy mówić.
   triggers:
   - trigger: state
     entity_id: assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego
     to: idle
-    # Ciagla rozmowa przechodzi responding -> idle -> listening, a w tym
-    # idle siedzi 66-85 ms (zmierzone). Bez tego progu wznawianie odpalalo
-    # sie w kazdej przerwie miedzyturowej, nie na koncu rozmowy.
     for:
       seconds: 1
   conditions:
   - condition: or
     conditions:
     - condition: template
-      value_template: >-
-        {{ states('input_text.satelita_pauza_lista') not in
-           ['', 'unknown', 'unavailable'] }}
+      value_template: "{{ states('input_text.satelita_pauza_lista') not in\n   ['',
+        'unknown', 'unavailable'] }}"
     - condition: template
-      value_template: >-
-        {{ states('input_text.satelita_google_glosnosc') not in
-           ['', 'unknown', 'unavailable'] }}
+      value_template: "{{ states('input_text.satelita_google_glosnosc') not in\n   ['',
+        'unknown', 'unavailable'] }}"
     - condition: template
-      value_template: >-
-        {{ states('input_text.satelita_denon_glosnosc') not in
-           ['', 'unknown', 'unavailable'] }}
+      value_template: "{{ states('input_text.satelita_denon_glosnosc') not in\n   ['',
+        'unknown', 'unavailable'] }}"
     alias: Było co uciszać
   actions:
-  # The answer plays through the Cast entity; restoring mid-sentence would talk
-  # over HAL and fight over the single Cast session.
-  # Gdy przyciszalismy glosnik, znaczy ze gral na nim wlasna muzyke — a wtedy
-  # odpowiedz HAL-a nie jest tam wysylana, wiec nie ma na co czekac. Czekanie
-  # na koniec cudzej muzyki nie konczy sie nigdy.
-  - wait_template: >-
-      {{ states('input_text.satelita_google_glosnosc') not in ['', 'unknown', 'unavailable']
-         or states('media_player.google_asystent') not in ['playing', 'buffering'] }}
+  - wait_template: "{{ states('input_text.satelita_google_glosnosc') not in ['', 'unknown',
+      'unavailable']\n   or states('media_player.google_asystent') not in ['playing',
+      'buffering'] }}"
     timeout:
       seconds: 30
     continue_on_timeout: true
   - delay:
       seconds: 1
   - variables:
-      # Only entities still on pause were paused by us. Anything the assistant
-      # stopped in the meantime sits in idle/off and must stay that way.
-      do_wznowienia: >-
-        {{ states('input_text.satelita_pauza_lista').split(',')
-           | select('is_state', 'paused') | list }}
+      do_wznowienia: "{{ states('input_text.satelita_pauza_lista').split(',')\n   |
+        select('is_state', 'paused') | list }}"
   - if:
     - condition: template
-      value_template: "{{ do_wznowienia | count > 0 }}"
+      value_template: '{{ do_wznowienia | count > 0 }}'
     then:
     - action: media_player.media_play
       target:
-        entity_id: "{{ do_wznowienia }}"
+        entity_id: '{{ do_wznowienia }}'
       continue_on_error: true
   - if:
     - condition: template
-      value_template: >-
-        {{ states('input_text.satelita_google_glosnosc') not in
-           ['', 'unknown', 'unavailable'] }}
+      value_template: "{{ states('input_text.satelita_google_glosnosc') not in\n   ['',
+        'unknown', 'unavailable'] }}"
     then:
     - action: media_player.volume_set
       target:
         entity_id: media_player.google_asystent
       data:
-        volume_level: "{{ states('input_text.satelita_google_glosnosc') | float(0.4) }}"
+        volume_level: '{{ states(''input_text.satelita_google_glosnosc'') | float(0.4)
+          }}'
       continue_on_error: true
-  # Wzmacniacz: oddaj poprzednia glosnosc, ale TYLKO jesli nikt jej w
-  # miedzyczasie nie ruszyl. Komenda "zrob glosniej" albo skrypt muzyczny
-  # (podbija do 0.3, gdy zastanie ponizej 0.1) zmieniaja poziom w trakcie
-  # okna — przywracanie na slepo cofaloby to, o co user wlasnie poprosil.
   - variables:
-      denon_zapis: "{{ states('input_text.satelita_denon_glosnosc') }}"
-      denon_pierwotna: >-
-        {{ denon_zapis.split('|')[0] | float(-1) if '|' in denon_zapis else -1 }}
-      denon_przyciszona: >-
-        {{ denon_zapis.split('|')[1] | float(-1) if '|' in denon_zapis else -1 }}
-      denon_teraz: >-
-        {{ state_attr('media_player.denon_2', 'volume_level') | float(-1) }}
+      denon_zapis: '{{ states(''input_text.satelita_denon_glosnosc'') }}'
+      denon_pierwotna: '{{ denon_zapis.split(''|'')[0] | float(-1) if ''|'' in denon_zapis
+        else -1 }}'
+      denon_przyciszona: '{{ denon_zapis.split(''|'')[1] | float(-1) if ''|'' in denon_zapis
+        else -1 }}'
+      denon_teraz: '{{ state_attr(''media_player.denon_2'', ''volume_level'') | float(-1)
+        }}'
   - if:
     - condition: template
-      value_template: >-
-        {{ denon_pierwotna >= 0 and denon_teraz >= 0
-           and (denon_teraz - denon_przyciszona) | abs < 0.02 }}
+      value_template: "{{ denon_pierwotna >= 0 and denon_teraz >= 0\n   and (denon_teraz
+        - denon_przyciszona) | abs < 0.02 }}"
     then:
     - action: media_player.volume_set
       target:
         entity_id: media_player.denon_2
       data:
-        volume_level: "{{ denon_pierwotna }}"
+        volume_level: '{{ denon_pierwotna }}'
       continue_on_error: true
     else:
     - action: logbook.log
       data:
         name: Satelita
-        message: >-
-          Nie przywracam glosnosci Denona — zmienila sie w trakcie komendy
+        message: Nie przywracam glosnosci Denona — zmienila sie w trakcie komendy
           (bylo {{ denon_przyciszona }}, jest {{ denon_teraz }}).
       continue_on_error: true
   - action: input_text.set_value
@@ -913,123 +842,110 @@
       entity_id: input_text.satelita_denon_glosnosc
     data:
       value: ''
-  # restart, nie single: druga komenda w trakcie trwajacego przywracania
-  # konczyla sie `failed_single` i tracila przywrocenie w calosci.
   mode: restart
 - id: satelita_xvf3800_uzbroj_slowo_budzace
   alias: Satelita XVF3800 - uzbroj slowo budzace po restarcie
-  description: >-
-    Wybor slowa budzacego nie jest nigdzie utrwalany: tworzy go komponent
-    micro_wake_word, ktory po kazdym starcie urzadzenia wraca do no_wake_word.
-    Czulosc przezywa, bo jej select ma restore_value w firmwarze - ten nie ma
-    gdzie tego zapisac. Bez tej automatyzacji kazdy zanik zasilania zostawia
-    satelite gluchym, a widac to dopiero wtedy, gdy ktos do niego przemowi.
-    Wyzwalamy sie na powrocie urzadzenia, nie na wartosci selecta, zeby nie
-    nadpisywac swiadomej zmiany na no_wake_word.
+  description: 'Wybor slowa budzacego nie jest nigdzie utrwalany: tworzy go komponent
+    micro_wake_word, ktory po kazdym starcie urzadzenia wraca do no_wake_word. Czulosc
+    przezywa, bo jej select ma restore_value w firmwarze - ten nie ma gdzie tego zapisac.
+    Bez tej automatyzacji kazdy zanik zasilania zostawia satelite gluchym, a widac
+    to dopiero wtedy, gdy ktos do niego przemowi. Wyzwalamy sie na powrocie urzadzenia,
+    nie na wartosci selecta, zeby nie nadpisywac swiadomej zmiany na no_wake_word.'
   trigger:
-    - platform: state
-      entity_id: assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego
-      from: unavailable
-      id: satelita_wrocil
-    - platform: homeassistant
-      event: start
-      id: start_ha
+  - platform: state
+    entity_id: assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego
+    from: unavailable
+    id: satelita_wrocil
+  - platform: homeassistant
+    event: start
+    id: start_ha
   condition: []
   action:
-    # Encje urzadzenia pojawiaja sie chwile po samym satelicie.
-    - wait_template: >-
-        {{ states("select.respeaker_xvf3800_assistant_wake_word")
-           not in ["unavailable", "unknown"] }}
-      timeout: "00:02:00"
-      continue_on_timeout: false
-    - delay: "00:00:03"
-    - if:
-        - condition: template
-          value_template: >-
-            {{ states("select.respeaker_xvf3800_assistant_wake_word") == "no_wake_word" }}
-      then:
-        - service: select.select_option
-          target:
-            entity_id: select.respeaker_xvf3800_assistant_wake_word
-          data:
-            option: Okay Nabu
-        - service: logbook.log
-          data:
-            name: Satelita XVF3800
-            message: >-
-              Slowo budzace bylo puste po restarcie - ustawione z powrotem na
-              "Okay Nabu".
-  mode: single
-- id: satelita_xvf3800_ciszej_w_nocy
-  alias: Satelita XVF3800 - ciszej po 22
-  description: >-
-    Po 22:00 asystent mowi ciszej o 30 procent (1.0 -> 0.7), o 6:00 wraca do
-    pelnej glosnosci. Regulujemy zrodlo, bo glosnik w trybie AUX nie ma wlasnego
-    pokretla - poziom sygnalu jest tam jedyna regulacja.
-    Obie encje media_player satelity ustawiane razem: odpowiedzi asystenta i
-    odtwarzanie mediow ida osobnymi torami.
-  trigger:
-    - platform: time
-      at: "22:00:00"
-      id: noc
-    - platform: time
-      at: "06:00:00"
-      id: dzien
-  condition: []
-  action:
-    - variables:
-        poziom: "{{ 0.7 if trigger.id == 'noc' else 1.0 }}"
-    - service: media_player.volume_set
+  - wait_template: "{{ states(\"select.respeaker_xvf3800_assistant_wake_word\")\n
+      \  not in [\"unavailable\", \"unknown\"] }}"
+    timeout: 00:02:00
+    continue_on_timeout: false
+  - delay: 00:00:03
+  - if:
+    - condition: template
+      value_template: '{{ states("select.respeaker_xvf3800_assistant_wake_word") ==
+        "no_wake_word" }}'
+    then:
+    - service: select.select_option
       target:
-        entity_id:
-          - media_player.respeaker_xvf3800_assistant
-          - media_player.respeaker_xvf3800_assistant_media_player
+        entity_id: select.respeaker_xvf3800_assistant_wake_word
       data:
-        volume_level: "{{ poziom | float }}"
-      continue_on_error: true
+        option: Okay Nabu
     - service: logbook.log
       data:
         name: Satelita XVF3800
-        message: "Glosnosc asystenta ustawiona na {{ (poziom | float * 100) | round }}%."
+        message: Slowo budzace bylo puste po restarcie - ustawione z powrotem na "Okay
+          Nabu".
+  mode: single
+- id: satelita_xvf3800_ciszej_w_nocy
+  alias: Satelita XVF3800 - ciszej po 21
+  description: 'Po 21:00 asystent mowi ciszej o 30 procent (1.0 -> 0.7), o 6:00 wraca
+    do pelnej glosnosci. Regulujemy zrodlo, bo glosnik w trybie AUX nie ma wlasnego
+    pokretla - poziom sygnalu jest tam jedyna regulacja. Obie encje media_player satelity
+    ustawiane razem: odpowiedzi asystenta i odtwarzanie mediow ida osobnymi torami.'
+  triggers:
+  - at: '21:00:00'
+    id: noc
+    trigger: time
+  - at: 06:00:00
+    id: dzien
+    trigger: time
+  conditions: []
+  actions:
+  - variables:
+      poziom: '{{ 0.7 if trigger.id == ''noc'' else 1.0 }}'
+  - target:
+      entity_id:
+      - media_player.respeaker_xvf3800_assistant
+      - media_player.respeaker_xvf3800_assistant_media_player
+    data:
+      volume_level: '{{ poziom | float }}'
+    continue_on_error: true
+    action: media_player.volume_set
+  - data:
+      name: Satelita XVF3800
+      message: Glosnosc asystenta ustawiona na {{ (poziom | float * 100) | round }}%.
+    action: logbook.log
   mode: single
 - id: satelita_xvf3800_uzbroj_beam_lock
   alias: Satelita XVF3800 - uzbroj beam lock po restarcie
-  description: >-
-    Beam lock to template switch z restore_mode RESTORE_DEFAULT_OFF, wiec kazdy
-    restart urzadzenia gasi go po cichu - a widac to dopiero po tym, ze satelita
-    gorzej rozumie przy kilku osobach w pokoju. Osobna automatyzacja, a nie
-    dopisek do tej od slowa budzacego, zeby dalo sie wylaczyc samo uzbrajanie
-    beama na czas testow, nie ruszajac przywracania slowa budzacego.
-    Wyzwalamy sie na powrocie urzadzenia, nie na wartosci przelacznika, zeby nie
-    nadpisywac swiadomego wylaczenia w trakcie pracy.
+  description: Beam lock to template switch z restore_mode RESTORE_DEFAULT_OFF, wiec
+    kazdy restart urzadzenia gasi go po cichu - a widac to dopiero po tym, ze satelita
+    gorzej rozumie przy kilku osobach w pokoju. Osobna automatyzacja, a nie dopisek
+    do tej od slowa budzacego, zeby dalo sie wylaczyc samo uzbrajanie beama na czas
+    testow, nie ruszajac przywracania slowa budzacego. Wyzwalamy sie na powrocie urzadzenia,
+    nie na wartosci przelacznika, zeby nie nadpisywac swiadomego wylaczenia w trakcie
+    pracy.
   trigger:
-    - platform: state
-      entity_id: assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego
-      from: unavailable
-      id: satelita_wrocil
-    - platform: homeassistant
-      event: start
-      id: start_ha
+  - platform: state
+    entity_id: assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego
+    from: unavailable
+    id: satelita_wrocil
+  - platform: homeassistant
+    event: start
+    id: start_ha
   condition: []
   action:
-    # Encje urzadzenia pojawiaja sie chwile po samym satelicie.
-    - wait_template: >-
-        {{ states("switch.respeaker_xvf3800_assistant_beam_lock")
-           not in ["unavailable", "unknown"] }}
-      timeout: "00:02:00"
-      continue_on_timeout: false
-    - delay: "00:00:03"
-    - if:
-        - condition: state
-          entity_id: switch.respeaker_xvf3800_assistant_beam_lock
-          state: "off"
-      then:
-        - service: switch.turn_on
-          target:
-            entity_id: switch.respeaker_xvf3800_assistant_beam_lock
-        - service: logbook.log
-          data:
-            name: Satelita XVF3800
-            message: >-
-              Beam lock byl wylaczony po restarcie - wlaczony z powrotem.
+  - wait_template: "{{ states(\"switch.respeaker_xvf3800_assistant_beam_lock\")\n
+      \  not in [\"unavailable\", \"unknown\"] }}"
+    timeout: 00:02:00
+    continue_on_timeout: false
+  - delay: 00:00:03
+  - if:
+    - condition: state
+      entity_id: switch.respeaker_xvf3800_assistant_beam_lock
+      state: 'off'
+    then:
+    - service: switch.turn_on
+      target:
+        entity_id: switch.respeaker_xvf3800_assistant_beam_lock
+    - service: logbook.log
+      data:
+        name: Satelita XVF3800
+        message: Beam lock byl wylaczony po restarcie - wlaczony z powrotem.
   mode: single
