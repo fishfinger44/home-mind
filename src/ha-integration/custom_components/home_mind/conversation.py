@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import re
 import time
 from collections import deque
@@ -416,6 +417,33 @@ class HomeMindConversationAgent(ConversationEntity):
                 continue_conversation=trzymaj,
             )
 
+        # Pozegnanie i nic poza nim — odpowiadamy sami i konczymy ture.
+        #
+        # Tu, a nie nizej przy skladaniu wyniku: przy glosie tekst modelu jedzie
+        # do lektora kawalkami, wiec pozniej nie ma juz czego poprawiac. Przy
+        # okazji tura jest darmowa i natychmiastowa — model nie ma nic do
+        # roboty przy „dobranoc".
+        if is_voice:
+            formula = self._formula_pozegnania(message)
+            if formula:
+                _LOGGER.info(
+                    "Czyste pozegnanie ('%s') — domykam ture bez modelu: %s",
+                    message.strip(), formula,
+                )
+                # Sesja i slad znikaja tak samo jak przy pozegnaniu obsluzonym
+                # nizej: „dobranoc" znaczy koniec, a nie przerwe.
+                self._stan_rozmowy.pop(conversation_id, None)
+                self._ostatnia_rozmowa.pop(
+                    getattr(user_input, "device_id", None) or "bez-urzadzenia", None
+                )
+                intent_response = intent.IntentResponse(language=user_input.language)
+                intent_response.async_set_speech(formula)
+                return ConversationResult(
+                    response=intent_response,
+                    conversation_id=conversation_id,
+                    continue_conversation=False,
+                )
+
         # Local-first: try Home Assistant's built-in agent (0 tokens, no LLM).
         # Only when it can actually act on the command do we return its result;
         # anything it can't match/handle falls through to the Home Mind server.
@@ -597,6 +625,78 @@ class HomeMindConversationAgent(ConversationEntity):
         "dobranoc", "do widzenia", "na razie", "to wszystko", "koniec",
         "dziękuję to wszystko", "papa", "cześć", "śpij dobrze", "idę spać",
     )
+
+    # Wypowiedz, ktora JEST samym pozegnaniem, domykamy sami — bez modelu.
+    #
+    # 20.08: „dziekuje, to wszystko" model kwitowal uprzejmym pytaniem zwrotnym
+    # („czy moge jeszcze w czyms pomoc?"), a mikrofon zamyka sie w tej samej
+    # chwili — patrz `_is_farewell` nizej. Pytanie leci wiec w prozne powietrze i
+    # prowokuje odpowiedz, ktorej nikt juz nie slyszy.
+    #
+    # ⚠️ Naprawa MUSI stac przed wywolaniem modelu, nie po nim: przy glosie
+    # odpowiedz jedzie strumieniowo do lektora (`_call_api_stream`), wiec
+    # obcinanie pytania z gotowego tekstu przyszloby po tym, jak zostalo
+    # wypowiedziane.
+    #
+    # ⚠️ Tylko wypowiedz, ktora jest pozegnaniem W CALOSCI. „Dobranoc, zgas
+    # swiatlo" niesie polecenie i idzie do modelu jak dotad — dlatego to jest
+    # osobne, ostrzejsze sito niz `_is_farewell`, ktore lapie tez pozegnanie z
+    # doklejona trescia.
+    #
+    # Frazy od NAJDLUZSZEJ, bo dopasowanie jest przez zawieranie: „to wszystko"
+    # zjadloby polowe „to wszystko na dzis" i zostawilo nieznana reszte.
+    FORMULY_KONCA = (
+        ("to by bylo na tyle", "koniec"), ("to by było na tyle", "koniec"),
+        ("to wszystko na dzis", "koniec"), ("to wszystko na dziś", "koniec"),
+        ("spij dobrze", "noc"), ("śpij dobrze", "noc"),
+        ("dobrej nocy", "noc"), ("ide spac", "noc"), ("idę spać", "noc"),
+        ("do widzenia", "rozstanie"), ("do zobaczenia", "rozstanie"),
+        ("na razie", "rozstanie"), ("to wszystko", "koniec"),
+        ("to na tyle", "koniec"), ("nic wiecej", "koniec"), ("nic więcej", "koniec"),
+        ("dobranoc", "noc"), ("papa", "rozstanie"), ("koniec", "koniec"),
+        ("dziekuje", "podziekowanie"), ("dziękuję", "podziekowanie"),
+        ("dzieki", "podziekowanie"), ("dzięki", "podziekowanie"),
+    )
+
+    # Uprzejmosci i doklejki bez tresci — wolno im zostac w resztce po wycieciu
+    # formul. Cokolwiek innego znaczy, ze w wypowiedzi bylo jeszcze polecenie.
+    WYPELNIACZE = (
+        "bardzo", "ci", "wam", "panu", "pani", "wielkie", "serdecznie",
+        "ok", "okej", "dobra", "no", "juz", "już", "na", "dzis", "dziś", "dzisiaj",
+    )
+
+    # Po jednym wariancie za malo: ta sama sylaba po kazdej rozmowie brzmi jak
+    # automat, a to jest ostatnie zdanie, ktore czlowiek slyszy.
+    ODPOWIEDZI_KONCA = {
+        "noc": ("Dobranoc.", "Dobranoc, śpij dobrze."),
+        "rozstanie": ("Do usłyszenia.", "Na razie."),
+        "podziekowanie": ("Proszę bardzo.", "Nie ma za co."),
+        "koniec": ("Jasne.", "W porządku."),
+    }
+
+    @classmethod
+    def _formula_pozegnania(cls, message: str) -> str | None:
+        """Zdanie na pozegnanie, jesli CALA wypowiedz nim jest. Inaczej None."""
+        tekst = " ".join(re.sub(r"[.!?…,;:–-]+", " ", message.lower()).split())
+        if not tekst or len(tekst) > 40:
+            return None
+
+        rodzaje = []
+        for fraza, rodzaj in cls.FORMULY_KONCA:
+            if fraza in tekst:
+                tekst = tekst.replace(fraza, " ")
+                rodzaje.append(rodzaj)
+
+        if not rodzaje or any(s not in cls.WYPELNIACZE for s in tekst.split()):
+            return None
+
+        # „Dziekuje, to wszystko" to jedno i drugie naraz. Odpowiadamy na to,
+        # co niesie wiecej: dobranoc bije rozstanie, a podziekowanie bije samo
+        # oznajmienie konca — „prosze bardzo" pasuje lepiej niz „jasne".
+        for rodzaj in ("noc", "rozstanie", "podziekowanie", "koniec"):
+            if rodzaj in rodzaje:
+                return random.choice(cls.ODPOWIEDZI_KONCA[rodzaj])
+        return None
 
     # Podziekowanie konczy wymiane tylko wtedy, gdy jest CALA wypowiedzia.
     #

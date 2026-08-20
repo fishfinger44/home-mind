@@ -415,6 +415,47 @@ async def main() -> int:
     rc2 = await uruchom(conv, c, "[lech:0.62] i co dalej")
     sprawdz("po wygaśnięciu okna zaczynamy od nowa", rc2.conversation_id != rc1.conversation_id)
 
+    print("\n14. Czyste pożegnanie domykamy sami, bez pytania zwrotnego")
+    # 20.08: „dziękuję, to wszystko” wracało z uprzejmym „czy mogę jeszcze w
+    # czymś pomóc?", a mikrofon był w tej samej chwili zamykany. Pytanie leciało
+    # w próżnię i prowokowało odpowiedź, której nikt nie słyszał.
+    a = agent(conv)
+    cid = (await uruchom(conv, a, "[lech:0.62] zapal światło")).conversation_id
+    r = await uruchom(conv, a, "[lech:0.60] Dziękuję, to wszystko.", cid)
+    sprawdz("model NIE był pytany", r.response.speech != "Zrobione.")
+    sprawdz(
+        "odpowiedź to formułka podziękowania",
+        r.response.speech in conv.HomeMindConversationAgent.ODPOWIEDZI_KONCA["podziekowanie"],
+    )
+    sprawdz("bez pytania na końcu", "?" not in (r.response.speech or ""))
+    sprawdz("mikrofon ZAMKNIĘTY", r.continue_conversation is False)
+    sprawdz("stan posprzątany", cid not in a._stan_rozmowy)
+    sprawdz("ślad skasowany — po pożegnaniu nie wznawiamy", not a._ostatnia_rozmowa)
+
+    r = await uruchom(conv, a, "[lech:0.62] dobranoc")
+    sprawdz(
+        "„dobranoc” dostaje formułkę nocną",
+        r.response.speech in conv.HomeMindConversationAgent.ODPOWIEDZI_KONCA["noc"],
+    )
+
+    # 🔑 Pożegnanie z doklejonym poleceniem NIE jest czyste — polecenie musi
+    # trafić do modelu, inaczej naprawa zjadałaby „dobranoc, zgaś światło”.
+    r = await uruchom(conv, a, "[lech:0.62] dobranoc, zgaś światło")
+    sprawdz("polecenie przy pożegnaniu WYKONANE", r.response.speech == "Zrobione.")
+    sprawdz("ale mikrofon i tak zamknięty", r.continue_conversation is False)
+
+    r = await uruchom(conv, a, "[lech:0.62] dziękuję, zapal jeszcze światło w salonie")
+    sprawdz("„dziękuję” na początku polecenia nie kończy tury", r.response.speech == "Zrobione.")
+
+    formula = conv.HomeMindConversationAgent._formula_pozegnania
+    sprawdz("„dzięki wielkie” to podziękowanie", formula("Dzięki wielkie!") is not None)
+    sprawdz("„to wszystko na dziś” łapane", formula("To wszystko na dziś.") is not None)
+    sprawdz("zwykłe polecenie nie jest pożegnaniem", formula("zgaś światło") is None)
+    sprawdz(
+        "„koniec filmu” to nie pożegnanie",
+        formula("wyłącz koniec filmu i zgaś") is None,
+    )
+
     print("\n" + ("WSZYSTKO ZIELONE" if sprawdz.ok else "SĄ BŁĘDY"))
     return 0 if sprawdz.ok else 1
 
