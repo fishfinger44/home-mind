@@ -227,6 +227,14 @@ class HomeMindConversationAgent(ConversationEntity):
         # {urządzenie: (conversation_id, kiedy, mówca_lub_None)}.
         # Patrz OKNO_WZNOWIENIA_S.
         self._ostatnia_rozmowa: dict[str, tuple[str, float, str | None]] = {}
+        # Podmiany `conversation_id`: {id_od_HA: (nasze_nowe_id, kiedy)}.
+        #
+        # Gdy przejmiemy sesje po kims innym, zakladamy WLASNE id — inaczej nowy
+        # mowca dostalby cudza historie po stronie serwera (to samo id = ten sam
+        # watek). Ale HA o tym nie wie i w nastepnej turze poda znowu SWOJE,
+        # stare id. Bez tej mapy tura druga wracalaby na cudzy watek, z ktorego
+        # tura pierwsza wlasnie uciekla.
+        self._podmiana: dict[str, tuple[str, float]] = {}
 
         self._attr_unique_id = entry.entry_id
         self._attr_device_info = dr.DeviceInfo(
@@ -354,7 +362,19 @@ class HomeMindConversationAgent(ConversationEntity):
             getattr(user_input, "device_id", None),
         )
 
-        stan = self._stan_rozmowy.get(conversation_id, {"wlasciciel": None, "obce": 0})
+        conversation_id = self._po_podmianie(conversation_id)
+
+        # Czy ta sesja wciaz nalezy do tego, kto ja otworzyl — patrz
+        # `_przejmij_lub_wygas`. Stoi PRZED bramka wlasciciela swiadomie:
+        # bramka wie tylko tyle, ze mowca != wlasciciel, i kazda taka ture
+        # kasuje w ciszy. Rozstrzygniecie, czy sesja w ogole jeszcze trwa,
+        # musi zapasc wczesniej.
+        conversation_id, stan = self._przejmij_lub_wygas(
+            conversation_id,
+            user_id if pewnie_rozpoznany else None,
+            is_voice,
+            getattr(user_input, "device_id", None),
+        )
         wlasciciel = stan["wlasciciel"]
 
         # Sesja nalezy do osoby, ktora ja otworzyla. Cudza tura — rozpoznana czy
@@ -797,6 +817,105 @@ class HomeMindConversationAgent(ConversationEntity):
             poprzednia, wiek, mowca or "nierozpoznany",
         )
         return poprzednia
+
+    def _po_podmianie(self, conversation_id: str) -> str:
+        """Nasze id zamiast tego, ktore HA trzyma po przejetej sesji."""
+        wpis = self._podmiana.get(conversation_id)
+        if wpis is None:
+            return conversation_id
+        nowa, kiedy = wpis
+        # Ta sama granica co przy wznawianiu: po niej rozmowa i tak jest nowa,
+        # wiec podmiana nie ma juz czego pilnowac.
+        if time.monotonic() - kiedy > OKNO_WZNOWIENIA_S:
+            self._podmiana.pop(conversation_id, None)
+            return conversation_id
+        return nowa
+
+    def _cisza_od_ostatniej_tury(
+        self, urzadzenie: str | None, conversation_id: str
+    ) -> float | None:
+        """Ile minelo od ostatniej PRAWDZIWEJ wymiany w tej rozmowie.
+
+        Zrodlem jest slad wznowienia (`_zapamietaj_rozmowe`), bo zapisuje sie po
+        kazdej udanej turze i po nic innego nie trzeba siegac. `None` znaczy
+        „nie wiem" (inne urzadzenie, inna rozmowa, restart HA) i wtedy NIE
+        wygaszamy — brak danych nie jest dowodem na cisze.
+        """
+        wpis = self._ostatnia_rozmowa.get(urzadzenie or "bez-urzadzenia")
+        if wpis is None:
+            return None
+        poprzednia, kiedy, _mowca = wpis
+        if poprzednia != conversation_id:
+            return None
+        return time.monotonic() - kiedy
+
+    def _przejmij_lub_wygas(
+        self,
+        conversation_id: str,
+        mowca: str | None,
+        is_voice: bool,
+        urzadzenie: str | None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Czy sesja wciaz nalezy do tego, kto ja otworzyl.
+
+        SKAD SIE WZIELO (28.08). Wladek skonczyl rozmawiac 07:31:46. Lech
+        odezwal sie 07:39:16, po nowym slowie budzacym, i trzy jego tury poszly
+        w cisze: „Sesja nalezy do 'wladek', a tura przyszla od 'lech'". Cala
+        reszta lancucha zadzialala — biometria rozpoznala go pewnie za kazdym
+        razem (0,442 / 0,511 / 0,526 przy progu 0,35).
+
+        🔑 Zlozyly sie dwie rzeczy. Po pierwsze, wpis w `_stan_rozmowy` NIE ZNIKA,
+        gdy mikrofon zgasnie sam: kasujemy go tylko przy turze, ktora domyka
+        nasluch, a rozmowa rozpoznanego wlasciciela mikrofon trzyma ZAWSZE
+        (`_trzymaj_mikrofon`). Gdy taka rozmowa po prostu ucichnie, wlasciciel
+        zostaje w slowniku na zawsze. Po drugie, HA potrafi po kilku minutach
+        oddac ten sam `conversation_id` — `helpers/chat_session.py` sprzata
+        timerem przezbrajanym co 5 min, wiec sesja zyje do ~10 minut, nie 5.
+
+        ⛔ Weto biometryczne na te sytuacje juz mielismy — w `_wznow_lub_nowa`.
+        Nie odpalilo ani razu, bo tamta funkcja jest wolana WYLACZNIE wtedy, gdy
+        HA nie poda id (`user_input.conversation_id or ...`), a HA je podalo.
+        Dlatego reguly nie powielamy w tamtym miejscu, tylko stawiamy ja tu — na
+        drodze, ktora przechodzi KAZDA tura, niezaleznie od zrodla id.
+
+        Dwie warstwy, w tej kolejnosci:
+
+        1. PRZEJECIE. Pewnie rozpoznany ktos inny przejmuje sesje od razu. Nie
+           „ignoruje w ciszy", bo o czlowieku przed mikrofonem wiemy wszystko,
+           co da sie wiedziec — odmowa byla tu skutkiem ubocznym, nie decyzja.
+        2. WYGASZENIE. Gdy nowego mowcy NIE rozpoznano pewnie, zostaje czas:
+           po `OKNO_WZNOWIENIA_S` ciszy sesja przestaje nalezec do kogokolwiek.
+           Ta warstwa jest slabsza z rozmyslem — sam uplyw czasu nie mowi, kto
+           stoi przed mikrofonem.
+
+        ⚠️ Czego to NIE rozluznia: telewizor w tle i drugi domownik W TRAKCIE
+        rozmowy trafiaja na bramke wlasciciela dokladnie jak dotad. Chroniona
+        jest ciagla rozmowa, a nie wybudzenie sprzed osmiu minut.
+        """
+        stan = self._stan_rozmowy.get(conversation_id, {"wlasciciel": None, "obce": 0})
+        wlasciciel = stan["wlasciciel"]
+        if not is_voice or wlasciciel is None:
+            return conversation_id, stan
+
+        if mowca is not None and mowca != wlasciciel:
+            powod = f"pewnie rozpoznany '{mowca}' zamiast '{wlasciciel}'"
+        else:
+            wiek = self._cisza_od_ostatniej_tury(urzadzenie, conversation_id)
+            if wiek is None or wiek <= OKNO_WZNOWIENIA_S:
+                return conversation_id, stan
+            powod = f"cisza {wiek:.0f} s ponad okno {OKNO_WZNOWIENIA_S:.0f} s"
+
+        nowa = ulid.ulid_now()
+        _LOGGER.info(
+            "Sesja '%s' przestaje nalezec do '%s' (%s) — zakladam nowa '%s'",
+            conversation_id, wlasciciel, powod, nowa,
+        )
+        self._stan_rozmowy.pop(conversation_id, None)
+        # Sufit jak przy sladzie wznowienia: satelitow jest garsc, nie tysiace.
+        if len(self._podmiana) > 32:
+            self._podmiana.clear()
+        self._podmiana[conversation_id] = (nowa, time.monotonic())
+        return nowa, {"wlasciciel": None, "obce": 0}
 
     def _zapamietaj_rozmowe(
         self, urzadzenie: str | None, conversation_id: str, mowca: str | None
