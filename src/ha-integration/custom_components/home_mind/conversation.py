@@ -412,7 +412,16 @@ class HomeMindConversationAgent(ConversationEntity):
                 continue_conversation=CONTINUE_CONVERSATION,
             )
 
-        if is_voice and wlasciciel is not None and user_id != wlasciciel:
+        # LATKA (05.09.2026, zgloszenie Lecha: krotkie "Tak"/"Nie" ignorowane w
+        # ciszy). Krotka wypowiedz daje slaby odcisk glosu (ponizej progu w
+        # wyoming-voice-match), wiec przychodzi BEZ znacznika mowcy — user_id
+        # spada wtedy do wspolnego domyslnego id, co NIE jest dowodem na obca
+        # osobe, tylko brakiem pewnej identyfikacji. _przejmij_lub_wygas
+        # (wyzej) juz to uwzglednia i NIE kasuje wlasciciela dla takiej tury —
+        # ta bramka ma byc z nim spojna, wiec wymaga tego samego: FAKTYCZNIE
+        # potwierdzonej innej tozsamosci (rozpoznany), a nie samego
+        # niedopasowania do domyslnego id.
+        if is_voice and wlasciciel is not None and rozpoznany and user_id != wlasciciel:
             stan = {"wlasciciel": wlasciciel, "obce": stan["obce"] + 1}
             trzymaj = stan["obce"] < MAX_TUR_OBCYCH
             _LOGGER.info(
