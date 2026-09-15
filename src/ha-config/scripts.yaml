@@ -487,8 +487,8 @@ zagraj_opowiesc_po_ciszy:
     Opowiesc i glos asystenta wychodza z TEGO SAMEGO glosnika, ale osobnymi torami:
     `..._assistant` mowi odpowiedzi, `..._media_player` gra media. Puszczona od razu
     opowiesc lecila wiec POD potwierdzeniem agenta, a na dodatek przyciszala ja
-    automatyka uciszania satelity. Czekamy, az satelita WYJDZIE ze stanu `responding`,
-    czyli az agent skonczy mowic, i dopiero wtedy gramy.
+    automatyka uciszania satelity. Czekamy, az agent skonczy mowic, i dopiero wtedy
+    gramy — na tym urzadzeniu, z ktorego przyszla prosba.
   fields:
     url:
       description: Adres pliku z gotowa opowiescia
@@ -496,6 +496,47 @@ zagraj_opowiesc_po_ciszy:
       selector:
         text:
   sequence:
+  # 🔴 15.09: bajka zamowiona na M5 zagrala na satelicie, bo odtwarzacz byl wpisany
+  # na sztywno. Agent nie dostaje `device_id`, wiec urzadzenie ustalamy po stanie:
+  # skrypt rusza przez `script.turn_on` W TRAKCIE tury, zanim agent zacznie mowic.
+  #   • satelita XVF3800 jest wtedy w `processing` / `responding`;
+  #   • M5 rozmawia przez TELEFON do HA — jego `assist_satellite` stoi w `idle`
+  #     przez cala rozmowe (sprawdzone w historii), a `telefon_stan` = `in_call`.
+  # Satelita idzie PIERWSZY: polaczenie M5 wisi jeszcze do ~30 s po ostatnim zdaniu,
+  # a `processing` satelity oznacza dokladnie te prosbe.
+  - variables:
+      satelita_zajety: >-
+        {{ states('assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego')
+           in ['listening', 'processing', 'responding'] }}
+      m5_rozmawia: >-
+        {{ states('sensor.stackchan_5483d4_telefon_stan') in ['calling', 'in_call'] }}
+  - if:
+    - condition: template
+      value_template: '{{ m5_rozmawia and not satelita_zajety }}'
+    then:
+    # 🔴 NIE przez `media_player.stackchan_5483d4`. 15.09 bajka puszczona tamtedy
+    # zjadla robotowi pamiec wewnetrzna, I2S utknelo w `error state` i robot przestal
+    # nawiazywac rozmowy az do restartu. Gramy TOREM ROZMOWY, tak jak glos agenta
+    # (`voip_stack.odtworz_w_rozmowie`, latka w `assist_runtime.py`): bajka rusza
+    # OD RAZU, bez czekania na „juz puszczam" (model ukladal je 17-21 s), a spozniona
+    # odpowiedz agenta jest pomijana. Stukniecie w ekran przerywa bajke i otwiera
+    # nowa rozmowe, a po bajce robot rozlacza sie po zwyklych 20 s ciszy.
+    # Prosba z M5 gra WYLACZNIE na M5 (decyzja Lecha 15.09) — gdy rozmowa zdazyla
+    # sie skonczyc, bajka przepada z wpisem w logu, a NIE ląduje na satelicie.
+    - action: voip_stack.odtworz_w_rozmowie
+      data:
+        url: '{{ url }}'
+      continue_on_error: true
+      response_variable: w_rozmowie
+    - if:
+      - condition: template
+        value_template: '{{ not (w_rozmowie is defined and w_rozmowie.call_id is defined) }}'
+      then:
+      - action: system_log.write
+        data:
+          level: warning
+          message: 'Opowiesc z M5 nie weszla do rozmowy (rozmowa sie skonczyla): {{ url }}'
+    - stop: Opowiesc z M5 obsluzona
   # ⚠️ Czekamy TYLKO wtedy, gdy satelita naprawde ma cos do powiedzenia. Gdy prosba
   # przyszla z telefonu, panelu albo API, satelita stoi w `idle` i zaden trigger nie
   # nadejdzie — skrypt wisialby pelne 25 s, zanim timeout puscilby go dalej
@@ -546,10 +587,26 @@ zagraj_bajke_z_biblioteki:
       selector:
         text:
   sequence:
+  # Kokoro tylko szuka (`odtworz: false` w rest_command) — grac od razu nie moze,
+  # bo nie wie, skad przyszla prosba, i wszedlby agentowi w slowo.
   - action: rest_command.zagraj_bajke
     data:
       tytul: '{{ tytul }}'
     response_variable: wynik
+  - if:
+    - condition: template
+      value_template: '{{ wynik.status == 200 }}'
+    then:
+    # `script.turn_on`, nie bezposrednie wywolanie: skrypt czeka na koniec mowy
+    # agenta, a agent czeka na TEN skrypt — inaczej tura by sie zakleszczyla.
+    - action: script.turn_on
+      target:
+        entity_id: script.zagraj_opowiesc_po_ciszy
+      data:
+        variables:
+          url: >-
+            {{ wynik.content.url if wynik.content is mapping
+               else (wynik.content | from_json).url }}
   # 🔴 Skrypt MUSI oddac wynik, inaczej agent melduje sukces, ktorego nie bylo.
   # Zmierzone 20.08: na prosbe o Czerwonego Kapturka (ktorego w bibliotece NIE MA)
   # powiedzial „puszczona z biblioteki" — bo `call_service` bez odpowiedzi wyglada

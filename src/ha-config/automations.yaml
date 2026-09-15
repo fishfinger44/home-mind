@@ -976,3 +976,35 @@
   - action: esphome.stackchan_5483d4_set_roster_json
     data:
       roster_json: '{{ state_attr(''sensor.voip_phonebook'',''roster_json'') }}'
+- id: opowiesc_stop_gdy_rozmowa
+  alias: Opowiesc - zatrzymaj, gdy zaczyna sie rozmowa
+  description: 'Bajka i glos agenta ida z tego samego glosnika, wiec gdy domownik zaczyna
+    rozmowe (slowo budzace na satelicie albo stukniecie w M5), opowiesc staje — inaczej
+    agenta nie slychac, a bajka wpada do mikrofonu jako czesc prosby. Pauzujemy OBA
+    odtwarzacze opowiesci, nie tylko ten przy rozmowie: to jeden pokoj. Bez automatycznego
+    wznawiania. 15.09.2026.'
+  triggers:
+  - trigger: state
+    entity_id: assist_satellite.respeaker_xvf3800_assistant_urzadzenie_asystenta_glosowego
+    to: listening
+  # M5 rozmawia przez telefon do HA — jego assist_satellite nie zmienia stanu.
+  - trigger: state
+    entity_id: sensor.stackchan_5483d4_telefon_stan
+    to:
+    - calling
+    - in_call
+  - trigger: state
+    entity_id: assist_satellite.stackchan_5483d4_urzadzenie_asystenta_glosowego
+    to: listening
+  conditions:
+  - condition: template
+    value_template: "{{ ['media_player.respeaker_xvf3800_assistant_media_player', 'media_player.stackchan_5483d4']\n
+      \  | select('is_state', 'playing') | list | count > 0 }}"
+    alias: Gra opowiesc
+  actions:
+  - action: media_player.media_pause
+    target:
+      entity_id: "{{ ['media_player.respeaker_xvf3800_assistant_media_player', 'media_player.stackchan_5483d4']\n
+        \  | select('is_state', 'playing') | list }}"
+    continue_on_error: true
+  mode: single

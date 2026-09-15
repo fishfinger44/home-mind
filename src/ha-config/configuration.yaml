@@ -80,11 +80,14 @@ rest_command:
   # Bajka z biblioteki, szukana po tytule. Dopasowanie robi kokoro — porownywanie
   # napisow szablonem Jinja jest udreka, a tytul przychodzi z mowy, wiec musi byc
   # tolerancyjne na ogonki i odmiane.
+  # `odtworz: false` — kokoro tylko znajduje i oddaje adres. Gdzie i kiedy grac,
+  # decyduje `script.zagraj_bajke_z_biblioteki`: na urzadzeniu, z ktorego przyszla
+  # prosba, i dopiero gdy agent skonczy mowic (15.09 bajka z M5 poszla na satelite).
   zagraj_bajke:
     url: http://192.168.88.228:8880/opowiesci/znajdz
     method: POST
     content_type: application/json
-    payload: '{"tytul": {{ tytul | tojson }}}'
+    payload: '{"tytul": {{ tytul | tojson }}, "odtworz": false}'
     timeout: 30
 
 # Panel opowieści (kontener kokoro-api na mediaserwerze). Ten sam wzorzec co panel

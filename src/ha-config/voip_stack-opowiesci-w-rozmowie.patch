@@ -1,0 +1,289 @@
+--- a/voip_stack/assist_runtime.py
++++ b/voip_stack/assist_runtime.py
+@@ -63,6 +63,18 @@
+ _CALL_NOISE_SUPPRESSION_LEVEL = 1
+ _CALL_END_SILENCE_SECONDS = 0.4
+ 
++# LATKA LECHA (15.09.2026) - OPOWIESC W ROZMOWIE.
++# Bajka na M5 NIE MOZE isc przez `media_player`: 15.09 zjadla robotowi pamiec
++# wewnetrzna (`internal_free=3060` B), a nastepny dzwiek nie dostal DMA - I2S
++# utknelo w `error state` i robot przestal nawiazywac rozmowy az do restartu.
++# Tor rozmowy (RTP -> Opus) dziala na robocie stabilnie i ma juz zaalokowane
++# bufory, wiec bajka idzie TYM SAMYM torem co glos agenta, jako „robot mowi":
++#   * mikrofon robota zamkniety (bajka nie wpada do STT),
++#   * licznik ciszy robota stoi, wiec rozmowa nie urwie sie w polowie bajki,
++#   * stukniecie w ekran idzie galezia 1a firmware'u - przerywa i dzwoni od nowa,
++#     czyli rozpoczecie rozmowy zatrzymuje bajke bez zadnej zmiany w robocie.
++# Po bajce leci zwykle „SKONCZYL" - robot liczy cisze i sam sie rozlacza.
++
+ 
+ def _metadata_value(value: str, fallback: str) -> str:
+     clean = " ".join(str(value or "").split())[:256]
+@@ -162,6 +174,10 @@
+         self._pipeline_task: asyncio.Task | None = None
+         self._tx_task: asyncio.Task | None = None
+         self._tts_task: asyncio.Task | None = None
++        # LATKA LECHA (15.09.2026): bajka odlozona do zagrania po turze agenta.
++        self._opowiesc: tuple[str, float] | None = None
++        self._opowiesc_task: asyncio.Task | None = None
++        self._opowiesc_nr = 0
+         self._start_lock = asyncio.Lock()
+         self._stop_lock = asyncio.Lock()
+         self._cleanup_done = asyncio.Event()
+@@ -279,7 +295,7 @@
+                 return
+             self.closed.set()
+             current = asyncio.current_task()
+-            tasks = [self._pipeline_task, self._tts_task, self._tx_task]
++            tasks = [self._pipeline_task, self._tts_task, self._opowiesc_task, self._tx_task]
+             for task in tasks:
+                 if task is not None and task is not current and not task.done():
+                     task.cancel()
+@@ -490,6 +506,14 @@
+             return
+         if event_type != "tts-end" or not event.data:
+             return
++        if self._opowiesc_gra():
++            # LATKA LECHA (15.09.2026): odpowiedz agenta przyszla, gdy bajka juz gra
++            # (patrz `zaplanuj_opowiesc`) - nie wchodzimy jej w slowo.
++            _LOGGER.info(
++                "Opowiesc gra - pomijam spozniona odpowiedz agenta call_id=%s",
++                self.invite.call_id,
++            )
++            return
+         output = event.data.get("tts_output") or {}
+         token = str(output.get("token") or "")
+         if not token or (self._tts_task is not None and not self._tts_task.done()):
+@@ -623,11 +647,127 @@
+         if self._tts_task is not None:
+             await self._tts_task
+             await self.tx_queue.join()
++        if self._opowiesc_gra():
++            # Bajka trzyma robota w „MOWI" - „SKONCZYL" otworzylby mu mikrofon
++            # w srodku bajki. Wysle go sama bajka, gdy sie skonczy.
++            return
+         # LATKA LECHA (25.08.2026): koniec wypowiedzi — robot otwiera mikrofon.
+         #  czeka az OSTATNI pakiet RTP wyjdzie, wiec to jest
+         # naprawde koniec dzwieku, a nie koniec syntezy.
+         await self._powiedz_robotowi(False)
+ 
++    def _opowiesc_gra(self) -> bool:
++        return self._opowiesc_task is not None and not self._opowiesc_task.done()
++
++    def zaplanuj_opowiesc(self, url: str, od: float = 0.0) -> None:
++        """LATKA LECHA (15.09.2026): zagraj opowiesc w tej rozmowie - OD RAZU.
++
++        Prosba przychodzi z narzedzia agenta, czyli W TRAKCIE tury. Do 15.09
++        bajka czekala, az agent powie „juz puszczam", ale model ukladal te 14
++        tokenow 17-21 s (zmierzone w logu home-mind), wiec od prosby do bajki
++        mijalo 24-41 s. Decyzja Lecha: bajka startuje natychmiast, a spozniona
++        odpowiedz agenta jest pomijana (`_pipeline_event`) - samo zagranie jest
++        potwierdzeniem. Gdy bajki nie ma w bibliotece, skrypt tu nie trafia
++        i agent normalnie mowi, ze jej nie znalazl.
++        """
++        self._opowiesc = (str(url), max(0.0, float(od or 0.0)))
++        self._opowiesc_nr += 1
++        if self._opowiesc_gra():
++            # Druga bajka w trakcie pierwszej: przerwij biezaca, zagraj nowa.
++            self._opowiesc_task.cancel()
++        self._opowiesc_task = self.hass.async_create_task(self._graj_opowiesc())
++
++    async def _graj_opowiesc(self) -> None:
++        """Dekoduje opowiesc ffmpegiem i nadaje ja torem TTS, w tempie zegara RTP."""
++        if self._opowiesc is None or self.closed.is_set():
++            return
++        url, od = self._opowiesc
++        self._opowiesc = None
++        nr = self._opowiesc_nr
++        sluchal = self._accepting_input
++        # Mikrofon po stronie HA tez gluchy - na wypadek, gdyby robot nie dostal
++        # sygnalu i cos jednak przyszlo RTP-em.
++        self._accepting_input = False
++        from homeassistant.components.ffmpeg import get_ffmpeg_manager
++
++        await self._powiedz_robotowi(True)
++        polecenie = [get_ffmpeg_manager(self.hass).binary, "-nostdin", "-loglevel", "error"]
++        if od > 0:
++            polecenie += ["-ss", f"{od:.1f}"]
++        # 🔴 (15.09.2026, zgloszenie Lecha: „delikatne trzasniecie co jakis czas" przy
++        # CZYSTEJ sieci - 0 brakow ramek). Robot mierzyl w bajce szczyty 32768, czyli
++        # sufit, choc plik po `TTS_HEADROOM` ma szczyt -3,3 dBFS - reszte dokladaja
++        # przepróbkowanie 16->48 kHz i Opus. Sam wiekszy zapas sciszylby cala bajke,
++        # wiec ogranicznik obcina tylko szczyty do -6 dBFS; srednia glosnosc zostaje
++        # (zmierzone na Czerwonym Kapturku: mean -21,1 -> -21,2 dB, max -3,3 -> -6,0 dB).
++        # `level=0`, bo domyslnie alimiter PODNOSI poziom z powrotem do sufitu.
++        polecenie += [
++            "-i", url,
++            "-af", f"aresample={TTS_PCM_FORMAT.sample_rate},volume={TTS_HEADROOM},"
++                   "alimiter=limit=0.5:attack=3:release=60:level=0",
++            "-f", "s16le", "-ac", "1", "-ar", str(TTS_PCM_FORMAT.sample_rate), "-",
++        ]
++        proc = await asyncio.create_subprocess_exec(
++            *polecenie,
++            stdout=asyncio.subprocess.PIPE,
++            stderr=asyncio.subprocess.PIPE,
++        )
++        frame_bytes = TTS_PCM_FORMAT.nominal_frame_bytes
++        ramek = 0
++        _LOGGER.info(
++            "Opowiesc w rozmowie start call_id=%s url=%s od=%.1f s",
++            self.invite.call_id, url, od,
++        )
++        try:
++            assert proc.stdout is not None
++            while not self.closed.is_set():
++                try:
++                    ramka = await proc.stdout.readexactly(frame_bytes)
++                except asyncio.IncompleteReadError as koniec:
++                    ramka = koniec.partial
++                    if ramka:
++                        ramka += bytes(frame_bytes - len(ramka))
++                    else:
++                        break
++                # `put` czeka, gdy kolejka pelna - `_send_loop` zdejmuje ramke
++                # co 20 ms, wiec tempo nadaje zegar RTP, a nie szybkosc ffmpega.
++                # Zapas i ogranicznik nalozyl juz ffmpeg (patrz `-af` wyzej).
++                for frame in self.tts_converter.convert(ramka):
++                    await self.tx_queue.put(frame)
++                ramek += 1
++            if not self.closed.is_set():
++                await self.tx_queue.join()
++        finally:
++            if proc.returncode is None:
++                with contextlib.suppress(ProcessLookupError):
++                    proc.kill()
++            # 🔴 NAPRAWA (15.09.2026): NIE `proc.wait()`. Po przerwaniu bajki
++            # (stukniecie -> BYE) potok stdout jest pelny i wstrzymany, a asyncio
++            # budzi `wait()` dopiero, gdy WSZYSTKIE potoki procesu sie zamkna —
++            # czyli nigdy. `stop()` sesji wisial na tym bez konca, HA uwazal
++            # numer 100 za zajety i odpowiadal robotowi `486 Busy Here`.
++            # `communicate()` doczytuje resztki do EOF, wiec potoki sie zamykaja.
++            blad = b""
++            with contextlib.suppress(Exception):
++                _, blad = await asyncio.wait_for(proc.communicate(), timeout=5)
++            if proc.returncode not in (0, None, -9) and ramek == 0:
++                _LOGGER.warning(
++                    "Opowiesc: ffmpeg nie odczytal %s: %s",
++                    url, (blad or b"").decode(errors="replace")[-400:],
++                )
++            _LOGGER.info(
++                "Opowiesc w rozmowie koniec call_id=%s zagrane %.1f s%s",
++                self.invite.call_id, ramek * TTS_PCM_FORMAT.frame_ms / 1000.0,
++                " (rozmowa przerwana)" if self.closed.is_set() else "",
++            )
++            # Gdy te bajke podmienila nowa (`_opowiesc_nr` wzrosl), NIE wysylamy
++            # „SKONCZYL" - robot otworzylby mikrofon w pierwszych sekundach nowej.
++            if not self.closed.is_set() and nr == self._opowiesc_nr:
++                await self._powiedz_robotowi(False)
++                if sluchal:
++                    self._drain_rx()
++                    self._accepting_input = True
++
+     async def _run_call_connected_turn(self, conversation_id: str) -> None:
+         """Let the selected agent speak first using the native text pipeline input."""
+         from homeassistant.components.assist_pipeline.pipeline import (
+@@ -721,6 +861,12 @@
+                 if self._pipeline_failed:
+                     raise RuntimeError("Assist pipeline reported an error")
+                 await self._finish_tts_turn()
++                # LATKA LECHA (15.09.2026): bajka zamowiona w tej turze juz gra -
++                # nie wracamy do nasluchu, dopoki sie nie skonczy.
++                # `asyncio.wait`, nie `await task`: podmiana bajki anuluje stare
++                # zadanie, a to nie moze wypuscic petli do nasluchu w srodku nowej.
++                while self._opowiesc_gra() and not self.closed.is_set():
++                    await asyncio.wait({self._opowiesc_task})
+         except asyncio.CancelledError:
+             raise
+         except Exception:
+--- a/voip_stack/__init__.py
++++ b/voip_stack/__init__.py
+@@ -332,6 +332,34 @@
+     await async_set_call_deadline(call.hass, dict(call.data))
+ 
+ 
++async def _handle_odtworz_w_rozmowie_service(call: ServiceCall):
++    """LATKA LECHA (15.09.2026): opowiesc torem trwajacej rozmowy z asystentem.
++
++    Szukamy sesji Assist (rozmowa robota z HA) i oddajemy jej adres pliku. Bez
++    aktywnej rozmowy zglaszamy blad, zeby skrypt w HA mogl zagrac gdzie indziej,
++    zamiast udawac sukces.
++    """
++    from homeassistant.exceptions import ServiceValidationError
++
++    from .assist_runtime import AssistMediaSession
++
++    registry = _call_registry(call.hass)
++    call_id = str(call.data.get("call_id") or "").strip()
++    sesje = [
++        (cid, relay)
++        for cid, relay in registry.relays.items()
++        if isinstance(relay, AssistMediaSession)
++        and not relay.closed.is_set()
++        and (not call_id or cid == call_id)
++    ]
++    if not sesje:
++        raise ServiceValidationError("Brak trwajacej rozmowy z asystentem")
++    # Najnowsza rozmowa - slownik trzyma kolejnosc wstawiania.
++    cid, sesja = sesje[-1]
++    sesja.zaplanuj_opowiesc(str(call.data["url"]), float(call.data.get("od") or 0.0))
++    return {"call_id": cid}
++
++
+ async def _handle_sip_cancel_deadline_service(call: ServiceCall) -> None:
+     from .call_deadlines import cancel_call_deadline
+ 
+@@ -347,6 +375,23 @@
+     account_handlers = build_account_service_handlers(_refresh_and_push_phonebook)
+     phonebook_handlers = build_phonebook_service_handlers(_refresh_and_push_phonebook)
+ 
++    import voluptuous as vol
++    from homeassistant.core import SupportsResponse
++
++    hass.services.async_register(
++        DOMAIN,
++        "odtworz_w_rozmowie",
++        _handle_odtworz_w_rozmowie_service,
++        schema=vol.Schema(
++            {
++                vol.Required("url"): cv.string,
++                vol.Optional("od", default=0.0): vol.Coerce(float),
++                vol.Optional("call_id"): cv.string,
++            }
++        ),
++        supports_response=SupportsResponse.OPTIONAL,
++    )
++
+     await async_register_services(
+         hass,
+         {
+--- a/voip_stack/services.yaml
++++ b/voip_stack/services.yaml
+@@ -751,3 +751,28 @@
+ list_accounts:
+   name: List SIP Endpoint Accounts
+   description: Return configured local SIP endpoint accounts without passwords to the administrator who called this service.
++
++odtworz_w_rozmowie:
++  name: Odtworz opowiesc w rozmowie
++  description: >-
++    Gra plik audio (np. bajke z kokoro) torem trwajacej rozmowy z asystentem, tak
++    jak glos agenta. Zamowione w trakcie tury zagra, gdy agent skonczy mowic.
++  fields:
++    url:
++      name: Adres pliku
++      required: true
++      selector:
++        text:
++    od:
++      name: Od sekundy
++      required: false
++      selector:
++        number:
++          min: 0
++          max: 36000
++          mode: box
++    call_id:
++      name: Call ID
++      required: false
++      selector:
++        text:
