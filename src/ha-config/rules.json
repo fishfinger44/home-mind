@@ -123,9 +123,9 @@
     "id": "smsto7ygo",
     "title": "Ciepły biały w jadalni",
     "text": "Ustawiaj `color_temp_kelvin` na 2700 dla świateł w jadalni przy poleceniu o barwie ciepłej białej.",
-    "enabled": false,
+    "enabled": true,
     "protected": false,
-    "suggested": true
+    "suggested": false
   },
   {
     "id": "smsto7z6q",
@@ -137,8 +137,8 @@
   },
   {
     "id": "r15",
-    "title": "Bajki z biblioteki, długie wypowiedzi strumieniem",
-    "text": "DWIE RÓŻNE RZECZY, DWIE RÓŻNE DROGI.\n\n1️⃣ BAJKA, KTÓRĄ KTOŚ ZNA Z TYTUŁU — „opowiedz Czerwonego Kapturka”, „puść bajkę o wilczku”, „ta wczorajsza bajka”.\n⛔ NIE WYMYŚLAJ jej i NIE syntezuj. Bajki są przygotowane wcześniej i leżą w bibliotece.\nWywołaj script.zagraj_bajke_z_biblioteki z polem `tytul` — tak, jak tytuł padł z ust —\n🔴 ZAWSZE z `return_response: true`, bo skrypt ODDAJE WYNIK i musisz go przeczytać:\n   {\"domain\":\"script\",\"service\":\"zagraj_bajke_z_biblioteki\",\"data\":{\"tytul\":\"Czerwony Kapturek\"},\"return_response\":true}\n• `zagrano: true` — powiedz krótko, że leci.\n• `zagrano: false` — bajki NIE MA. Powiedz to WPROST, wymień tytuły z pola `szczegoly` i zaproponuj dodanie jej w panelu Opowieści. ⛔ Nie melduj, że puściłeś, i nie zastępuj jej własną wersją bez pytania.\n\n2️⃣ TREŚĆ, KTÓRĄ WYMYŚLASZ TERAZ — opowieść ze swojego życia, dłuższe wyjaśnienie, historia na poczekaniu.\n🔑 PRÓG: około 600 znaków, czyli mniej więcej pół minuty mówienia (zmierzone przy Twoim tempie 1,2: 19 znaków na sekundę).\n• KRÓTSZE — mów normalnie w rozmowie. Anegdota, dowcip, zagadka: bez żadnych skryptów.\n• DŁUŻSZE — wywołaj script.opowiedz_dluga_historie (pola `tekst` i `nazwa`), bo potok głosowy tego nie udźwignie: dłuższa synteza nie zdąży ruszyć i słuchacz nie usłyszy NIC. W odpowiedzi powiedz JEDNO krótkie zdanie, że już opowiadasz.\n⚠️ To NIE trafia do biblioteki — jest jednorazowe i znika. Nie obiecuj, że da się do tego wrócić.\n\n⚠️ Nie licz na oko: „kilka zdań” to zwykle 300–500 znaków, czyli PONIŻEJ progu.\n\n🔴 ZAPOWIEDŹ BEZ WYWOŁANIA JEST ZAKAZANA. Jeśli mówisz „już opowiadam”, „rozpoczynam opowieść”, „słuchaj uważnie” — to w TEJ SAMEJ turze musi pójść wywołanie skryptu. Zmierzone 20.08: powiedziałeś „Rozpoczynam opowieść o walce ze strzygą”, nie wywołałeś niczego i słuchacz został z ciszą.\nNie zapowiadaj też opowieści „na później” ani nie dziel jej na tury — albo wywołujesz teraz, albo mówisz krótko w rozmowie.",
+    "title": "Bajki z biblioteki opowiadane, nie wideo, długie wypowiedzi strumieniem",
+    "text": "DWIE RÓŻNE RZECZY, DWIE RÓŻNE DROGI.\n\n1️⃣ BAJKA DO PRZECZYTANIA, KTÓRĄ KTOŚ ZNA Z TYTUŁU — „opowiedz Czerwonego Kapturka”, „puść bajkę o wilczku”, „ta wczorajsza bajka”.\n⛔ NIE WYMYŚLAJ jej i NIE syntezuj. Bajki są przygotowane wcześniej i leżą w bibliotece.\nWywołaj script.zagraj_bajke_z_biblioteki z polem `tytul` — tak, jak tytuł padł z ust —\n🔴 ZAWSZE z `return_response: true`, bo skrypt ODDAJE WYNIK i musisz go przeczytać:\n   {\"domain\":\"script\",\"service\":\"zagraj_bajke_z_biblioteki\",\"data\":{\"tytul\":\"Czerwony Kapturek\"},\"return_response\":true}\n• `zagrano: true` — powiedz krótko, że leci.\n• `zagrano: false` — bajki NIE MA. Powiedz to WPROST, wymień tytuły z pola `szczegoly` i zaproponuj dodanie jej w panelu Opowieści. ⛔ Nie melduj, że puściłeś, i nie zastępuj jej własną wersją bez pytania.\n\n2️⃣ TREŚĆ, KTÓRĄ WYMYŚLASZ TERAZ — opowieść ze swojego życia, dłuższe wyjaśnienie, historia na poczekaniu.\n🔑 PRÓG: około 600 znaków, czyli mniej więcej pół minuty mówienia (zmierzone przy Twoim tempie 1,2: 19 znaków na sekundę).\n• KRÓTSZE — mów normalnie w rozmowie. Anegdota, dowcip, zagadka: bez żadnych skryptów.\n• DŁUŻSZE — wywołaj script.opowiedz_dluga_historie (pola `tekst` i `nazwa`), bo potok głosowy tego nie udźwignie: dłuższa synteza nie zdąży ruszyć i słuchacz nie usłyszy NIC. W odpowiedzi powiedz JEDNO krótkie zdanie, że już opowiadasz.\n⚠️ To NIE trafia do biblioteki — jest jednorazowe i znika. Nie obiecuj, że da się do tego wrócić.\n\n⚠️ Nie licz na oko: „kilka zdań” to zwykle 300–500 znaków, czyli PONIŻEJ progu.\n\n🔴 ZAPOWIEDŹ BEZ WYWOŁANIA JEST ZAKAZANA. Jeśli mówisz „już opowiadam”, „rozpoczynam opowieść”, „słuchaj uważnie” — to w TEJ SAMEJ turze musi pójść wywołanie skryptu. Zmierzone 20.08: powiedziałeś „Rozpoczynam opowieść o walce ze strzygą”, nie wywołałeś niczego i słuchacz został z ciszą.\nNie zapowiadaj też opowieści „na później” ani nie dziel jej na tury — albo wywołujesz teraz, albo mówisz krótko w rozmowie.",
     "enabled": true,
     "protected": false,
     "suggested": false
@@ -155,6 +155,14 @@
     "id": "r18",
     "title": "Pogoda — trzy różne pytania, trzy różne źródła",
     "text": "POGODA. Nie myl POMIARU z PROGNOZĄ — to trzy osobne pytania:\n\n1. „Czy TERAZ pada?\", „jak jest na dworze\" → POMIAR ze stacji IMGW Wrocław:\n   sensor.wroclaw_intensywnosc_opadow (mm/h, 0 = nie pada).\n   To rzeczywisty pomiar, nie model — bije każdą prognozę na pytanie o teraz.\n\n2. „Czy jest ostrzeżenie\", „będzie burza\", „czy jechać samochodem\" →\n   sensor.wroclaw_alert_pogodowy. `no_alert` znaczy, że IMGW nic nie wydał.\n   To OFICJALNE ostrzeżenie instytutu — jeśli jest, wspomnij o nim z własnej woli.\n\n3. „Jaka będzie pogoda\", „o której zacznie padać\" → prognoza weather.forecast_dom\n   (Met.no, model ECMWF). Pora doby wymaga `type: hourly` — patrz instrukcja.\n\n⛔ NIE używaj weather.wroclaw ani innych encji pogodowych do prognozy — jedno źródło,\nżeby nie mylić dnia i godziny.",
+    "enabled": true,
+    "protected": false,
+    "suggested": false
+  },
+  {
+    "id": "smtnowzbw",
+    "title": "Rolety do połowy",
+    "text": "„do połowy” dla rolet oznacza pozycję 70, co daje pięćdziesiąt procent rzeczywistego prześwitu.",
     "enabled": true,
     "protected": false,
     "suggested": false

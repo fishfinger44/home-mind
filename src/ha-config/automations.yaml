@@ -389,8 +389,10 @@
     to:
     - 'off'
     trigger: state
+    from:
   - trigger: media_player.turned_off
     target:
+      device_id: 1163d696df475778cc7b29fac18abfb7
       entity_id: media_player.pokoj_dzienny
     options:
       behavior: each
@@ -949,3 +951,28 @@
         name: Satelita XVF3800
         message: Beam lock byl wylaczony po restarcie - wlaczony z powrotem.
   mode: single
+- id: stackchan_telefon_po_starcie
+  alias: Stackchan — telefon po starcie robota
+  description: "Po kazdym restarcie robota trzeba zrobic dwie rzeczy, inaczej stukniecie
+    w ekran konczy sie samym dzwiekiem wybudzenia: 1) rozlaczyc wiszaca sesje po stronie
+    HA — robot restartujacy sie W TRAKCIE rozmowy\n   nie wysyla BYE, wiec HA uwaza
+    numer 100 za zajety i odpowiada 486 Busy Here;\n2) wyslac ksiazke telefoniczna
+    — NIE przezywa restartu, a bez niej `call(100)`\n   konczy sie „not in local phonebook
+    and HA peer unavailable\".\nObie wygladaja jak awaria, a sa tylko brakiem sprzatania.
+    25.08.2026."
+  mode: single
+  triggers:
+  - trigger: state
+    entity_id: sensor.stackchan_5483d4_telefon_punkt_koncowy
+    from: unavailable
+  - trigger: homeassistant
+    event: start
+  conditions: []
+  actions:
+  - delay: 00:00:05
+  - action: voip_stack.hangup
+    data: {}
+  - delay: 00:00:02
+  - action: esphome.stackchan_5483d4_set_roster_json
+    data:
+      roster_json: '{{ state_attr(''sensor.voip_phonebook'',''roster_json'') }}'
