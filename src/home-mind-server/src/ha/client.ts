@@ -255,7 +255,23 @@ export class HomeAssistantClient {
     // Services declared with SupportsResponse.ONLY (e.g. weather.get_forecasts,
     // calendar.get_events) require ?return_response=true and reply with a
     // { changed_states, service_response } body instead of a bare state array.
-    const path = returnResponse
+    //
+    // O odpowiedz SKRYPTU prosimy zawsze, nawet gdy model o nia nie prosil.
+    // ZMIERZONE 16.09 (HA 2026.9): wywolanie skryptu, ktory przerwal sie na
+    // `stop ... error: true`, wraca jako HTTP 200 — nie do odroznienia od
+    // sukcesu. Tego dnia „pusc utwor X" skonczylo sie meldunkiem „juz gram"
+    // przy odtwarzaczu niedostepnym od szesciu godzin. Status HTTP tej prawdy
+    // nie niesie, wiec bierzemy jedyny kanal, ktory ja niesie: odpowiedz
+    // skryptu. Skrypty maja SupportsResponse.OPTIONAL, wiec pytanie o
+    // odpowiedz jest bezpieczne takze dla tych, ktore nic nie zwracaja.
+    //
+    // `turn_on`/`turn_off`/`toggle`/`reload` to USLUGI domeny `script`, a nie
+    // skrypty — one odpowiedzi nie obsluguja i HA odbilby je jako 400.
+    const sterujace = new Set(["turn_on", "turn_off", "toggle", "reload"]);
+    const chceOdpowiedzi =
+      returnResponse || (domain === "script" && !sterujace.has(service));
+
+    const path = chceOdpowiedzi
       ? `/api/services/${domain}/${service}?return_response=true`
       : `/api/services/${domain}/${service}`;
 

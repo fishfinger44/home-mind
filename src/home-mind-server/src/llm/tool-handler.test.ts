@@ -7,6 +7,7 @@ import { handleToolCall, entityIdFrom, extractAndStoreFacts, filterExtractedFact
   znormalizujWywolanie,
   naZegarDomowy,
   sprawdzPamiec,
+  wynikSkryptu,
 } from "./tool-handler.js";
 import type { KontekstPamieci } from "./tool-handler.js";
 import { loadRules, resetRulesCache } from "../rules/store.js";
@@ -1374,5 +1375,63 @@ describe("sprawdzPamiec", () => {
     const wynik = await sprawdzPamiec("kawa wieczorem", ctx);
 
     expect(wynik.fakty).toEqual(["Denon to wzmacniacz w salonie"]);
+  });
+});
+
+describe("wynikSkryptu", () => {
+  it("zamienia `ok: false` na blad — 200 ze skryptu nie znaczy, ze zagral", async () => {
+    // Zdarzenie z 16.09: odtwarzacz niedostepny od szesciu godzin, skrypt
+    // przerwany po 3 ms, HA odpowiada 200, asystent melduje „juz gram".
+    const wynik = wynikSkryptu({
+      changed_states: [],
+      service_response: {
+        ok: false,
+        powod: "Urządzenie media_player.living_room jest niedostępne — nie da się na nim zagrać.",
+      },
+    });
+
+    expect(wynik).toEqual({
+      error: "Urządzenie media_player.living_room jest niedostępne — nie da się na nim zagrać.",
+    });
+  });
+
+  it("porazka bez powodu i tak jest porazka", () => {
+    expect(wynikSkryptu({ changed_states: [], service_response: { ok: false } })).toEqual({
+      error: "Skrypt nie wykonal polecenia i nie podal powodu.",
+    });
+  });
+
+  it("przepuszcza odpowiedz udanego skryptu", () => {
+    const odpowiedz = { ok: true, powod: 'Gra „Leń" na media_player.denon_avr_x2400h.' };
+    expect(wynikSkryptu({ changed_states: [], service_response: odpowiedz })).toEqual(odpowiedz);
+  });
+
+  it("skrypt, ktory nic nie mowi, zostaje przy zmienionych stanach", () => {
+    const stany = [{ entity_id: "script.cos", state: "off" }];
+    expect(wynikSkryptu({ changed_states: stany, service_response: null })).toEqual(stany);
+  });
+
+  it("odpowiedz spoza koperty zostawia w spokoju", () => {
+    expect(wynikSkryptu([{ entity_id: "script.cos" }])).toEqual([{ entity_id: "script.cos" }]);
+  });
+});
+
+describe("handleToolCall — porazka skryptu dociera do modelu", () => {
+  it("call_service na skrypcie oddaje `error`, a nie liste stanow", async () => {
+    const ha = {
+      getServices: vi.fn().mockResolvedValue(new Map()),
+      callService: vi.fn().mockResolvedValue({
+        changed_states: [{ entity_id: "script.zagraj_muzyke", state: "off" }],
+        service_response: { ok: false, powod: 'Nie udało się uruchomić „Leń" na Denonie.' },
+      }),
+    } as unknown as HomeAssistantClient;
+
+    const wynik = await handleToolCall(ha, "call_service", {
+      domain: "script",
+      service: "zagraj_muzyke",
+      data: { typ: "track", co: "Na tapczanie siedzi leń" },
+    });
+
+    expect(wynik).toEqual({ error: 'Nie udało się uruchomić „Leń" na Denonie.' });
   });
 });

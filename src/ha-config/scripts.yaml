@@ -208,14 +208,33 @@ zagraj_muzyke:
         rodzaj_wejsciowy: "{{ typ | default('artist', true) }}"
         podane: "{{ co | default('', true) | trim }}"
     # Fail loudly instead of reporting success on a dead player: the Music
-    # Assistant entity for Apple TV goes unavailable whenever it sleeps.
+    # Assistant entity for Apple TV goes unavailable whenever it sleeps —
+    # a 16.09 tak samo przepadl Denon: odtwarzacz Music Assistant zniknal
+    # o 13:25 i sam nie wrocil.
+    #
+    # Porazka wraca W ODPOWIEDZI, a nie przez `error: true`. ZMIERZONE 16.09
+    # (HA 2026.9): `POST /api/services/script/zagraj_muzyke` odpowiada 200
+    # TAKZE wtedy, gdy skrypt przerwal sie na `stop ... error: true`. Asystent
+    # widzial samo 200, wiec meldowal „juz gram" utwor, ktory nie ruszyl.
+    # Odpowiedz skryptu to jedyny kanal, ktorym prawda do niego dociera.
+    # Do logu HA piszemy osobno, zeby awaria nadal byla widoczna dla czlowieka
+    # — `error: true` i odpowiedz wykluczaja sie wzajemnie.
     - if:
         - condition: template
           value_template: "{{ states(cel) in ['unavailable', 'unknown'] }}"
       then:
-        - stop: >-
-            Urządzenie {{ cel }} jest niedostępne — nie da się na nim zagrać.
-          error: true
+        - variables:
+            wynik:
+              ok: false
+              powod: >-
+                Urządzenie {{ cel }} jest niedostępne — nie da się na nim zagrać.
+        - action: system_log.write
+          data:
+            level: error
+            logger: script.zagraj_muzyke
+            message: "{{ wynik.powod }}"
+        - stop: "{{ wynik.powod }}"
+          response_variable: wynik
     # Bez nazwy = gramy to, co Music Assistant sam przygotował.
     #
     # „Ulubione" w MA (flaga `favorite`) to 0 wykonawcow, 7 albumow i 185
@@ -247,9 +266,19 @@ zagraj_muzyke:
             - condition: template
               value_template: "{{ ulubione['items'] | count == 0 }}"
           then:
-            - stop: >-
-                Nie ma playlisty „{{ szukana_playlista | trim }}" w Music Assistant.
-              error: true
+            - variables:
+                wynik:
+                  ok: false
+                  powod: >-
+                    Nie ma playlisty „{{ szukana_playlista | trim }}" w Music
+                    Assistant.
+            - action: system_log.write
+              data:
+                level: error
+                logger: script.zagraj_muzyke
+                message: "{{ wynik.powod }}"
+            - stop: "{{ wynik.powod }}"
+              response_variable: wynik
         - variables:
             identyfikator: "{{ ulubione['items'][0]['uri'] }}"
             rodzaj: playlist
@@ -390,10 +419,19 @@ zagraj_muzyke:
         - condition: template
           value_template: "{{ states(cel) != 'playing' }}"
       then:
-        - stop: >-
-            Nie udało się uruchomić „{{ identyfikator }}" na {{ cel }}
-            (stan: {{ states(cel) }}, źródło: {{ state_attr(cel, 'source') | default('brak', true) }}).
-          error: true
+        - variables:
+            wynik:
+              ok: false
+              powod: >-
+                Nie udało się uruchomić „{{ identyfikator }}" na {{ cel }}
+                (stan: {{ states(cel) }}, źródło: {{ state_attr(cel, 'source') | default('brak', true) }}).
+        - action: system_log.write
+          data:
+            level: error
+            logger: script.zagraj_muzyke
+            message: "{{ wynik.powod }}"
+        - stop: "{{ wynik.powod }}"
+          response_variable: wynik
     # Favourites play in order unless explicitly asked to shuffle. Always set
     # it, so a previously enabled shuffle does not leak into an ordered play.
     # Only after playback is up: touching shuffle too early aborts the loading
@@ -430,6 +468,18 @@ zagraj_muzyke:
               target:
                 entity_id: "{{ cel }}"
               continue_on_error: true
+    # Sukces mowimy tak samo wprost jak porazke. Skrypt bez odpowiedzi oddaje
+    # `service_response: null`, czyli „nie wiem" — a to po stronie asystenta
+    # nie do odroznienia od „zagralo". Dopiero gdy KAZDE wyjscie cos mowi,
+    # milczenie staje sie samo w sobie sygnalem bledu.
+    - variables:
+        wynik:
+          ok: true
+          powod: >-
+            Gra „{{ state_attr(cel, 'media_title') | default(identyfikator, true) }}"
+            na {{ cel }}.
+    - stop: "{{ wynik.powod }}"
+      response_variable: wynik
 opowiedz_dluga_historie:
   alias: Opowiedz dluga historie
   description: >-

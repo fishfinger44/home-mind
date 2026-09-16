@@ -49,3 +49,41 @@ describe("HomeAssistantClient.getHistory URL encoding", () => {
     expect(captured).toContain("end_time=2026-05-11T09%3A00%3A00Z");
   });
 });
+
+describe("HomeAssistantClient.callService — odpowiedz skryptu", () => {
+  let captured: string | undefined;
+
+  beforeEach(() => {
+    captured = undefined;
+    global.fetch = vi.fn(async (input: unknown) => {
+      captured = typeof input === "string" ? input : String(input);
+      return new Response(JSON.stringify({ changed_states: [], service_response: null }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+  });
+
+  it("prosi o odpowiedz skryptu, choc nikt o nia nie prosil", async () => {
+    // Bez tego porazka skryptu wraca jako HTTP 200 i wyglada jak sukces.
+    const ha = new HomeAssistantClient(baseConfig);
+    await ha.callService("script", "zagraj_muzyke", undefined, { co: "Bowie" });
+
+    expect(captured).toContain("/api/services/script/zagraj_muzyke?return_response=true");
+  });
+
+  it("nie prosi o odpowiedz przy script.turn_on — HA odbilby to jako 400", async () => {
+    const ha = new HomeAssistantClient(baseConfig);
+    await ha.callService("script", "turn_on", "script.cokolwiek");
+
+    expect(captured).toContain("/api/services/script/turn_on");
+    expect(captured).not.toContain("return_response");
+  });
+
+  it("zwykla usluga bez odpowiedzi zostaje bez odpowiedzi", async () => {
+    const ha = new HomeAssistantClient(baseConfig);
+    await ha.callService("light", "turn_on", "light.kuchnia");
+
+    expect(captured).not.toContain("return_response");
+  });
+});

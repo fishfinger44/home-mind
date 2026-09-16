@@ -656,6 +656,16 @@ export async function handleToolCall(
           wantsResponse
         );
 
+        // Skrypt melduje powodzenie w odpowiedzi, bo status HTTP tego nie robi
+        // — patrz `wynikSkryptu`.
+        if (wyw.domain === "script") {
+          result = wynikSkryptu(result);
+          const blad = (result as { error?: unknown } | null)?.error;
+          if (typeof blad === "string") {
+            console.log(`[tool] script.${wyw.service} nie wykonal polecenia: ${blad}`);
+          }
+        }
+
         if (wyw.domain === "weather" && wyw.service === "get_forecasts") {
           result = naZegarDomowy(result, String(data.type ?? "daily"));
         }
@@ -715,6 +725,50 @@ export async function handleToolCall(
     console.log(`[tool] ${toolName} failed in ${elapsed}ms: ${message}`);
     return { error: message };
   }
+}
+
+/**
+ * Prawda o wywolaniu skryptu, ktorej nie niesie jego status HTTP.
+ *
+ * ZMIERZONE 16.09 (HA 2026.9): `POST /api/services/script/<nazwa>` odpowiada
+ * 200 takze wtedy, gdy skrypt przerwal sie na `stop ... error: true`. Tego dnia
+ * „pusc utwor Na tapczanie siedzi len" trafilo w odtwarzacz Music Assistant
+ * niedostepny od szesciu godzin: skrypt slusznie przerwal po 3 ms, HA oddalo
+ * 200, a asystent zameldowal, ze gra. Cala weryfikacja dopisana w skrypcie
+ * ginela na granicy REST-u.
+ *
+ * Skrypty mowia wiec wprost `{ok, powod}` w odpowiedzi, a to miejsce zamienia
+ * `ok: false` na jedyny ksztalt, ktorego model nie pomyli z sukcesem: `error`.
+ *
+ * Skrypt, ktory nic nie odpowiada, zostaje przy dawnym ksztalcie (lista
+ * zmienionych stanow) — nie zgadujemy za niego, ze sie udalo.
+ */
+export function wynikSkryptu(surowy: unknown): unknown {
+  if (!surowy || typeof surowy !== "object") return surowy;
+
+  const koperta = surowy as {
+    changed_states?: unknown;
+    service_response?: unknown;
+  };
+  // Bez `?return_response=true` odpowiedzi nie ma i nie bylo o co pytac.
+  if (!("service_response" in koperta)) return surowy;
+
+  const odpowiedz = koperta.service_response;
+  const zmiany = koperta.changed_states ?? [];
+
+  if (odpowiedz === null || odpowiedz === undefined) return zmiany;
+  if (typeof odpowiedz !== "object") return odpowiedz;
+
+  const wynik = odpowiedz as { ok?: unknown; powod?: unknown };
+  if (wynik.ok === false) {
+    const powod =
+      typeof wynik.powod === "string" && wynik.powod.trim()
+        ? wynik.powod.trim()
+        : "Skrypt nie wykonal polecenia i nie podal powodu.";
+    return { error: powod };
+  }
+
+  return odpowiedz;
 }
 
 /**
