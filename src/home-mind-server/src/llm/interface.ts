@@ -61,6 +61,24 @@ export function trustsProfile(confidence?: IdentityConfidence): boolean {
 }
 
 // Chat types (LLM-agnostic)
+/**
+ * Jedna wypowiedź w turze — czyja jest i co w niej padło.
+ *
+ * `userId` jest pusty, gdy mówcy nie rozpoznano albo jego odcisk nie pasuje do
+ * nikogo z domowników. Taka wypowiedź jest dla modelu KONTEKSTEM, ale nie może
+ * niczego zlecić: bez tożsamości nie ma w czyim imieniu działać.
+ */
+export interface Wypowiedz {
+  tekst: string;
+  /** Nazwa odcisku głosu z voice-matcha, np. `lech`. */
+  mowca?: string | null;
+  /** Profil pamięci osoby, gdy odcisk pasuje do kogoś z Ustawień → Osoby. */
+  userId?: string | null;
+  userName?: string | null;
+  rozpoznany?: boolean;
+  podobienstwo?: number | null;
+}
+
 export interface ChatRequest {
   message: string;
   userId: string;
@@ -84,6 +102,18 @@ export interface ChatRequest {
   /** How sure the caller is about who is speaking. Governs whether personal
    *  memory may be read and whether anything may be written to that profile. */
   identityConfidence?: IdentityConfidence;
+  /**
+   * Tura rozbita na wypowiedzi poszczególnych mówców.
+   *
+   * Ustawiane tylko wtedy, gdy w nagraniu był WIĘCEJ NIŻ JEDEN głos — przy jednym
+   * mówcy (96% tur) pole nie przychodzi i wszystko działa jak dotąd.
+   *
+   * SKĄD SIĘ WZIĘŁO. Satelita trzyma mikrofon otwarty, dopóki w pokoju ktoś mówi,
+   * więc po komendzie potrafi dokleić telewizor albo rozmowę domowników (zmierzone
+   * 16.09: 4% tur dobijało do sufitu 15 s). Wszystko to szło do modelu jako słowa
+   * jednej osoby — tej, którą biometria rozpoznała na POCZĄTKU nagrania.
+   */
+  wypowiedzi?: Wypowiedz[];
   /**
    * Nie wyciągaj faktów z tej wymiany.
    *

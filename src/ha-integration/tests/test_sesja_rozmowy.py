@@ -139,9 +139,15 @@ def zbuduj_const() -> None:
     tresc = (SKLADNIK / "const.py").read_text(encoding="utf-8")
     wzorzec = re.search(r"^SPEAKER_TAG_PATTERN\s*=\s*(.+)$", tresc, re.M)
     assert wzorzec, "SPEAKER_TAG_PATTERN zniknął z const.py"
+    # Tak samo jak wzorzec: czytane z PRAWDZIWEGO pliku, bo znacznik
+    # nierozpoznanego i wzorzec muszą do siebie pasować — gdyby test miał tu
+    # własną kopię, rozjazd przeszedłby na zielono.
+    znacznik = re.search(r"^ZNACZNIK_NIEROZPOZNANY\s*=\s*(.+)$", tresc, re.M)
+    assert znacznik, "ZNACZNIK_NIEROZPOZNANY zniknął z const.py"
     modul(
         "const",
         SPEAKER_TAG_PATTERN=eval(wzorzec.group(1)),  # noqa: S307 — własny plik repo
+        ZNACZNIK_NIEROZPOZNANY=eval(znacznik.group(1)),  # noqa: S307
         DOMAIN="home_mind",
         CONF_API_URL="api_url",
         CONF_API_TOKEN="api_token",
@@ -200,6 +206,7 @@ def agent(conv, prefer_local=False):
     # AttributeError daleko od miejsca, ktore je wprowadzilo.
     a._podobienstwa_mowcy = {}
     a._ostatnia_rozmowa = {}
+    a._podmiana = {}
     a._default_user_id = "default"
     a.entry = MagicMock()
     a.entry.options = {"prefer_local": prefer_local}

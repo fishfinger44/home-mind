@@ -101,6 +101,15 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           description:
             "Set true for services that RETURN data instead of just acting — e.g. weather.get_forecasts (weather forecast), calendar.get_events, todo.get_items. The returned data comes back in the tool result. Leave false/omit for normal control services (turn_on, etc.).",
         },
+        na_prosbe: {
+          type: "string",
+          description:
+            "Whose request this is. Set it ONLY when the user message is split into lines signed with names " +
+            "(\"Lech: turn off the projector\" / \"Władek: lights on\"), and set it to the name that signs " +
+            "THE LINE asking for this action. Restricted devices are checked against that person. " +
+            "If the line is signed as unrecognised, or you are unsure who asked, LEAVE THIS OUT — " +
+            "naming someone who did not ask for it is worse than leaving it empty.",
+        },
       },
       required: ["domain", "service"],
     },

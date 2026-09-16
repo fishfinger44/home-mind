@@ -34,6 +34,7 @@ from homeassistant.util import ulid
 
 from .const import (
     SPEAKER_TAG_PATTERN,
+    ZNACZNIK_NIEROZPOZNANY,
     DOMAIN,
     CONF_API_URL,
     CONF_API_TOKEN,
@@ -269,8 +270,20 @@ class HomeMindConversationAgent(ConversationEntity):
         # A speaker tag from voice-match has to come off before anything reads
         # the text: the built-in agent below would fail to match "[lech] zapal
         # światło" against any intent, and the model should never see it either.
-        message, speaker, podobienstwo = self._split_speaker_tag(user_input.text)
-        if speaker:
+        wypowiedzi = self._wzbogac_o_tozsamosci(
+            self._rozbierz_wypowiedzi(user_input.text)
+        )
+        # `speaker` i `podobienstwo` opisuja GLOWNEGO mowce tury — pierwszego
+        # rozpoznanego. Nie jest to dowolny wybor: w turach, ktore zbieraly tlo,
+        # komenda stala na POCZATKU nagrania (zmierzone 16.09 na turach dobijajacych
+        # do sufitu: „Odkurz dywan Tadzieniek. To ty jestes…"). Cala dotychczasowa
+        # logika sesji, mikrofonu i pamieci opiera sie na jednej tozsamosci tury i
+        # dostaje ja dalej; podzial na wypowiedzi dochodzi OBOK, nie zamiast.
+        glowna = next((w for w in wypowiedzi if w["mowca"]), None)
+        speaker = glowna["mowca"] if glowna else None
+        podobienstwo = glowna["podobienstwo"] if glowna else None
+        message = self._tekst_dla_modelu(wypowiedzi)
+        if speaker or len(wypowiedzi) > 1:
             user_input = replace(user_input, text=message)
 
         # Pusta transkrypcja konczy ture bez pytania modelu i bez otwierania
@@ -503,6 +516,11 @@ class HomeMindConversationAgent(ConversationEntity):
                 "is_voice": is_voice,
                 "user_name": user_name,
                 "identity_confidence": identity_confidence if rozpoznany else "unknown",
+                # Podzial na mowcow jedzie tylko wtedy, gdy naprawde bylo ich
+                # kilku. Przy jednym mowcy (96% tur) payload zostaje bajt w bajt
+                # taki jak dotad — nie ma po co uczyc serwera nowego pola dla
+                # przypadku, ktory niczego nie wnosi.
+                "wypowiedzi": wypowiedzi if len(wypowiedzi) > 1 else None,
             }
             if is_voice:
                 response_text, _tools_used = await self._call_api_stream(
@@ -1062,6 +1080,112 @@ class HomeMindConversationAgent(ConversationEntity):
         # An account with no person has nothing more stable to offer.
         return account_id
 
+    def _wzbogac_o_tozsamosci(self, wypowiedzi: list[dict]) -> list[dict]:
+        """Dopisz do kazdej wypowiedzi, kim jest jej mowca w tym domu.
+
+        Odcisk glosu niesie slug osoby (`lech`), a dalej potrzebny jest profil
+        pamieci i imie do pokazania. `_person_for_voiceprint` robi to dokladnym
+        dopasowaniem, wiec panel rejestracji i ta sciezka nie moga sie rozjechac.
+
+        🔑 Mowca, ktorego odcisk do NIKOGO nie pasuje, zostaje bez tozsamosci —
+        tak samo jak `[?]`. Znacznik jest tylko wskazowka od voice-matcha; dopiero
+        osoba w Ustawieniach → Osoby czyni z niego domownika z uprawnieniami.
+        """
+        for w in wypowiedzi:
+            w["userId"] = None
+            w["userName"] = None
+            w["rozpoznany"] = False
+            if not w["mowca"]:
+                continue
+            osoba = self._person_for_voiceprint(w["mowca"])
+            if osoba:
+                w["userId"], w["userName"] = osoba
+                w["rozpoznany"] = True
+            else:
+                _LOGGER.warning(
+                    "Odcisk '%s' nie pasuje do nikogo w Ustawieniach → Osoby; "
+                    "ta wypowiedź zostaje bez tożsamości",
+                    w["mowca"],
+                )
+        return wypowiedzi
+
+    @staticmethod
+    def _tekst_dla_modelu(wypowiedzi: list[dict]) -> str:
+        """Zloz tekst, ktory zobaczy model.
+
+        Jeden mowca — czysta tresc, dokladnie jak dotad: znacznik `[lech:0.87]`
+        nigdy nie mial trafiac do modelu ani do wbudowanego agenta HA, ktory nie
+        dopasowalby go do zadnej intencji.
+
+        Kilku mowcow — wypowiedzi PODPISANE imionami, bo inaczej model nie ma jak
+        odroznic polecenia od zdania z tla. Nierozpoznany jest opisany slownie, a
+        nie znacznikiem `[?]`: model ma rozumiec, ze to ktos nieznany, a nie
+        zobaczyc kod, ktory moglby przepisac do odpowiedzi.
+        """
+        if not wypowiedzi:
+            return ""
+        if len(wypowiedzi) == 1:
+            return wypowiedzi[0]["tekst"]
+        linie = []
+        for w in wypowiedzi:
+            kto = w.get("userName") or w["mowca"] or "ktoś nierozpoznany"
+            linie.append(f"{kto}: {w['tekst']}")
+        return "\n".join(linie)
+
+    @staticmethod
+    def _rozbierz_wypowiedzi(text: str) -> list[dict]:
+        """Rozbierz turę na wypowiedzi poszczególnych mówców.
+
+        SKAD SIE WZIELO. Do 16.09 tura byla jednym blokiem tekstu z jednym
+        znacznikiem — tym, kogo biometria rozpoznala na POCZATKU nagrania. Gdy
+        po komendzie Lecha mikrofon zbieral jeszcze telewizor albo rozmowe w
+        pokoju (zmierzone: 4% tur dobijalo do sufitu 15 s), wszystko to szlo do
+        modelu jako slowa Lecha. Teraz voice-match dzieli nagranie na mowcow i
+        podpisuje kazda wypowiedz osobno.
+
+        FORMAT. Kazda linia to `[imie:0.874] tekst` albo `[?] tekst`, gdzie `?`
+        znaczy „ktos, kogo nie rozpoznano". Tekst BEZ znacznika (rozmowa pisana,
+        starszy mostek) daje jedna wypowiedz bez mowcy — dzieki temu 96% tur,
+        ktore maja jednego mowce, zachowuje sie dokladnie jak dotad.
+
+        ⚠️ Linia bez znacznika WSROD podpisanych doklejana jest do poprzedniej
+        wypowiedzi, a nie zgłaszana jako osobna osoba: to zawijanie tekstu albo
+        wielolinijkowa wypowiedz jednego czlowieka, nie nowy mowca.
+        """
+        if not text:
+            return []
+
+        wypowiedzi: list[dict] = []
+        for linia in text.split("\n"):
+            if not linia.strip():
+                continue
+            match = re.match(SPEAKER_TAG_PATTERN, linia)
+            if not match:
+                if wypowiedzi:
+                    wypowiedzi[-1]["tekst"] += " " + linia.strip()
+                else:
+                    wypowiedzi.append(
+                        {"mowca": None, "podobienstwo": None, "tekst": linia.strip()}
+                    )
+                continue
+
+            podobienstwo = None
+            if match.group(2):
+                try:
+                    podobienstwo = float(match.group(2))
+                except ValueError:
+                    # Znacznik jest tylko wskazowka; jego uszkodzenie nie moze
+                    # kosztowac polecenia, ktore czlowiek wlasnie wypowiedzial.
+                    podobienstwo = None
+            mowca = match.group(1)
+            wypowiedzi.append({
+                "mowca": None if mowca == ZNACZNIK_NIEROZPOZNANY else mowca,
+                "podobienstwo": podobienstwo,
+                "tekst": linia[match.end():].strip(),
+            })
+
+        return [w for w in wypowiedzi if w["tekst"]]
+
     @staticmethod
     def _split_speaker_tag(text: str) -> tuple[str, str | None, float | None]:
         """Rozbierz "[lech:0.874] zapal światło" na polecenie, mowce i podobienstwo.
@@ -1125,6 +1249,7 @@ class HomeMindConversationAgent(ConversationEntity):
         is_voice: bool = False,
         user_name: str | None = None,
         identity_confidence: str = "certain",
+        wypowiedzi: list[dict] | None = None,
     ) -> tuple[str, list[str]]:
         """Call the Home Mind API. Zwraca odpowiedz i liste uzytych narzedzi.
 
@@ -1134,7 +1259,8 @@ class HomeMindConversationAgent(ConversationEntity):
         """
         url = f"{self._api_url}{API_CHAT_ENDPOINT}"
         payload = self._zbuduj_payload(
-            message, user_id, conversation_id, is_voice, user_name, identity_confidence
+            message, user_id, conversation_id, is_voice, user_name,
+            identity_confidence, wypowiedzi,
         )
         headers = self._naglowki_api()
 
@@ -1168,6 +1294,7 @@ class HomeMindConversationAgent(ConversationEntity):
         is_voice: bool = False,
         user_name: str | None = None,
         identity_confidence: str = "certain",
+        wypowiedzi: list[dict] | None = None,
     ) -> dict:
         """Ciało żądania — wspólne dla drogi zwykłej i strumieniowej.
 
@@ -1198,6 +1325,26 @@ class HomeMindConversationAgent(ConversationEntity):
         # by its own owner. "unknown" is still said out loud rather than left
         # out, because the server reads a missing value as "certain".
         payload["identityConfidence"] = identity_confidence
+
+        # Kto co powiedzial, gdy w turze bylo kilka glosow.
+        #
+        # 🔴 To pole niesie UPRAWNIENIA: serwer wykonuje polecenie w imieniu
+        # konkretnej osoby, wiec lista jest jednoczesnie spisem tych, w czyim
+        # imieniu wolno dzialac. Wypowiedz bez `userId` (glos z tla, odcisk
+        # pasujacy do nikogo) zostaje tu CELOWO — model ma widziec, ze ktos
+        # mowil, ale nie ma jak przypisac jej sprawstwa.
+        if wypowiedzi:
+            payload["wypowiedzi"] = [
+                {
+                    "tekst": w["tekst"],
+                    "mowca": w["mowca"],
+                    "userId": w["userId"],
+                    "userName": w["userName"],
+                    "rozpoznany": w["rozpoznany"],
+                    "podobienstwo": w["podobienstwo"],
+                }
+                for w in wypowiedzi
+            ]
 
         exposed = self._exposed_entities()
         if exposed is not None:
@@ -1231,6 +1378,7 @@ class HomeMindConversationAgent(ConversationEntity):
         is_voice: bool = False,
         user_name: str | None = None,
         identity_confidence: str = "certain",
+        wypowiedzi: list[dict] | None = None,
     ) -> tuple[str, list[str]]:
         """To samo co `_call_api`, ale kawałkami — żeby TTS ruszył wcześniej.
 
@@ -1246,7 +1394,8 @@ class HomeMindConversationAgent(ConversationEntity):
         """
         url = f"{self._api_url}{API_CHAT_STREAM_ENDPOINT}"
         payload = self._zbuduj_payload(
-            message, user_id, conversation_id, is_voice, user_name, identity_confidence
+            message, user_id, conversation_id, is_voice, user_name,
+            identity_confidence, wypowiedzi,
         )
         zebrane: list[str] = []
         narzedzia: list[str] = []

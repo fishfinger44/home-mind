@@ -113,7 +113,7 @@ export class LLMClient implements IChatEngine {
       ? this.topology.formatSection(exposed)
       : undefined;
     const systemPrompt = buildSystemPrompt(isVoice, customPrompt, deviceCheatSheet, homeLayout, request.webSearchLimit, rulesForPrompt());
-    const blokZmienny = buildVolatileBlock(factContents, request.userName, trustedIdentity);
+    const blokZmienny = buildVolatileBlock(factContents, request.userName, trustedIdentity, request.wypowiedzi);
 
     // 3. Load conversation history if we have a conversationId
     const messages: Anthropic.MessageParam[] = [];
@@ -171,7 +171,8 @@ export class LLMClient implements IChatEngine {
           } satisfies WebSearchSettings,
           trustedIdentity,
           request.userId,
-          kontekstPamieci
+          kontekstPamieci,
+          request.wypowiedzi
         );
         return {
           type: "tool_result" as const,

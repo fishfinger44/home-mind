@@ -77,7 +77,16 @@ SEARCH_BACKEND_LABELS = {
 # Znacznik mowcy dopisywany przez voice-match: `[lech] tekst` albo
 # `[lech:0.874] tekst`. Czesc po dwukropku to podobienstwo glosu i jest
 # OPCJONALNA — starszy mostek, ktory jej nie wysyla, ma dalej dzialac.
-SPEAKER_TAG_PATTERN = r"^\[([A-Za-z0-9_\- ]{1,32})(?::([0-9]*\.?[0-9]+))?\]\s+"
+SPEAKER_TAG_PATTERN = r"^\[(\?|[A-Za-z0-9_\- ]{1,32})(?::([0-9]*\.?[0-9]+))?\]\s+"
+
+# Znacznik mowcy, ktorego nie rozpoznano — dopisywany od 16.09, odkad
+# voice-match dzieli ture na wypowiedzi (diaryzacja Scribe'a + odciski glosu).
+#
+# 🔑 To CELOWO nie jest imie. Wzorzec imienia dopuszcza tylko litery, cyfry,
+# `_`, `-` i spacje, wiec `?` nie moze sie z zadnym domownikiem zrownac ani
+# przypadkiem, ani przez czyjes nazwanie osoby. Dzieki temu wypowiedz z tla
+# nigdy nie kupi uprawnien nalezacych do czlowieka.
+ZNACZNIK_NIEROZPOZNANY = "?"
 
 # A voiceprint is matched to a household member by name: the enrolment panel
 # names each voiceprint after the Home Assistant person it belongs to, so

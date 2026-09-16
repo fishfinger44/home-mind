@@ -182,3 +182,71 @@ describe("uprawnienia per domownik", () => {
     expect(checkRestriction("light", "turn_on", "light.kuchnia", rozpoznany, "wladek").allowed).toBe(true);
   });
 });
+
+describe("ustalSprawce — w czyim imieniu działa polecenie", () => {
+  const LECH = { mowca: "lech", userId: "u-lech", userName: "Lech", rozpoznany: true };
+  const WLADEK = { mowca: "wladek", userId: "u-wladek", userName: "Władek", rozpoznany: true };
+  const OBCY = { mowca: null, userId: null, userName: null, rozpoznany: false };
+
+  it("bez wskazania zostawia właściciela tury — zachowanie sprzed diaryzacji", async () => {
+    const { ustalSprawce } = await import("./restricted.js");
+    expect(ustalSprawce("u-lech", true, undefined, [LECH, WLADEK])).toEqual({
+      sprawca: "u-lech",
+      rozpoznany: true,
+    });
+  });
+
+  it("bez podziału na mówców wskazanie jest ignorowane", async () => {
+    // Pojedynczy mówca to 96% tur: nie ma listy, wobec której dałoby się
+    // cokolwiek sprawdzić, więc wskazanie nie może niczego zmienić.
+    const { ustalSprawce } = await import("./restricted.js");
+    expect(ustalSprawce("u-lech", true, "wladek", undefined)).toEqual({
+      sprawca: "u-lech",
+      rozpoznany: true,
+    });
+  });
+
+  it("wskazanie innego mówcy z tej tury przenosi sprawstwo na niego", async () => {
+    const { ustalSprawce } = await import("./restricted.js");
+    expect(ustalSprawce("u-lech", true, "wladek", [LECH, WLADEK])).toEqual({
+      sprawca: "u-wladek",
+      rozpoznany: true,
+    });
+  });
+
+  it("wskazać można po imieniu wyświetlanym, nie tylko po nazwie odcisku", async () => {
+    const { ustalSprawce } = await import("./restricted.js");
+    expect(ustalSprawce("u-lech", true, "Władek", [LECH, WLADEK]).sprawca).toBe("u-wladek");
+  });
+
+  it("🔴 wskazanie kogoś, kto w tej turze NIE mówił, odbiera uprawnienia", async () => {
+    // Sedno bramki. Gdyby model wskazał domownika, którego w nagraniu nie było,
+    // polecenie z telewizora dostałoby jego prawa do odkurzacza i rolet.
+    const { ustalSprawce } = await import("./restricted.js");
+    const wynik = ustalSprawce("u-lech", true, "zuza", [LECH, WLADEK]);
+    expect(wynik.rozpoznany).toBe(false);
+    expect(wynik.sprawca).toBeUndefined();
+    expect(wynik.powod).toContain("zuza");
+  });
+
+  it("🔴 wskazanie mówcy NIEROZPOZNANEGO też odbiera uprawnienia", async () => {
+    const { ustalSprawce } = await import("./restricted.js");
+    const wynik = ustalSprawce("u-lech", true, "?", [LECH, OBCY]);
+    expect(wynik.rozpoznany).toBe(false);
+    expect(wynik.sprawca).toBeUndefined();
+  });
+
+  it("wielkość liter i spacje we wskazaniu nie mają znaczenia", async () => {
+    const { ustalSprawce } = await import("./restricted.js");
+    expect(ustalSprawce("u-lech", true, "  WŁADEK  ".trim(), [LECH, WLADEK]).sprawca).toBe(
+      "u-wladek"
+    );
+  });
+
+  it("sprawstwo wskazuje na profil osoby, a nie na nazwę odcisku", async () => {
+    // `restricted.ts` szuka ograniczeń po kluczu osoby (`ustawienia.osoby[...]`),
+    // więc pomyłka na tym poziomie po cichu otwierałaby zamknięte grupy.
+    const { ustalSprawce } = await import("./restricted.js");
+    expect(ustalSprawce(undefined, false, "lech", [LECH]).sprawca).toBe("u-lech");
+  });
+});

@@ -263,7 +263,7 @@ export class GeminiChatEngine implements IChatEngine {
       request.webSearchLimit,
       rulesForPrompt()
     );
-    const blokZmienny = buildVolatileBlock(factContents, request.userName, trustedIdentity);
+    const blokZmienny = buildVolatileBlock(factContents, request.userName, trustedIdentity, request.wypowiedzi);
 
     const webSearchEnabled = (request.webSearchLimit ?? 1) > 0;
     const searchMode = request.webSearchMode ?? this.config.webSearchMode ?? "grounding";
@@ -519,7 +519,7 @@ export class GeminiChatEngine implements IChatEngine {
           continue;
         }
 
-        const result = await handleToolCall(this.ha, fc.name, fc.args ?? {}, searchSettings, trustedIdentity, userId, kontekstPamieci);
+        const result = await handleToolCall(this.ha, fc.name, fc.args ?? {}, searchSettings, trustedIdentity, userId, kontekstPamieci, request.wypowiedzi);
         responseParts.push({
           functionResponse: {
             name: fc.name,

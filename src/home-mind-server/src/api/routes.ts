@@ -49,6 +49,27 @@ const ChatRequestSchema = z.object({
   memoryTokenLimit: z.number().int().min(0).max(8000).optional(),
   userName: z.string().trim().min(1).max(100).optional(),
   identityConfidence: z.enum(["certain", "asserted", "inferred", "unknown"]).optional(),
+  /**
+   * Kto co powiedział, gdy w jednej turze odezwało się kilka osób.
+   *
+   * 🔴 To pole NIESIE UPRAWNIENIA — na jego podstawie `call_service` działa w
+   * czyimś imieniu. Dlatego wchodzi tą samą drogą co `identityConfidence`, czyli
+   * przez bramkę adresową (`API_ALLOWLIST`): wołający może tu napisać, co chce, a
+   * zaufanie bierze się z tego, KTO woła, nie z treści.
+   */
+  wypowiedzi: z
+    .array(
+      z.object({
+        tekst: z.string(),
+        mowca: z.string().nullable().optional(),
+        userId: z.string().nullable().optional(),
+        userName: z.string().nullable().optional(),
+        rozpoznany: z.boolean().optional(),
+        podobienstwo: z.number().nullable().optional(),
+      })
+    )
+    .max(24)
+    .optional(),
   webSearchMode: z
     .enum(["grounding", "gemini_micro", "tavily", "searxng", "brave"])
     .optional(),

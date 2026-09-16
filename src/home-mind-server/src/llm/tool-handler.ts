@@ -7,7 +7,8 @@ import { filterFacts, SERVICE_PROCEDURE_REASON } from "../memory/fact-patterns.j
 import { skipExtraction } from "../memory/extraction-gate.js";
 import { zapiszPominiecie } from "../memory/pominiete.js";
 import { suggestRule } from "../rules/store.js";
-import { checkRestriction } from "./restricted.js";
+import { checkRestriction, ustalSprawce } from "./restricted.js";
+import type { Wypowiedz } from "./interface.js";
 import { envOrUndefined } from "../env.js";
 import { zaplanujTrase } from "../trasy/klient.js";
 import { sprawdzOdjazdy } from "../trasy/odjazdy.js";
@@ -489,7 +490,17 @@ export async function handleToolCall(
    * in, and the tool says so instead of quietly answering "nothing found" —
    * see `sprawdzPamiec`.
    */
-  pamiec?: KontekstPamieci
+  pamiec?: KontekstPamieci,
+  /**
+   * Tura rozbita na wypowiedzi, gdy mówiło kilka osób.
+   *
+   * 🔴 To jest LISTA UPRAWNIONYCH, nie tylko kontekst. Model wskazuje w
+   * `call_service`, w czyim imieniu działa (`na_prosbe`), a serwer sprawdza to
+   * wskazanie WŁAŚNIE TUTAJ. Bez tej weryfikacji model mógłby przypisać
+   * polecenie z tła domownikowi i kupić mu jego uprawnienia — a to jedyna
+   * bramka chroniąca odkurzacz, rolety i klimatyzację.
+   */
+  wypowiedzi?: Wypowiedz[]
 ): Promise<unknown> {
   const start = Date.now();
   console.log(`[tool] ${toolName} called with: ${JSON.stringify(input)}`);
@@ -584,16 +595,45 @@ export async function handleToolCall(
           celEncja = undefined;
         }
 
+        // W czyim imieniu wykonujemy to polecenie.
+        //
+        // Domyślnie: właściciel tury, czyli dokładnie jak przed 16.09. Gdy w
+        // turze mówiło kilka osób, model może wskazać kogo innego — ale tylko
+        // spośród TYCH, KTÓRE W TEJ TURZE NAPRAWDĘ MÓWIŁY I ZOSTAŁY ROZPOZNANE.
+        // Wskazanie kogokolwiek innego nie jest błędem modelu do wybaczenia,
+        // tylko próbą wydania uprawnień, których nikt nie potwierdził — i kończy
+        // się zejściem do praw głosu nierozpoznanego.
+        // Tak samo jak `return_response` niżej: model wkłada to pole raz na górę,
+        // raz do `data`. Usuwamy je z `data`, bo Home Assistant odbiłby wywołanie
+        // z obcym polem — to nie jest argument usługi, tylko nasza adnotacja.
+        const wskazanie =
+          (typeof input.na_prosbe === "string" && input.na_prosbe) ||
+          (typeof wyw.data.na_prosbe === "string" && wyw.data.na_prosbe) ||
+          undefined;
+        delete wyw.data.na_prosbe;
+
+        // W czyim imieniu działamy. Sprawdzenie wskazania modelu siedzi w
+        // `ustalSprawce` — osobno, bo to bramka uprawnień i ma własne testy.
+        const { sprawca, rozpoznany: sprawcaRozpoznany, powod } = ustalSprawce(
+          mowca,
+          speakerRecognised,
+          wskazanie ? wskazanie.trim() : undefined,
+          wypowiedzi
+        );
+        if (powod) {
+          console.log(`[tool] call_service: ${powod} — prawa głosu nierozpoznanego`);
+        }
+
         const zakaz = checkRestriction(
           wyw.domain,
           wyw.service,
           celEncja,
-          speakerRecognised,
-          mowca
+          sprawcaRozpoznany,
+          sprawca
         );
         if (!zakaz.allowed) {
           console.log(
-            `[tool] call_service ODMOWA (${speakerRecognised ? `bez uprawnień: ${mowca ?? "?"}` : "nierozpoznany glos"}): ${wyw.domain}.${wyw.service} ${celEncja ?? ""}`
+            `[tool] call_service ODMOWA (${sprawcaRozpoznany ? `bez uprawnień: ${sprawca ?? "?"}` : "nierozpoznany glos"}): ${wyw.domain}.${wyw.service} ${celEncja ?? ""}`
           );
           result = { error: zakaz.reason };
           break;
@@ -740,6 +780,14 @@ export interface WywolanieUslugi {
   domain?: string;
   service?: string;
   data: Record<string, unknown>;
+  /**
+   * W czyim imieniu model wykonuje to polecenie, gdy w turze mówiło kilka osób.
+   *
+   * ⚠️ To WSKAZANIE, nie fakt — serwer sprawdza je wobec listy tych, którzy w
+   * tej turze naprawdę mówili i zostali rozpoznani (`handleToolCall`). Nie jest
+   * argumentem usługi i nie może trafić do Home Assistanta.
+   */
+  na_prosbe?: string;
 }
 
 /**

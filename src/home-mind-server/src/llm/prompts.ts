@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import type { Wypowiedz } from "./interface.js";
 
 // Default identity when no custom prompt is provided
 const DEFAULT_IDENTITY = `You are a helpful smart home assistant with persistent memory. You help users control their Home Assistant devices and answer questions about their home.`;
@@ -324,10 +325,41 @@ ${speaker}. Use their name naturally — when greeting them, or when it makes an
  * where they were, but the recalled facts have moved — if the assistant starts
  * ignoring what it remembers, this is the first place to look.
  */
+/**
+ * Wyjaśnienie dla modelu, gdy w jednej turze odezwało się kilka osób.
+ *
+ * 🔴 Po co w ogóle: satelita trzyma mikrofon otwarty, dopóki w pokoju ktoś mówi,
+ * więc po komendzie potrafi dokleić telewizor albo rozmowę domowników. Bez tego
+ * akapitu model widzi kilka podpisanych linii i nie wie, że wolno mu część z nich
+ * zignorować — a właśnie o to chodzi.
+ *
+ * ⛔ Pusty string, gdy mówił jeden człowiek (96% tur): dokładanie do promptu
+ * reguły dla sytuacji, która nie zachodzi, tylko zabiera uwagę modelu.
+ */
+function sekcjaWypowiedzi(wypowiedzi?: Wypowiedz[]): string {
+  if (!wypowiedzi || wypowiedzi.length < 2) return "";
+  const znani = wypowiedzi
+    .filter((w) => w.rozpoznany && (w.userName || w.mowca))
+    .map((w) => w.userName || w.mowca);
+  const lista = [...new Set(znani)].join(", ") || "nikogo";
+  return `## Kilka osób w jednej turze
+
+Wiadomość jest podzielona na linie podpisane imieniem. Rozpoznani w tej turze: ${lista}.
+
+- Odpowiadaj na to, co skierowano DO CIEBIE. Reszta to rozmowa w pokoju albo telewizor — wolno ją pominąć BEZ KOMENTARZA.
+- Nie odnoś się do zdań podpisanych jako nierozpoznane, chyba że wprost o coś proszą i jest to nieszkodliwe.
+- Gdy wykonujesz polecenie, ustaw \`na_prosbe\` w \`call_service\` na imię z TEJ linii, która o to prosi. Sprzęt z ograniczeniami sprawdzany jest właśnie po tym imieniu.
+- Nie zgadujesz, kto prosił — wtedy zostaw \`na_prosbe\` puste. Wskazanie kogoś, kto o to nie prosił, jest gorsze niż brak wskazania.
+- Urywek bez sensu (strzęp zdania z tła) po prostu zignoruj. Nie pytaj, co ktoś miał na myśli.
+
+`;
+}
+
 export function buildVolatileBlock(
   facts: string[],
   speaker?: string,
-  trusted: boolean = true
+  trusted: boolean = true,
+  wypowiedzi?: Wypowiedz[]
 ): string {
   const factsText =
     facts.length > 0 ? facts.map((f) => `- ${f}`).join("\n") : "No memories yet.";
@@ -336,7 +368,7 @@ export function buildVolatileBlock(
 
   return `${speakerSection(speaker, trusted)}
 
-## Current Context:
+${sekcjaWypowiedzi(wypowiedzi)}## Current Context:
 - Date/Time: ${dateTimeStr}
 - ISO Timestamp (now, UTC): ${isoTimestamp}
 - Local midnight today (UTC): ${localMidnightIso}  ← use this as start_time for "today" history queries, NOT 00:00:00Z

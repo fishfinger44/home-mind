@@ -181,7 +181,7 @@ export class OpenAIChatEngine implements IChatEngine {
       ? this.topology.formatSection(exposed)
       : undefined;
     const systemPrompt = buildSystemPromptText(isVoice, customPrompt, deviceCheatSheet, homeLayout, request.webSearchLimit, rulesForPrompt());
-    const blokZmienny = buildVolatileBlock(factContents, request.userName, trustedIdentity);
+    const blokZmienny = buildVolatileBlock(factContents, request.userName, trustedIdentity, request.wypowiedzi);
 
     // Prompt-size telemetry (sections that dominate the input tokens).
     const approxTok = (s?: string) => Math.ceil((s?.length ?? 0) / 4);
@@ -258,7 +258,7 @@ export class OpenAIChatEngine implements IChatEngine {
         const toolResult = await handleToolCall(this.ha, tc.function.name, args, {
           mode: request.webSearchMode ?? this.config.webSearchMode,
           searchApiKey: this.config.geminiSearchApiKey,
-        } satisfies WebSearchSettings, trustedIdentity, request.userId, kontekstPamieci);
+        } satisfies WebSearchSettings, trustedIdentity, request.userId, kontekstPamieci, request.wypowiedzi);
         return {
           role: "tool" as const,
           tool_call_id: tc.id,

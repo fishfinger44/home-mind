@@ -277,3 +277,50 @@ export function checkRestriction(
         "Powiedz to użytkownikowi wprost i nie szukaj innej drogi do tego samego urządzenia.",
   };
 }
+
+/**
+ * W czyim imieniu wykonać polecenie, gdy w turze mówiło kilka osób.
+ *
+ * 🔴 TO JEST BRAMKA UPRAWNIEŃ, nie wygoda. Model widzi podpisane wypowiedzi
+ * („Lech: wyłącz projektor / Władek: zapal światło") i sam wskazuje, czyją
+ * prośbę realizuje. Gdyby serwer brał to wskazanie na wiarę, pomyłka modelu
+ * wydałaby komuś cudze uprawnienia — a to jedyna rzecz stojąca między głosem z
+ * telewizora a odkurzaczem.
+ *
+ * Dlatego wskazanie jest SPRAWDZANE wobec listy tych, którzy w tej turze
+ * naprawdę mówili I zostali rozpoznani. Wskazanie kogokolwiek spoza tej listy
+ * nie jest traktowane jak pomyłka do naprawienia, tylko jako brak podstawy —
+ * i schodzi do praw głosu nierozpoznanego.
+ *
+ * @param mowca właściciel tury: kto ją otworzył (zachowanie sprzed 16.09)
+ * @param naProsbe kogo wskazał model (`na_prosbe` w `call_service`)
+ */
+export function ustalSprawce(
+  mowca: string | undefined,
+  speakerRecognised: boolean,
+  naProsbe: string | undefined,
+  wypowiedzi?: { mowca?: string | null; userId?: string | null; userName?: string | null; rozpoznany?: boolean }[]
+): { sprawca: string | undefined; rozpoznany: boolean; powod?: string } {
+  // Bez wskazania albo bez podziału na mówców wszystko zostaje po staremu.
+  if (!naProsbe || !wypowiedzi?.length) {
+    return { sprawca: mowca, rozpoznany: speakerRecognised };
+  }
+
+  const szukane = naProsbe.trim().toLowerCase();
+  const pasuje = wypowiedzi.find(
+    (w) =>
+      w.rozpoznany === true &&
+      [w.userId, w.mowca, w.userName].some(
+        (k) => typeof k === "string" && k.toLowerCase() === szukane
+      )
+  );
+
+  if (!pasuje) {
+    return {
+      sprawca: undefined,
+      rozpoznany: false,
+      powod: `wskazano '${naProsbe}', ale nikt taki nie mówił w tej turze`,
+    };
+  }
+  return { sprawca: pasuje.userId ?? pasuje.mowca ?? undefined, rozpoznany: true };
+}
