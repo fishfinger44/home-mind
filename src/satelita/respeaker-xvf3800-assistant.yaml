@@ -1417,8 +1417,9 @@ external_components:
     components:
       - respeaker_xvf3800
       - aic3104
-      # 🔴 Lokalna kopia RDZENIOWEGO komponentu ESPHome, odbita 19.08.2026 z wersji
-      # w dodatku. Jedyna zmiana: `start_playback_timeout_` 2000 -> 8000 ms.
+      # 🔴 Lokalna kopia RDZENIOWEGO komponentu ESPHome, odbita 19.08.2026 z 2026.7.4,
+      # ponownie 19.09.2026 z 2026.9.0 (stara kopia gubila probki mikrofonu:
+      # 2026.9 ponawia odrzucone send_message, 2026.7.4 je ignorowal). Jedyna zmiana: `start_playback_timeout_` 2000 -> 8000 ms.
       # Powód i pomiary — w komentarzu przy samej funkcji.
       # ⚠️ Ta kopia PRZESŁANIA komponent z obrazu, więc aktualizacja ESPHome NIE
       # dotknie tego pliku: po podniesieniu dodatku trzeba odbić go ponownie
