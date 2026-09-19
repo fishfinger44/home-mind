@@ -111,6 +111,11 @@ describe("buildVolatileBlock", () => {
 
     expect(block).toContain("not an identification");
   });
+
+  it("gives the spoken time only to voice turns", () => {
+    expect(buildVolatileBlock([], "Lech", true, undefined, true)).toContain("Time spoken (PL");
+    expect(buildVolatileBlock([], "Lech", true)).not.toContain("Time spoken");
+  });
 });
 
 describe("speakerSection", () => {

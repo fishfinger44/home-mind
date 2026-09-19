@@ -21,6 +21,7 @@
 
 import { envNumber, envOrUndefined } from "../env.js";
 import { uprosc } from "../memory/tekst.js";
+import { numerSlownie, oGodzinieSlownie } from "../mowa.js";
 
 const BAZA = "https://www.wroclaw.pl/komunikacja";
 
@@ -55,12 +56,16 @@ export interface OdjazdyKierunku {
   kierunek: string;
   przystanek: string;
   najblizsze: string[];
+  /** Te same godziny slowami, z przyimkiem ("o dziewiętnastej czterdzieści osiem"). */
+  najblizsze_mowa: string[];
   link: string;
   uwaga?: string;
 }
 
 export interface WynikOdjazdow {
   linia: string;
+  /** "sto jedenaście" - model odmienial numer sam i mowil "autobus sto jedenastu". */
+  linia_mowa?: string;
   przystanek: string;
   dzien: string;
   zrodlo: string;
@@ -240,6 +245,7 @@ export async function sprawdzOdjazdy(
       kierunek: slup.kierunek.replace(/-/g, " "),
       przystanek,
       najblizsze: nastepne,
+      najblizsze_mowa: nastepne.map((g) => oGodzinieSlownie(g) ?? g),
       link: slup.sciezka,
       ...(nastepne.length === 0
         ? {
@@ -263,5 +269,5 @@ export async function sprawdzOdjazdy(
       kierunki.map((k) => `${k.kierunek}: ${k.najblizsze.join(", ") || "brak"}`).join(" | ")
   );
 
-  return { linia, przystanek, dzien, zrodlo: ZRODLO, kierunki };
+  return { linia, linia_mowa: numerSlownie(linia), przystanek, dzien, zrodlo: ZRODLO, kierunki };
 }

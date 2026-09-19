@@ -181,7 +181,7 @@ export class OpenAIChatEngine implements IChatEngine {
       ? this.topology.formatSection(exposed)
       : undefined;
     const systemPrompt = buildSystemPromptText(isVoice, customPrompt, deviceCheatSheet, homeLayout, request.webSearchLimit, rulesForPrompt());
-    const blokZmienny = buildVolatileBlock(factContents, request.userName, trustedIdentity, request.wypowiedzi);
+    const blokZmienny = buildVolatileBlock(factContents, request.userName, trustedIdentity, request.wypowiedzi, isVoice);
 
     // Prompt-size telemetry (sections that dominate the input tokens).
     const approxTok = (s?: string) => Math.ceil((s?.length ?? 0) / 4);

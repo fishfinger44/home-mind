@@ -263,7 +263,7 @@ export class GeminiChatEngine implements IChatEngine {
       request.webSearchLimit,
       rulesForPrompt()
     );
-    const blokZmienny = buildVolatileBlock(factContents, request.userName, trustedIdentity, request.wypowiedzi);
+    const blokZmienny = buildVolatileBlock(factContents, request.userName, trustedIdentity, request.wypowiedzi, isVoice);
 
     const webSearchEnabled = (request.webSearchLimit ?? 1) > 0;
     const searchMode = request.webSearchMode ?? this.config.webSearchMode ?? "grounding";

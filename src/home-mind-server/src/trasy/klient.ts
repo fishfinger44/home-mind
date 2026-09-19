@@ -20,6 +20,7 @@
  */
 
 import { envNumber, envOrUndefined } from "../env.js";
+import { oGodzinieSlownie } from "../mowa.js";
 import { adresDomu, adresMiejsca } from "./miejsca.js";
 import { ileWariantow, kluczApi, limitDzienny } from "./ustawienia.js";
 import { limitWyczerpany, policzWywolanie, zuzyteDzis } from "./uzycie.js";
@@ -147,57 +148,13 @@ export function godzina(iso: string | undefined): string | undefined {
   });
 }
 
-// Godziny mowione: liczebniki po polsku.
-//
-// Model potrafi zamienic "23:45" na slowa, ale myli przypadek minut - mowi
-// "o dwudziestej trzeciej CZTERDZIESTEJ piec" (porzadkowy) zamiast
-// "czterdziesci piec" (glowny). Zmierzone na zywo dwa razy z rzedu, wiec to
-// nie przypadek. Odmiana jest regularna, wiec robi ja kod, a nie model.
-//
-// Godzina stoi w miejscowniku, bo forma trafia do zdania po przyimku "o"
-// ("o dwudziestej trzeciej"); minuty zostaja w mianowniku liczebnika glownego.
-const GODZINY_MIEJSCOWNIK = [
-  "zerowej", "pierwszej", "drugiej", "trzeciej", "czwartej", "piątej",
-  "szóstej", "siódmej", "ósmej", "dziewiątej", "dziesiątej", "jedenastej",
-  "dwunastej", "trzynastej", "czternastej", "piętnastej", "szesnastej",
-  "siedemnastej", "osiemnastej", "dziewiętnastej", "dwudziestej",
-  "dwudziestej pierwszej", "dwudziestej drugiej", "dwudziestej trzeciej",
-];
-
-// Rodzaj zenski, bo minuty sa zenskie: "dwie", nie "dwa". "jeden" sie tu nie
-// odmienia ("dwadziescia jeden minut"), wiec zostaje jak jest.
-const JEDNOSCI = [
-  "", "jeden", "dwie", "trzy", "cztery", "pięć", "sześć", "siedem", "osiem", "dziewięć",
-];
-const NASTKI = [
-  "dziesięć", "jedenaście", "dwanaście", "trzynaście", "czternaście",
-  "piętnaście", "szesnaście", "siedemnaście", "osiemnaście", "dziewiętnaście",
-];
-const DZIESIATKI = ["", "", "dwadzieścia", "trzydzieści", "czterdzieści", "pięćdziesiąt"];
-
-function minutySlownie(m: number): string {
-  if (m < 10) return `zero ${JEDNOSCI[m]}`;
-  if (m < 20) return NASTKI[m - 10];
-  const d = Math.floor(m / 10);
-  const j = m % 10;
-  return j === 0 ? DZIESIATKI[d] : `${DZIESIATKI[d]} ${JEDNOSCI[j]}`;
-}
-
 /**
  * ISO -> "o dwudziestej trzeciej czterdzieści pięć" (gotowe do wypowiedzenia).
- *
- * Przyimek jest w srodku celowo: bez niego model musialby sam dobrac przypadek
- * i wrocilibysmy do bledu, ktory ta funkcja naprawia. Pelna godzina nie dostaje
- * minut, zeby nie brzmiala "osiemnasta zero zero".
+ * Odmiana siedzi w ../mowa.ts - wspolna z rozkladem jazdy i promptem.
  */
 export function godzinaSlownie(iso: string | undefined): string | undefined {
   const cyfry = godzina(iso);
-  if (!cyfry) return undefined;
-  const [g, m] = cyfry.split(":").map(Number);
-  if (!Number.isInteger(g) || !Number.isInteger(m) || g > 23 || m > 59) return undefined;
-  return m === 0
-    ? `o ${GODZINY_MIEJSCOWNIK[g]}`
-    : `o ${GODZINY_MIEJSCOWNIK[g]} ${minutySlownie(m)}`;
+  return cyfry ? oGodzinieSlownie(cyfry) : undefined;
 }
 
 /** ISO -> milisekundy, do porownywania tras. `undefined`, gdy Google nie podal. */

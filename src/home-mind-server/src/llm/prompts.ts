@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Wypowiedz } from "./interface.js";
+import { godzinaMianownik } from "../mowa.js";
 
 // Default identity when no custom prompt is provided
 const DEFAULT_IDENTITY = `You are a helpful smart home assistant with persistent memory. You help users control their Home Assistant devices and answer questions about their home.`;
@@ -359,18 +360,24 @@ export function buildVolatileBlock(
   facts: string[],
   speaker?: string,
   trusted: boolean = true,
-  wypowiedzi?: Wypowiedz[]
+  wypowiedzi?: Wypowiedz[],
+  isVoice: boolean = false
 ): string {
   const factsText =
     facts.length > 0 ? facts.map((f) => `- ${f}`).join("\n") : "No memories yet.";
 
   const { display: dateTimeStr, iso: isoTimestamp, localMidnightIso } = formatDateTimeWithOffset();
+  // Tylko w mowie: model odmienial biezaca godzine sam i wyszlo "czterdziestaczy piec".
+  const teraz = new Date().toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
+  const mowionaGodzina = isVoice
+    ? `\n- Time spoken (PL, say verbatim when asked the time): ${godzinaMianownik(teraz) ?? teraz}`
+    : "";
 
   return `${speakerSection(speaker, trusted)}
 
 ${sekcjaWypowiedzi(wypowiedzi)}## Current Context:
 - Date/Time: ${dateTimeStr}
-- ISO Timestamp (now, UTC): ${isoTimestamp}
+- ISO Timestamp (now, UTC): ${isoTimestamp}${mowionaGodzina}
 - Local midnight today (UTC): ${localMidnightIso}  ← use this as start_time for "today" history queries, NOT 00:00:00Z
 
 ${MEMORY_HEADING}

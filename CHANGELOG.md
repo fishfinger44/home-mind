@@ -4,6 +4,13 @@ All notable changes to Home Mind are documented here.
 
 ## [Unreleased]
 
+### Fixed (mowa.ts, trasy/odjazdy.ts, llm/prompts.ts)
+- **Rozkład jazdy i bieżąca godzina znów czytane poprawnie.** 19.09 na satelicie: *„autobus sto jedenastu… o dziewiętnastej czterdziestej osiem"*, *„o dwudziestej dwunastej"* (20:12), a na pytanie o godzinę *„dziewiętnasta czterdziestaczy pięć"*. Ten sam błąd, który 11.08 naprawiono dla `zaplanuj_trase` — ale `odjazdy` powstało później i oddawało same cyfry (`"19:48"`), więc odmianę znów robił model.
+- Liczebniki przeniesione z `trasy/klient.ts` do wspólnego `mowa.ts`: `oGodzinieSlownie` („o dziewiętnastej czterdzieści osiem"), `godzinaMianownik` („dziewiętnasta czterdzieści pięć") i `numerSlownie` („sto jedenaście"). `godzinaSlownie` dla tras korzysta z tego samego kodu.
+- `odjazdy` niesie teraz `najblizsze_mowa` obok cyfrowych `najblizsze` oraz `linia_mowa`; reguła „pole `_mowa` mów dosłownie" z `VOICE_INSTRUCTIONS` obejmuje je bez zmian w prompcie.
+- Blok zmienny promptu dostaje gotową mówioną godzinę **tylko w turach głosowych** (`buildVolatileBlock(..., isVoice)`), więc tury tekstowe nie płacą ani tokena.
+- Zweryfikowane na żywo po wdrożeniu: *„Dziewiętnasta pięćdziesiąt trzy."* oraz *„autobusu sto jedenaście… o dwudziestej dwanaście… o dwudziestej jedenaście"*.
+
 ### Fixed (ha/client.ts, llm/tool-handler.ts, ha-config/scripts.yaml)
 - **Asystent nie melduje już, że gra, gdy nic nie zagrało.** 16.09 Lech dwa razy poprosił o utwór „Na tapczanie siedzi leń"; asystent oba razy potwierdził odtwarzanie, a Denon milczał. Skrypt `zagraj_muzyke` zachował się **wzorowo**: docelowa encja Music Assistant była `unavailable` od 13:25, więc bezpiecznik przerwał go po **3 i 4 ms** — co widać w logbooku HA. Zawiodła droga powrotna.
 - 🔑 **`POST /api/services/script/<nazwa>` odpowiada 200 także wtedy, gdy skrypt przerwał się na `stop ... error: true`** (zmierzone 16.09 na HA 2026.9, powtórzone curlem). Klient HA rzuca wyjątek wyłącznie przy statusie nie-OK, więc `call_service` oddawał modelowi coś nieodróżnialnego od sukcesu. **Cała weryfikacja dopisana do skryptu 11.08 ginęła na granicy REST-u** — skrypt sprawdzał, czy ruszyło, i nie miał jak tego powiedzieć.
