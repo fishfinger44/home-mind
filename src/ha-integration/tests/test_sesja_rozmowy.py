@@ -287,34 +287,42 @@ async def main() -> int:
     r = await uruchom(conv, a, "[lech:0.41] a teraz zgaś", cid)
     sprawdz("odpowiedź jest", r.response.speech == "Zrobione.")
     sprawdz("mikrofon dalej otwarty", r.continue_conversation is True)
-    sprawdz("licznik obcych wyzerowany", a._stan_rozmowy[cid]["obce"] == 0)
+    sprawdz("właściciel bez zmian", a._stan_rozmowy[cid]["wlasciciel"] == "lech")
 
-    print("\n3. Tło (bez znacznika) w cudzej sesji — cisza, mikrofon zostaje")
-    r = await uruchom(conv, a, "wyłącz wszystko w domu", cid)
-    sprawdz("CISZA (pusta odpowiedź)", r.response.speech == "")
-    sprawdz("mikrofon otwarty — właściciel może powtórzyć", r.continue_conversation is True)
-    sprawdz("obce = 1", a._stan_rozmowy[cid]["obce"] == 1)
+    print("\n3. Krótkie „tak” BEZ znacznika w trwającej sesji — przechodzi")
+    # Łatka 05.09: krótka wypowiedź daje słaby odcisk głosu i przychodzi bez
+    # znacznika mówcy. Brak pewnej identyfikacji to NIE jest dowód na obcego.
+    r = await uruchom(conv, a, "tak", cid)
+    sprawdz("odpowiedź jest", r.response.speech == "Zrobione.")
+    sprawdz("mikrofon otwarty", r.continue_conversation is True)
+    sprawdz("właściciel bez zmian", a._stan_rozmowy[cid]["wlasciciel"] == "lech")
 
-    print("\n4. Inny ROZPOZNANY domownik w cudzej sesji — też cisza")
+    print("\n4. Drugi domownik w TRWAJĄCEJ rozmowie — ten sam wątek (20.09)")
+    # Decyzja Lecha 20.09: rozmowa jest ciągła niezależnie od tego, ile osób
+    # w niej uczestniczy. Zuza nie zakłada nowej sesji — dołącza do tej samej.
     r = await uruchom(conv, a, "[zuza:0.55] otwórz rolety", cid)
-    sprawdz("CISZA", r.response.speech == "")
-    sprawdz("obce = 2", a._stan_rozmowy[cid]["obce"] == 2)
+    sprawdz("odpowiedź jest (koniec ciszy)", r.response.speech == "Zrobione.")
+    sprawdz("TEN SAM wątek", r.conversation_id == cid)
+    sprawdz("mikrofon otwarty", r.continue_conversation is True)
+    sprawdz("mówi teraz zuza", a._stan_rozmowy[cid]["wlasciciel"] == "zuza")
 
-    print("\n5. Trzecia obca tura z rzędu — mikrofon się zamyka")
-    r = await uruchom(conv, a, "coś z telewizora", cid)
-    sprawdz("CISZA", r.response.speech == "")
-    sprawdz("mikrofon ZAMKNIĘTY", r.continue_conversation is False)
-    sprawdz("stan posprzątany", cid not in a._stan_rozmowy)
+    print("\n5. Lech wraca w tej samej rozmowie — wątek dalej wspólny")
+    r = await uruchom(conv, a, "[lech:0.44] a teraz zgaś", cid)
+    sprawdz("odpowiedź jest", r.response.speech == "Zrobione.")
+    sprawdz("TEN SAM wątek", r.conversation_id == cid)
+    sprawdz("mówi znowu lech", a._stan_rozmowy[cid]["wlasciciel"] == "lech")
 
-    print("\n6. Właściciel wraca przed limitem — licznik się zeruje")
+    print("\n6. Drugi domownik PO CISZY dłuższej niż okno — nowa sesja")
+    # Przypadek z 28.08 zostaje bez zmian: wybudzenie po dłuższej przerwie nie
+    # dziedziczy cudzego wątku.
     a = agent(conv)
-    r = await uruchom(conv, a, "[lech:0.62] zapal światło")
-    cid = r.conversation_id
-    await uruchom(conv, a, "szum z pokoju", cid)
-    sprawdz("obce = 1", a._stan_rozmowy[cid]["obce"] == 1)
-    r = await uruchom(conv, a, "[lech:0.44] zgaś", cid)
-    sprawdz("polecenie wykonane", r.response.speech == "Zrobione.")
-    sprawdz("obce z powrotem 0", a._stan_rozmowy[cid]["obce"] == 0)
+    cid = (await uruchom(conv, a, "[lech:0.62] zapal światło")).conversation_id
+    klucz = "bez-urzadzenia"
+    stary_cid, _, mowca = a._ostatnia_rozmowa[klucz]
+    a._ostatnia_rozmowa[klucz] = (stary_cid, 0.0, mowca)   # udajemy długą ciszę
+    r = await uruchom(conv, a, "[zuza:0.55] otwórz rolety", cid)
+    sprawdz("zuza dostaje WŁASNY wątek", r.conversation_id != cid)
+    sprawdz("stary wątek posprzątany", cid not in a._stan_rozmowy)
 
     print("\n7. Nierozpoznana pierwsza tura — wykonuje, ale zamyka sesję")
     a = agent(conv)

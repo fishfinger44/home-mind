@@ -104,25 +104,6 @@ CONTINUE_CONVERSATION = True
 # wybudzenie. Ta jedna tura zostaje bez ochrony — jest tez najbezpieczniejsza,
 # bo beam wlasnie zatrzasnal sie na kierunku, z ktorego padlo slowo budzace.
 
-# Ile obcych tur z rzedu wolno przeczekac, zanim mikrofon sie zamknie.
-#
-# Ignorowanie jest tanie po stronie modelu (zero tokenow, zero akcji), ale NIE po
-# stronie ASR: obca tura zostaje najpierw nagrana i przetranskrybowana, dopiero
-# potem tu odrzucona. Limit jest wiec po to, zeby gadajacy telewizor ani nie
-# trzymal mikrofonu otwartego w nieskonczonosc, ani nie przejadal kredytow
-# ElevenLabs. Przy suficie tury 15 s (`__init__.py`: `SUFIT_TURY_S`) trzy tury to
-# najwyzej ~45 s nagrania na sesje.
-#
-# UWAGA: od 08.08 okno nasluchu to nie jest juz jedna liczba — 8 s CISZY konczy
-# ture, a 15 s to bezwzgledny sufit dla dzwieku bez przerw. Ten rachunek opiera
-# sie na suficie, bo tylko on ogranicza ture, w ktorej cos gada non stop.
-#
-# 3, nie 1, bo pod ten sam licznik podpada wlasciciel, ktorego voice-match
-# chybil: weryfikacja jest zawodna przy BARDZO KROTKICH wypowiedziach („tak",
-# „nie", „jeszcze jeden") — pomiar 07.08 dal 0.221 dla „Okej." (2,1 s). Dwie
-# proby powtorzenia to minimum, zeby ta zawodnosc nie kosztowala polecenia.
-MAX_TUR_OBCYCH = 3
-
 # Ile trzeba, zeby OTWORZYC sesje na swoje nazwisko (tylko to — tozsamosc dla
 # pamieci zostaje bez zmian).
 #
@@ -377,11 +358,10 @@ class HomeMindConversationAgent(ConversationEntity):
 
         conversation_id = self._po_podmianie(conversation_id)
 
-        # Czy ta sesja wciaz nalezy do tego, kto ja otworzyl — patrz
-        # `_przejmij_lub_wygas`. Stoi PRZED bramka wlasciciela swiadomie:
-        # bramka wie tylko tyle, ze mowca != wlasciciel, i kazda taka ture
-        # kasuje w ciszy. Rozstrzygniecie, czy sesja w ogole jeszcze trwa,
-        # musi zapasc wczesniej.
+        # Czy ta rozmowa wciaz trwa i czyja jest — patrz `_przejmij_lub_wygas`.
+        # Od 20.09 drugi domownik, ktory odzywa sie w TRWAJACEJ rozmowie, nie
+        # zaklada nowego watku, tylko do niego dolacza; nowa sesja powstaje
+        # dopiero po ciszy dluzszej niz `OKNO_WZNOWIENIA_S`.
         conversation_id, stan = self._przejmij_lub_wygas(
             conversation_id,
             user_id if pewnie_rozpoznany else None,
@@ -390,27 +370,13 @@ class HomeMindConversationAgent(ConversationEntity):
         )
         wlasciciel = stan["wlasciciel"]
 
-        # Sesja nalezy do osoby, ktora ja otworzyla. Cudza tura — rozpoznana czy
-        # nie — konczy sie tutaj: bez modelu, bez akcji, bez odpowiedzi.
-        #
-        # Cisza, a nie „nie rozpoznaje Twojego glosu", bo to zdanie bylo dla
-        # kogos, kto do asystenta nie mowil, a przy telewizorze w tle sam by je
-        # wywolal w kolko. Mikrofon zostaje otwarty, wiec wlasciciel moze po
-        # prostu powtorzyc — az do MAX_TUR_OBCYCH.
-        #
-        # Ta bramka stoi PRZED skrotem `prefer_local` swiadomie: wbudowany agent
-        # HA rozumie „zapal swiatlo" i wykonalby polecenie z tla, nie docierajac
-        # ani tu, ani na serwer, gdzie leza reguly. Ta sama dziura wymagala juz
-        # raz osobnej latki przy ograniczeniach urzadzen.
         # 🔴 PUSTA tura to NIE jest obcy człowiek — to najczęściej NASZ WŁASNY głośnik.
         # Zmierzone 19.08: satelita otwiera mikrofon ~1 s po wysłaniu tekstu do lektora,
         # czyli DZIESIĄTKI SEKUND przed końcem odtwarzania (odpowiedź 26,8 s: mikrofon
         # o 19:19:48, koniec grania o 19:20:16). Łapie własną odpowiedź, biometria ją
-        # słusznie odrzuca (podobieństwo 0,03), transkrypcja przychodzi pusta — a stara
-        # bramka liczyła to jako turę obcą i po `MAX_TUR_OBCYCH` ZAMYKAŁA sesję.
-        # Skutek: asystent kończył pytaniem i nie słuchał odpowiedzi.
+        # słusznie odrzuca (podobieństwo 0,03), transkrypcja przychodzi pusta.
         # Pusta tura nie niesie żadnej treści, więc nie ma czego pilnować — przepuszczamy
-        # ją w ciszy, NIE ruszając licznika obcych i NIE zamykając nasłuchu.
+        # ją w ciszy, NIE zamykając nasłuchu.
         if is_voice and not message.strip():
             _LOGGER.info(
                 "Pusta tura (%s) — najpewniej własne odtwarzanie; trzymam nasłuch",
@@ -425,39 +391,30 @@ class HomeMindConversationAgent(ConversationEntity):
                 continue_conversation=CONTINUE_CONVERSATION,
             )
 
-        # LATKA (05.09.2026, zgloszenie Lecha: krotkie "Tak"/"Nie" ignorowane w
-        # ciszy). Krotka wypowiedz daje slaby odcisk glosu (ponizej progu w
-        # wyoming-voice-match), wiec przychodzi BEZ znacznika mowcy — user_id
-        # spada wtedy do wspolnego domyslnego id, co NIE jest dowodem na obca
-        # osobe, tylko brakiem pewnej identyfikacji. _przejmij_lub_wygas
-        # (wyzej) juz to uwzglednia i NIE kasuje wlasciciela dla takiej tury —
-        # ta bramka ma byc z nim spojna, wiec wymaga tego samego: FAKTYCZNIE
-        # potwierdzonej innej tozsamosci (rozpoznany), a nie samego
-        # niedopasowania do domyslnego id.
-        if is_voice and wlasciciel is not None and rozpoznany and user_id != wlasciciel:
-            stan = {"wlasciciel": wlasciciel, "obce": stan["obce"] + 1}
-            trzymaj = stan["obce"] < MAX_TUR_OBCYCH
-            _LOGGER.info(
-                "Sesja należy do '%s', a tura przyszła od '%s' (%s) — ignoruję "
-                "w ciszy (%d/%d)%s",
-                wlasciciel,
-                speaker or "nierozpoznany",
-                f"{podobienstwo:.3f}" if podobienstwo is not None else "bez znacznika",
-                stan["obce"],
-                MAX_TUR_OBCYCH,
-                "" if trzymaj else " — zamykam nasłuch",
-            )
-            if trzymaj:
-                self._stan_rozmowy[conversation_id] = stan
-            else:
-                self._stan_rozmowy.pop(conversation_id, None)
-            intent_response = intent.IntentResponse(language=user_input.language)
-            intent_response.async_set_speech("")
-            return ConversationResult(
-                response=intent_response,
-                conversation_id=conversation_id,
-                continue_conversation=trzymaj,
-            )
+        # ⛔ USUNIETE 20.09.2026 (decyzja Lecha): BRAMKA WLASCICIELA SESJI.
+        #
+        # Bylo tu „sesja nalezy do X, a tura przyszla od Y — ignoruje w ciszy",
+        # z licznikiem `obce` i `MAX_TUR_OBCYCH`, po ktorym mikrofon sie zamykal.
+        #
+        # 📊 CO JA OBALILO. Rozmowa 20.09, 11:19-11:26 (29 tur, runda zagadek,
+        # Lech i Wladek na zmiane). Zgloszenie Lecha: „slabo reaguje na potwierdzenia
+        # — Tak — np. przy pytaniu, czy chcesz nastepna zagadke". W logu widac, ze
+        # kazde przejscie glosu z jednej osoby na druga kasowalo watek (patrz
+        # `_przejmij_lub_wygas`), a „No nastepny" od Lecha po pytaniu zadanym Wladkowi
+        # trafialo w pusta sesje — trzeba bylo powtarzac pelnym zdaniem.
+        #
+        # 🔑 DECYZJA: ROZMOWA JEST CIAGLA NIEZALEZNIE OD TEGO, ILE OSOB W NIEJ
+        # UCZESTNICZY. Skoro watek jest wspolny, „tura obca" przestaje istniec —
+        # domownik, ktory sie odzywa, po prostu do rozmowy dolacza. Kto mowi, i tak
+        # jedzie w tresci tury (znacznik `[lech:0.62]` → „Lech: ..."), wiec model
+        # dalej wie, kto o co pyta.
+        #
+        # ⚠️ Czego to NIE rozluznia: bramka od 05.09 wymagala PEWNEGO rozpoznania,
+        # wiec telewizor w tle i nierozpoznany glos NIGDY jej nie ruszaly —
+        # przechodzily juz wczesniej. Blokowala wylacznie drugiego DOMOWNIKA, czyli
+        # dokladnie to, co teraz ma dzialac. Mikrofonu pilnuja dalej limity tury
+        # (8 s ciszy / 15 s sufit) i licznik pytan bez wlasciciela
+        # (`MAX_PYTAN_BEZ_WLASCICIELA`).
 
         # Pozegnanie i nic poza nim — odpowiadamy sami i konczymy ture.
         #
@@ -532,9 +489,6 @@ class HomeMindConversationAgent(ConversationEntity):
                 "Got response: %s", response_text[:100] if response_text else "None"
             )
 
-            # Tura wlasciciela zeruje licznik obcych: rozmowa moze trwac
-            # dowolnie dlugo, a to, ze przed chwila cos gadalo w tle, przestaje
-            # miec znaczenie, skoro znowu slychac tego samego czlowieka.
             # Licznik pytan zwrotnych w rozmowie bez wlasciciela. Zeruje sie za
             # kazdym razem, gdy asystent NIE odda glosu pytaniem — wiec rosnie
             # tylko w prawdziwym lancuchu pytanie-odpowiedz, a nie przez sam
@@ -544,7 +498,7 @@ class HomeMindConversationAgent(ConversationEntity):
                 pytania += 1
             else:
                 pytania = 0
-            stan = {"wlasciciel": wlasciciel, "obce": 0, "pytania": pytania}
+            stan = {"wlasciciel": wlasciciel, "pytania": pytania}
 
             intent_response = intent.IntentResponse(language=user_input.language)
             intent_response.async_set_speech(response_text)
@@ -652,7 +606,7 @@ class HomeMindConversationAgent(ConversationEntity):
                 # sesji i nastepna moglaby przyjsc od kogokolwiek.
                 if result.conversation_id:
                     self._stan_rozmowy[result.conversation_id] = {
-                        "wlasciciel": wlasciciel, "obce": 0,
+                        "wlasciciel": wlasciciel,
                     }
             return result
 
@@ -905,30 +859,62 @@ class HomeMindConversationAgent(ConversationEntity):
         Dlatego reguly nie powielamy w tamtym miejscu, tylko stawiamy ja tu — na
         drodze, ktora przechodzi KAZDA tura, niezaleznie od zrodla id.
 
-        Dwie warstwy, w tej kolejnosci:
+        🔁 ZMIANA 20.09.2026 (decyzja Lecha: „rozmowa ma byc ciagla niezaleznie
+        od tego, ile osob w niej uczestniczy"). Przejecie bylo do tej pory
+        BEZWARUNKOWE: kazde przejscie glosu na drugiego domownika zaklada nowa
+        sesje, a historia w home-mind-server jest kluczowana `conversationId`
+        (ostatnie 10 wiadomosci), wiec watek leci do zera. 📊 Zmierzone na rozmowie
+        20.09, 11:19-11:26 (29 tur, runda zagadek, Lech i Wladek na zmiane): trzy
+        takie przejecia, m.in. na „No nastepny" o 11:21:46 — po nim trzeba bylo
+        powtorzyc prosbe pelnym zdaniem. Stad rozroznienie na rozmowe ZYWA i
+        rozmowe SPRZED CISZY.
 
-        1. PRZEJECIE. Pewnie rozpoznany ktos inny przejmuje sesje od razu. Nie
-           „ignoruje w ciszy", bo o czlowieku przed mikrofonem wiemy wszystko,
-           co da sie wiedziec — odmowa byla tu skutkiem ubocznym, nie decyzja.
-        2. WYGASZENIE. Gdy nowego mowcy NIE rozpoznano pewnie, zostaje czas:
+        Trzy warstwy, w tej kolejnosci:
+
+        1. DOLACZENIE (nowe). Rozmowa jest ZYWA (od ostatniej tury na tym
+           urzadzeniu minelo nie wiecej niz `OKNO_WZNOWIENIA_S`), a odzywa sie
+           pewnie rozpoznany drugi domownik → watek zostaje TEN SAM, a on staje
+           sie biezacym mowca. Kto mowi, i tak jedzie w tresci tury („Lech: ...",
+           „Wladek: ..."), wiec model nie traci rozeznania.
+        2. PRZEJECIE. Ten sam przypadek, ale rozmowa NIE jest juz zywa (cisza
+           dluzsza niz okno albo brak sladu po ostatniej turze) → nowa sesja.
+           To jest dokladnie sytuacja z 28.08 opisana wyzej i ona sie nie zmienia.
+        3. WYGASZENIE. Gdy nowego mowcy NIE rozpoznano pewnie, zostaje czas:
            po `OKNO_WZNOWIENIA_S` ciszy sesja przestaje nalezec do kogokolwiek.
            Ta warstwa jest slabsza z rozmyslem — sam uplyw czasu nie mowi, kto
            stoi przed mikrofonem.
 
-        ⚠️ Czego to NIE rozluznia: telewizor w tle i drugi domownik W TRAKCIE
-        rozmowy trafiaja na bramke wlasciciela dokladnie jak dotad. Chroniona
-        jest ciagla rozmowa, a nie wybudzenie sprzed osmiu minut.
+        ⚠️ Czego to NIE rozluznia: wybudzenie po ciszy dalej nie dostaje cudzego
+        watku (warstwa 2 i weto w `_wznow_lub_nowa`). Rozluzniona jest WYLACZNIE
+        rozmowa trwajaca — czyli to, co komentarz obiecywal juz wczesniej.
         """
-        stan = self._stan_rozmowy.get(conversation_id, {"wlasciciel": None, "obce": 0})
+        stan = self._stan_rozmowy.get(conversation_id, {"wlasciciel": None})
         wlasciciel = stan["wlasciciel"]
         if not is_voice or wlasciciel is None:
             return conversation_id, stan
 
+        wiek = self._cisza_od_ostatniej_tury(urzadzenie, conversation_id)
+        # Brak sladu traktujemy jak rozmowe NIEzywa: nie mamy czym udowodnic, ze
+        # wymiana trwa, a to wlasnie w tej sytuacji (wpis po cichu ucichlej sesji)
+        # zdarzyl sie przypadek z 28.08.
+        zywa = wiek is not None and wiek <= OKNO_WZNOWIENIA_S
+
         if mowca is not None and mowca != wlasciciel:
-            powod = f"pewnie rozpoznany '{mowca}' zamiast '{wlasciciel}'"
+            if zywa:
+                _LOGGER.info(
+                    "Do trwajacej rozmowy '%s' wlacza sie '%s' (ostatnio mowil "
+                    "'%s', %.0f s temu) — watek zostaje wspolny",
+                    conversation_id, mowca, wlasciciel, wiek,
+                )
+                stan = {**stan, "wlasciciel": mowca}
+                self._stan_rozmowy[conversation_id] = stan
+                return conversation_id, stan
+            powod = (
+                f"pewnie rozpoznany '{mowca}' zamiast '{wlasciciel}' po ciszy "
+                + (f"{wiek:.0f} s" if wiek is not None else "bez sladu ostatniej tury")
+            )
         else:
-            wiek = self._cisza_od_ostatniej_tury(urzadzenie, conversation_id)
-            if wiek is None or wiek <= OKNO_WZNOWIENIA_S:
+            if zywa or wiek is None:
                 return conversation_id, stan
             powod = f"cisza {wiek:.0f} s ponad okno {OKNO_WZNOWIENIA_S:.0f} s"
 
@@ -942,7 +928,7 @@ class HomeMindConversationAgent(ConversationEntity):
         if len(self._podmiana) > 32:
             self._podmiana.clear()
         self._podmiana[conversation_id] = (nowa, time.monotonic())
-        return nowa, {"wlasciciel": None, "obce": 0}
+        return nowa, {"wlasciciel": None}
 
     def _zapamietaj_rozmowe(
         self, urzadzenie: str | None, conversation_id: str, mowca: str | None
